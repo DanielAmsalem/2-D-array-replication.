@@ -1,16 +1,15 @@
 import numpy as np
 import math
-import scipy.integrate as integrate
 import random
 
 # parameters
 import Conditions
 
 row_num = Conditions.row_num
-array_size = row_num ^ 2
+array_size = row_num**2
 
-kB = 1.38e-23
-e = -1.6e-19  # in coulon
+kB = 1
+e = 1  # in coulon
 
 
 def neighbour_list(n, i):  # return positions of neighbours of ith position in nxn matrix

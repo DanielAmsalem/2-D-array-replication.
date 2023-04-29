@@ -7,15 +7,15 @@ row_num = 4
 array_size = row_num * row_num
 
 # define tunneling parameters
-#R_t = [math.exp(random.random() / 10) * 100 for i in range(array_size)]
-R_t = [1000 for i in range(array_size)]
+R_t = [math.exp(random.random()) * 10 for i in range(array_size)]
 R = sum(R_t) / len(R_t)
-C = 1.0e-5
+C = 1
 Cij = np.zeros((array_size, array_size))
 
 # define relaxation time parameters
 Cg = 20 * C
 Rg = 1000 * R
+Steady_charge_std = 1
 
 
 def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nxn matrix
@@ -59,15 +59,6 @@ for i in range(array_size):
 
 C_inverse = tuple(np.linalg.inv(Cij))  # define inverse
 
-# define inverse Tau
-T_ij = np.zeros((array_size, array_size))
-for i in range(array_size):
-    for j in range(array_size):
-        if i == j:
-            T_ij[i][j] = (1 / Rg) * (C_inverse[i][j] + 1 / Cg)
-        else:
-            T_ij[i][j] = (1 / Rg) * (C_inverse[i][j])
-
 # define capacitance Cix
 Cix = np.zeros(array_size)
 for i in range(array_size):
@@ -88,7 +79,6 @@ def VxCix(Vl, Vr):
 
 
 # define tau matrix
-
 tau_inv_matrix = np.zeros((array_size, array_size))
 for i in range(array_size):
     for K in range(array_size):

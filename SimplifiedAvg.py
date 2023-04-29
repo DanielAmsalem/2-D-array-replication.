@@ -5,7 +5,7 @@ import Functions as F
 import Conditions as Cond
 
 # Conditions
-loops = 1000
+loops = 100
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -16,12 +16,12 @@ default_dt = Cond.default_dt
 Tau_inv_matrix = Cond.Tau
 
 # parameters
-e = -1.6e-19
-kB = 1.38e-23
+e = 1
+kB = 1
 Volts = abs(e) / (Cond.C)  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vr = 0
-Vplot = np.linspace((Vr+4) * Volts,  (Vr) * Volts, num=100)
+Vplot = np.linspace((Vr + 4) * Volts, (Vr) * Volts, num=100)
 T = 0.01 * e * e / (Cond.C * kB)
 
 # results matrix, ith column has the ith loop, jth row is the jth step of voltage
@@ -60,10 +60,10 @@ for loop in range(loops):
 
             # island to island transition
             for i in islands:
-                a = Functions.neighbour_list(Cond.row_num, i)
-                for j in a:
+                neighbour_list = Functions.neighbour_list(Cond.row_num, i)
+                for j in neighbour_list:
                     n_tag = np.array(list(n))
-                    # for isle to isle transition
+                    # for isle i to isle j transition
                     if n_tag[i] != 0:
                         n_tag[i] -= e
                         n_tag[j] += e
@@ -80,9 +80,9 @@ for loop in range(loops):
             near_left = islands[0::row_num]
             for i in list(range(row_num)):
                 n_tag = np.array(list(n))
-
                 # for ith transition from electrode
                 n_tag[i] += e
+
                 V_new = F.V_t(n_tag, Qg, cycle_voltage, Vr)
                 dE_left = (V[near_left[i]] + V_new[near_left[i]] - 2 * cycle_voltage) * e / 2
 
@@ -162,22 +162,34 @@ for loop in range(loops):
                 print("transition did not occur")
 
             Qn = []
+            Tau_matrix = np.linalg.inv(Tau_inv_matrix)
             for i in islands:
                 summ = 0
                 for j in islands:
-                    summ += Tau_inv_matrix[i][j] * e * n[j] + Cond.VxCix(cycle_voltage, Vr)[j] / Cg[j]
+                    summ += Tau_matrix[i][j] * e * n[j] + Cond.VxCix(cycle_voltage, Vr)[j] / Cg[j]
                 Qn += [(summ / Rg[i]) - e * n[i] + Cond.VxCix(cycle_voltage, Vr)[i]]
 
             # calculate dQ/dt = T-1(Qg-Qn)
-            Qdot_steady = np.dot(np.linalg.inv(Tau_inv_matrix), Qg - Qn)
+            Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
 
-            # update Qg, V
+            # update Qg, I
             Qg = (Qg + Qdot_steady * dt)
             dQ_dt += [chosen_rate]
 
-            if k > 100:
-                print(k)
+            #calculate distance from steady state:
+            dist = np.max(np.abs(Qg-Qn))
+
+            if dist < Cond.Steady_charge_std:
+                print("steady state")
                 dq_dt_is_not_0 = False
+
+            elif k > 100:
+                print(k)
+                print(dist)
+                dq_dt_is_not_0 = False
+
+            #elif k%100 == 0:
+                #print(dist)
 
         I_vec[cycle] = (sum(dQ_dt) / len(dQ_dt))
 
@@ -187,7 +199,7 @@ I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run
 
-I_V = plt.plot(Vplot / Volts, I_vec_avg)
+I_V = plt.plot(Vplot / Volts, I_vec_avg / Amp)
 plt.xlabel("Voltage")
 plt.ylabel("Current")
 plt.title("decreasing voltage C=10<c>")
