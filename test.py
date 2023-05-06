@@ -1,7 +1,9 @@
 import Conditions
 import numpy as np
 
-A = np.ones((16,16))
-A = np.eye(16)
-print(A)
-print(A.shape)
+n = np.array([0,1,2,3,4,5,6])
+
+n_tag = np.array(list(n))
+n_tag[3] += 1
+print(n, n_tag)
+

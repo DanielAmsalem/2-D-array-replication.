@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import random
+from Functions import return_neighbours
 
 # parameters
 row_num = 4
@@ -13,33 +14,20 @@ C = 1
 Cij = np.zeros((array_size, array_size))
 
 # define relaxation time parameters
-Cg = 20 * C
+Cg = 10 * C
 Rg = 1000 * R
 Steady_charge_std = 1
 
 
-def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nxn matrix
-    I, J = int(I), int(J)
-    neighbours = []
-    if J + 1 < n:  # right neighbour
-        neighbours += [(I, J + 1)]
-    if J > 0:  # left neighbour
-        neighbours += [(I, J - 1)]
-    if I + 1 < n:  # down neighbour
-        neighbours += [(I + 1, J)]
-    if I > 0:  # up neighbour
-        neighbours += [(I - 1, J)]
-
-    return neighbours
-
-
 for i in range(array_size):
+    x_value = i % row_num  # y position of ith SC
+    y_value = (i - i % row_num) / row_num  # x position of ith SC
     for j in range(array_size):
-        y_value = i % row_num  # y position of ith SC
-        x_value = (i - i % row_num) / row_num  # x position of ith SC
+        # coordinates of jth SC
+        neighbour_x = j % row_num
+        neighbour_y = (j - j % row_num)/row_num
 
-        neighbour = (int((j - j % row_num) / row_num), int(j % row_num))  # coordinates of jth SC
-
+        neighbour = (neighbour_x, neighbour_y)
         neighbours_ij = return_neighbours(row_num, x_value, y_value)  # return coordinates of ith's neighbours
 
         if neighbour in neighbours_ij:

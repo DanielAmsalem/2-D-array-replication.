@@ -1,53 +1,55 @@
 import numpy as np
 import math
-import random
 
 # parameters
-import Conditions
-
-row_num = Conditions.row_num
-array_size = row_num**2
+n0ne = 0
 
 kB = 1
-e = 1  # in coulon
+e = 1
 
 
 def neighbour_list(n, i):  # return positions of neighbours of ith position in nxn matrix
-    x = i % row_num
-    y = (i - i % row_num) / n
+    x = i % n
+    y = (i - i % n) / n
     neighbours = []
-    if x + 1 < n - 1:
+    if x + 1 <= n - 1:
         neighbours += [i + 1]
-    if x - 1 > 0:
+    if x - 1 >= 0:
         neighbours += [i - 1]
-    if y + 1 < n - 1:
+    if y + 1 <= n - 1:
         neighbours += [i + n]
-    if y - 1 > 0:
+    if y - 1 >= 0:
         neighbours += [i - n]
 
     return neighbours
 
 
-def diff(dbl):
-    return dbl[0] is dbl[1]
+def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nxn matrix
+    I, J = int(I), int(J)
+    neighbours = []
+    if J + 1 < n:  # right neighbour
+        neighbours += [(I, J + 1)]
+    if J > 0:  # left neighbour
+        neighbours += [(I, J - 1)]
+    if I + 1 < n:  # down neighbour
+        neighbours += [(I + 1, J)]
+    if I > 0:  # up neighbour
+        neighbours += [(I - 1, J)]
+
+    return neighbours
 
 
-def random_sum_to(n, num_terms=None):  # return fixed sum randomly distributed
-    num_terms = (num_terms or random.randint(2, n)) - 1
-    a = random.sample(range(1, n), num_terms) + [0, n]
-    list.sort(a)
-    return [a[j + 1] - a[j] for j in range(len(a) - 1)]
-
-
-def V_t(n, Q, vl, vr):
-    return np.dot(Conditions.C_inverse, (n*e + Conditions.VxCix(vl, vr)) + Q)
+def V_t(n, Qg, vl, vr, C_inverse, VxCix):
+    return np.dot(C_inverse, (n * e + e * VxCix(vl, vr)) + Qg)
 
 
 def gamma(dE, T, Rt):
+    global n0ne
     try:
         a = dE / (T * kB)
-        exponant = math.exp(a)
-        b = -dE / (e * e * Rt * (1 - exponant))
+        exponent = math.exp(a)
+        b = -dE / (e * e * Rt * (1 - exponent))
     except OverflowError:
         b = 0
+        n0ne += 1
     return b
