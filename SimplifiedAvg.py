@@ -14,18 +14,24 @@ Rg = [Cond.Rg] * array_size
 Cg = [Cond.Cg] * array_size
 default_dt = Cond.default_dt
 Tau_inv_matrix = Cond.Tau
+increase = True  # true if increasing else decreasing voltage during run
 
 # parameters
 e = 1
 kB = 1
-Volts = abs(e) / (Cond.C)  # normalized voltage unit
+Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
-Vr = 0
-Vplot = np.linspace((Vr + 4) * Volts, (Vr) * Volts, num=100)
+Vright = 0
 T = 0.01 * e * e / (Cond.C * kB)
 
+# implements increasing\decreasing choice
+if increase:
+    Vleft = np.linspace(Vright * Volts, (Vright + 4) * Volts, num=100)
+else:
+    Vleft = np.linspace((Vright + 4) * Volts, Vright * Volts, num=100)
+
 # results matrix, ith column has the ith loop, jth row is the jth step of voltage
-cycles = len(Vplot)
+cycles = len(Vleft)
 I_matrix = np.zeros((loops, cycles))
 
 for loop in range(loops):
@@ -38,7 +44,7 @@ for loop in range(loops):
 
     for cycle in range(cycles):
         k = 0
-        cycle_voltage = Vplot[cycle]
+        cycle_voltage = Vleft[cycle]
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
 
         # starting conditions
@@ -50,7 +56,7 @@ for loop in range(loops):
             k += 1
 
             # define overall reaction rate R, rate vector for both kinds of particles, and a useful index
-            V = tuple(F.V_t(n, Qg, cycle_voltage, Vr, Cond.C_inverse, Cond.VxCix))  # find V_i at t =0 for ith island
+            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i at t =0 for ith island
             R = 0
             rates = []
             reaction_index = []
@@ -70,7 +76,7 @@ for loop in range(loops):
                         n_tag[i] -= e
                         n_tag[j] += e
                     # calculate energy difference due to transition
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vr, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
                     # rate for i->j
@@ -86,7 +92,7 @@ for loop in range(loops):
 
                 # for ith transition from electrode
                 n_tag[isle] += e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vr, Cond.C_inverse, Cond.VxCix)
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
@@ -96,7 +102,7 @@ for loop in range(loops):
 
                 # for ith transition to electrode
                 n_tag[isle] -= 2 * e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vr, Cond.C_inverse, Cond.VxCix)
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
@@ -112,8 +118,8 @@ for loop in range(loops):
 
                 # for ith transition from electrode
                 n_tag[isle] += e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vr, Cond.C_inverse, Cond.VxCix)
-                dE_right = (V[isle] + V_new[isle] - 2 * Vr) * e / 2
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                 # rate for V_left->i
                 Gamma += [F.gamma(dE_right, T, R_t[isle])]
@@ -122,8 +128,8 @@ for loop in range(loops):
 
                 # for ith transition to electrode
                 n_tag[isle] -= 2 * e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vr, Cond.C_inverse, Cond.VxCix)
-                dE_right = (V[isle] + V_new[isle] - 2 * Vr) * e / 2
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                 # rate for V_left->i
                 Gamma += [F.gamma(dE_right, T, R_t[isle])]
@@ -169,8 +175,8 @@ for loop in range(loops):
             for i in islands:
                 summ = 0
                 for j in islands:
-                    summ += Tau_matrix[i][j] * e * n[j] + Cond.VxCix(cycle_voltage, Vr)[j] / Cg[j]
-                Qn += [(summ / Rg[i]) - e * n[i] + Cond.VxCix(cycle_voltage, Vr)[i]]
+                    summ += Tau_matrix[i][j] * e * n[j] + Cond.VxCix(cycle_voltage, Vright)[j] / Cg[j]
+                Qn += [(summ / Rg[i]) - e * n[i] + Cond.VxCix(cycle_voltage, Vright)[i]]
 
             # calculate dQ/dt = (T^-1)(Qg-Qn)
             Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
@@ -199,7 +205,7 @@ I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run
 
-I_V = plt.plot(Vplot / Volts, I_vec_avg / Amp)
+I_V = plt.plot(Vleft / Volts, I_vec_avg / Amp)
 plt.xlabel("Voltage")
 plt.ylabel("Current")
 plt.title("decreasing voltage")
