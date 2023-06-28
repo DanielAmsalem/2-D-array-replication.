@@ -6,6 +6,7 @@ from Functions import return_neighbours
 # parameters
 row_num = 4
 array_size = row_num * row_num
+islands = list(range(array_size))
 
 # define tunneling parameters
 R_t = [math.exp(random.random()) * 10 for i in range(array_size)]
@@ -47,24 +48,23 @@ for i in range(array_size):
 
 C_inverse = tuple(np.linalg.inv(Cij))  # define inverse
 
+near_right = islands[(row_num - 1)::row_num]
+near_left = islands[0::row_num]
+
 # define capacitance Cix
 Cix = np.zeros(array_size)
-for i in range(array_size):
-    if i < math.sqrt(array_size):
-        Cix[i] = abs(np.random.normal(C, C / 10))
-    elif i > array_size - math.sqrt(array_size) - 1:
-        Cix[i] = abs(np.random.normal(C, C / 10))
-
+for i in near_left:
+    Cix[i] = abs(np.random.normal(C, C / 10))
+for i in near_right:
+    Cix[i] = abs(np.random.normal(C, C / 10))
 
 def VxCix(Vl, Vr):
     _VxCix = np.zeros(array_size)
-    for u in range(array_size):
-        if u < math.sqrt(array_size):
-            _VxCix[u] = Cix[u] * Vl
-        elif u > array_size - math.sqrt(array_size) - 1:
-            _VxCix[u] = Cix[u] * Vr
+    for u in near_left:
+        _VxCix[u] = Cix[u] * Vl
+    for u in near_right:
+        _VxCix[u] = Cix[u] * Vr
     return _VxCix
-
 
 # define tau matrix
 tau_inv_matrix = np.zeros((array_size, array_size))

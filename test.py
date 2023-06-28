@@ -1,9 +1,7 @@
-import Conditions
-import numpy as np
-
-n = np.array([0,1,2,3,4,5,6])
-
-n_tag = np.array(list(n))
-n_tag[3] += 1
-print(n, n_tag)
-
+def VxCix(Vl, Vr):
+    _VxCix = np.zeros(array_size)
+    for u in near_left:
+        _VxCix[u] = Cix[u] * Vl
+    for u in near_right:
+        _VxCix[u] = Cix[u] * Vr
+    return _VxCix

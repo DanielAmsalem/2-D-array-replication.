@@ -14,7 +14,7 @@ Rg = [Cond.Rg] * array_size
 Cg = [Cond.Cg] * array_size
 default_dt = Cond.default_dt
 Tau_inv_matrix = Cond.Tau
-increase = True  # true if increasing else decreasing voltage during run
+increase = False  # true if increasing else decreasing voltage during run
 
 # parameters
 e = 1
@@ -175,8 +175,8 @@ for loop in range(loops):
             for i in islands:
                 summ = 0
                 for j in islands:
-                    summ += Tau_matrix[i][j] * e * n[j] + Cond.VxCix(cycle_voltage, Vright)[j] / Cg[j]
-                Qn += [(summ / Rg[i]) - e * n[i] + Cond.VxCix(cycle_voltage, Vright)[i]]
+                    summ += Tau_matrix[i][j] * (e * n[j] + Cond.VxCix(cycle_voltage, Vright)[j]) / Cg[j]
+                Qn += [(summ / Rg[i]) - e * n[i] - Cond.VxCix(cycle_voltage, Vright)[i]]
 
             # calculate dQ/dt = (T^-1)(Qg-Qn)
             Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
@@ -188,12 +188,11 @@ for loop in range(loops):
             # calculate distance from steady state:
             dist = np.max(np.abs(Qg - Qn))
 
-            if dist < Cond.Steady_charge_std:
+            if cycle > 1 and k > 50 and dist < Cond.Steady_charge_std:
                 print("steady state")
                 not_in_steady_state = False
 
             elif k > 100:
-                print(k)
                 print(dist)
                 not_in_steady_state = False
 
@@ -205,8 +204,11 @@ I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run
 
-I_V = plt.plot(Vleft / Volts, I_vec_avg / Amp)
+I_V = plt.plot(Vleft / Volts, I_vec_avg)
 plt.xlabel("Voltage")
 plt.ylabel("Current")
-plt.title("decreasing voltage")
+if increase:
+    plt.title("increasing voltage")
+else:
+    plt.title("decreasing voltage")
 plt.show()
