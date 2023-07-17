@@ -15,7 +15,7 @@ C = 1
 Cij = np.zeros((array_size, array_size))
 
 # define relaxation time parameters
-Cg = 10 * C
+Cg = 20 * C
 Rg = 1000 * R
 Steady_charge_std = 1
 

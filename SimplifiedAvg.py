@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import Functions
 import Functions as F
 import Conditions as Cond
+from collections import Counter
 
 # Conditions
 loops = 1000
@@ -14,7 +15,7 @@ Rg = [Cond.Rg] * array_size
 Cg = [Cond.Cg] * array_size
 default_dt = Cond.default_dt
 Tau_inv_matrix = Cond.Tau
-increase = False  # true if increasing else decreasing voltage during run
+increase = True  # true if increasing else decreasing voltage during run
 
 # parameters
 e = 1
@@ -22,7 +23,7 @@ kB = 1
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
-T = 0.01 * e * e / (Cond.C * kB)
+T = 0.001 * e * e / (Cond.C * kB)
 
 # implements increasing\decreasing choice
 if increase:
@@ -55,10 +56,9 @@ for loop in range(loops):
         while not_in_steady_state:
             k += 1
 
-            # define overall reaction rate R, rate vector for both kinds of particles, and a useful index
-            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i at t =0 for ith island
+            # define overall reaction rate R, rate vector, and a useful index
+            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i for ith island
             R = 0
-            rates = []
             reaction_index = []
             Gamma = []
 
@@ -72,7 +72,7 @@ for loop in range(loops):
                 for j in neighbour_list:
                     n_tag = np.array(list(n))
                     # for isle i to isle j transition
-                    if n_tag[i] != 0:
+                    if n_tag[i] > 0:
                         n_tag[i] -= e
                         n_tag[j] += e
                     # calculate energy difference due to transition
@@ -80,9 +80,10 @@ for loop in range(loops):
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
                     # rate for i->j
-                    Gamma += [F.gamma(dEij[i][j], T, R_t[i])]
-                    R += Gamma[-1]
-                    reaction_index += [(i, int(j))]
+                    if dEij[i][j] < 0:
+                        Gamma += [F.gamma(dEij[i][j], T, R_t[i])]
+                        R += Gamma[-1]
+                        reaction_index += [(i, int(j))]
 
             # left electrode to island transition:
             dE_left = 0
@@ -96,19 +97,22 @@ for loop in range(loops):
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
-                Gamma += [F.gamma(dE_left, T, R_t[isle])]
-                R += Gamma[-1]
-                reaction_index += [(isle, "from")]
+                if dE_left < 0:
+                    Gamma += [F.gamma(dE_left, T, R_t[isle])]
+                    R += Gamma[-1]
+                    reaction_index += [(isle, "from")]
 
                 # for ith transition to electrode
-                n_tag[isle] -= 2 * e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
-                dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
+                if n_tag[isle] > 2 * e:
+                    n_tag[isle] -= 2 * e
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
-                # rate for V_left->i
-                Gamma += [F.gamma(dE_left, T, R_t[isle])]
-                R += Gamma[-1]
-                reaction_index += [(isle, "to")]
+                    # rate for i->V_left
+                    if dE_left < 0:
+                        Gamma += [F.gamma(dE_left, T, R_t[isle])]
+                        R += Gamma[-1]
+                        reaction_index += [(isle, "to")]
 
             # similarly, for right side
             dE_right = 0
@@ -121,23 +125,26 @@ for loop in range(loops):
                 V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                 dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
-                # rate for V_left->i
-                Gamma += [F.gamma(dE_right, T, R_t[isle])]
-                R += Gamma[-1]
-                reaction_index += [(isle, "from")]
+                # rate for V_right->i
+                if dE_right < 0:
+                    Gamma += [F.gamma(dE_right, T, R_t[isle])]
+                    R += Gamma[-1]
+                    reaction_index += [(isle, "from")]
 
                 # for ith transition to electrode
-                n_tag[isle] -= 2 * e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
-                dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
+                if n_tag[isle] > 2*e:
+                    n_tag[isle] -= 2 * e
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
-                # rate for V_left->i
-                Gamma += [F.gamma(dE_right, T, R_t[isle])]
-                R += Gamma[-1]
-                reaction_index += [(isle, "to")]
+                    # rate for i->V_right
+                    if dE_right < 0:
+                        Gamma += [F.gamma(dE_right, T, R_t[isle])]
+                        R += Gamma[-1]
+                        reaction_index += [(isle, "to")]
 
             # time for reaction
-            if R > 1e-10:  # transition occurred
+            if R > 0:  # transition occurred
                 dt = np.log(1 / np.random.random()) / R
 
                 # pick transition
@@ -168,7 +175,8 @@ for loop in range(loops):
             else:  # no transition occurred
                 dt = default_dt
                 chosen_rate = 0
-                print("transition did not occur")
+                print("transition did not occur R=" + str(R))
+                print(*Counter(Gamma))
 
             Qn = []
             Tau_matrix = np.linalg.inv(Tau_inv_matrix)
@@ -182,13 +190,13 @@ for loop in range(loops):
             Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
 
             # update Qg, I
-            Qg = (Qg + Qdot_steady * dt)
+            Qg = Qg + (Qdot_steady * dt)
             dQ_dt += [chosen_rate]
 
             # calculate distance from steady state:
             dist = np.max(np.abs(Qg - Qn))
 
-            if cycle > 1 and k > 50 and dist < Cond.Steady_charge_std:
+            if k > 50 and dist < Cond.Steady_charge_std:
                 print("steady state")
                 not_in_steady_state = False
 
@@ -204,7 +212,7 @@ I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run
 
-I_V = plt.plot(Vleft / Volts, I_vec_avg)
+I_V = plt.plot(Vleft / Volts, I_vec_avg/Amp)
 plt.xlabel("Voltage")
 plt.ylabel("Current")
 if increase:

@@ -2,8 +2,6 @@ import numpy as np
 import math
 
 # parameters
-n0ne = 0
-
 kB = 1
 e = 1
 
@@ -40,16 +38,35 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
 
 
 def V_t(n, Qg, vl, vr, C_inverse, VxCix):
-    return np.dot(C_inverse, (n * e + e * VxCix(vl, vr)) + Qg)
+    return np.dot(C_inverse, e * n + VxCix(vl, vr) + Qg)
+
+
+def taylor(x, T):
+    # up to 4th degree, expansion of dE/(1-e^(dE*beta))
+    return float(
+        - 1 / T +
+        x / 2 -
+        T * math.pow(x, 2) / 12 +
+        math.pow(T, 3) * math.pow(x, 4) / 720 -
+        math.pow(T, 5) * math.pow(x, 6) / 30240)
 
 
 def gamma(dE, T, Rt):
-    global n0ne
+    # dE is strictly negative; dE<0
     try:
-        a = dE / (T * kB)
-        exponent = math.exp(a)
-        b = -dE / (e * e * Rt * (1 - exponent))
-    except OverflowError:
-        b = 0
-        n0ne += 1
-    return b
+        beta = 1 / (T * kB)
+        a = dE * beta
+    except OverflowError:  # T may be too small
+        return NameError
+
+    exponent = math.exp(a)
+    const = e * e * Rt
+
+    # for an a smaller than -0.0001 we do not expect non-regular behaviour
+    if a <= -0.0001:
+        return float(-dE / (const * (1 - exponent)))
+
+    # for 0 > a > -0.0001, we expand by x/(1-e^x) = -1 + x/2 - x^2/12 + x^4/720 + O(x^6)
+    else:
+        print(a)
+        return -taylor(dE, beta) / const
