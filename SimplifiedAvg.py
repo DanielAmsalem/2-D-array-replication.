@@ -15,6 +15,7 @@ Rg = [Cond.Rg] * array_size
 Cg = [Cond.Cg] * array_size
 default_dt = Cond.default_dt
 Tau_inv_matrix = Cond.Tau
+Tau_matrix = np.linalg.inv(Tau_inv_matrix)
 increase = True  # true if increasing else decreasing voltage during run
 
 # parameters
@@ -179,7 +180,6 @@ for loop in range(loops):
                 print(*Counter(Gamma))
 
             Qn = []
-            Tau_matrix = np.linalg.inv(Tau_inv_matrix)
             for i in islands:
                 summ = 0
                 for j in islands:
