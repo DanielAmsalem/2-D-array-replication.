@@ -9,15 +9,15 @@ array_size = row_num * row_num
 islands = list(range(array_size))
 
 # define tunneling parameters
-R_t = [math.exp(random.random()) * 10 for i in range(array_size)]
-R = sum(R_t) / len(R_t)
+R = 100
 C = 1
+R_t = [math.exp(random.random()) * R for i in range(array_size)]
+
 Cij = np.zeros((array_size, array_size))
 
 # define relaxation time parameters
 Cg = 20 * C
 Rg = 1000 * R
-Steady_charge_std = 0.01
 
 
 for i in range(array_size):

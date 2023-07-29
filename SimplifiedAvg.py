@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import Functions
 import Functions as F
 import Conditions as Cond
-from collections import Counter
+
 
 # Conditions
 loops = 1000
@@ -26,6 +26,10 @@ Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
+#Gillespie parameters
+Steady_charge_std = 1
+Steady_state_rep = 100
+
 # implements increasing\decreasing choice
 if increase:
     Vleft = np.linspace(Vright * Volts, (Vright + 4) * Volts, num=100)
@@ -45,7 +49,12 @@ for loop in range(loops):
     I_vec = np.zeros(cycles)
 
     for cycle in range(cycles):
-        k = 0
+        num_of_reactions = 0
+        steady_state_counter = 0
+        dist = 0
+        not_decreasing = 0
+        decreasing = 0
+
         cycle_voltage = Vleft[cycle]
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
 
@@ -55,10 +64,11 @@ for loop in range(loops):
         dQ_dt = []
 
         while not_in_steady_state:
-            k += 1
+            # update number of reactions and voltage from last loop
+            num_of_reactions += 1
+            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
-            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i for ith island
             R = 0
             reaction_index = []
             Gamma = []
@@ -66,25 +76,29 @@ for loop in range(loops):
             # dE values for i->j transition
             dEij = np.zeros((array_size, array_size))
 
-            # island to island transition
+            # island i to island j transition
             for i in islands:
-                neighbour_list = Functions.neighbour_list(Cond.row_num, i)
+                # if island i is empty pass over
+                if n[i] == 0:
+                    continue
 
+                # else calculate transition rate to jth island
+                neighbour_list = Functions.neighbour_list(Cond.row_num, i)
                 for j in neighbour_list:
                     n_tag = np.array(list(n))
                     # for isle i to isle j transition
-                    if n_tag[i] > 0:
-                        n_tag[i] -= e
-                        n_tag[j] += e
+                    n_tag[i] -= e
+                    n_tag[j] += e
+
                     # calculate energy difference due to transition
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
-                    # rate for i->j
+                    # dEij must be negative fo transition i->j
                     if dEij[i][j] < 0:
                         Gamma += [F.gamma(dEij[i][j], T, R_t[i])]
                         R += Gamma[-1]
-                        reaction_index += [(i, int(j))]
+                        reaction_index += [(i, j)]
 
             # left electrode to island transition:
             dE_left = 0
@@ -103,9 +117,12 @@ for loop in range(loops):
                     R += Gamma[-1]
                     reaction_index += [(isle, "from")]
 
-                # for ith transition to electrode
-                if n_tag[isle] > 2 * e:
-                    n_tag[isle] -= 2 * e
+                # return "borrowed electron" used for calculation
+                n_tag[isle] -= e
+
+                # for ith transition to electrode there must be atleast one electron at isle i
+                if n_tag[isle] >= e:
+                    n_tag[isle] -= e
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                     dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
@@ -132,9 +149,12 @@ for loop in range(loops):
                     R += Gamma[-1]
                     reaction_index += [(isle, "from")]
 
+                # return "borrowed electron" used for calculation
+                n_tag[isle] -= e
+
                 # for ith transition to electrode
-                if n_tag[isle] > 2*e:
-                    n_tag[isle] -= 2 * e
+                if n_tag[isle] >= e:
+                    n_tag[isle] -= e
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
                     dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
@@ -145,30 +165,31 @@ for loop in range(loops):
                         reaction_index += [(isle, "to")]
 
             # time for reaction
-            if R > 0:  # transition occurred
+            if R > cycle_voltage/(e*Cond.Rg):  # transition occurred, limit for R is the typical ground drain current
+                # typical interaction time
                 dt = np.log(1 / np.random.random()) / R
 
-                # pick transition
+                # picking a specific transition
                 r = 0
                 x = np.random.random() * R
                 chosen_rate = 0
                 for i in range(len(Gamma)):
-                    if r < x:
+                    if r <= x:
                         r += Gamma[i]
                     else:
                         # register transition
                         chosen_rate = Gamma[i]
                         l, m = reaction_index[i]
                         if isinstance(m, int):  # island to island transition
-                            n[l] -= 1
-                            n[m] += 1
+                            n[l] -= e
+                            n[m] += e
                             break
                         elif isinstance(m, str):  # side - island transition
                             if m == "from":  # side to island
-                                n[l] += 1
+                                n[l] += e
                                 break
                             elif m == "to":  # island to side
-                                n[l] -= 1
+                                n[l] -= e
                                 break
                         else:
                             raise NameError
@@ -176,8 +197,9 @@ for loop in range(loops):
             else:  # no transition occurred
                 dt = default_dt
                 chosen_rate = 0
-                print("transition did not occur R=" + str(R))
-                print(*Counter(Gamma))
+                steady_state_counter += 1
+                if steady_state_counter > Steady_state_rep:
+                    not_in_steady_state = False
 
             Qn = []
             for i in islands:
@@ -194,15 +216,28 @@ for loop in range(loops):
             dQ_dt += [chosen_rate]
 
             # calculate distance from steady state:
-            dist = np.max(np.abs(Qg - Qn))
+            dist_new = np.max(np.abs(e * n + Cond.VxCix(cycle_voltage, Vright) - Qn))
 
-            if k > 50 and dist < Cond.Steady_charge_std:
-                print("steady state")
-                not_in_steady_state = False
+            # check if distance from steady state is larger than the last by more than the allowed error
+            if dist_new > dist + Steady_charge_std:
+                not_decreasing += 1
+                if not_decreasing > Steady_state_rep:
+                    print("dist is " + str(dist_new))
+                    #raise NameError
 
-            elif k > 100:
-                print(dist)
-                not_in_steady_state = False
+            # steady state condition
+            elif dist < Steady_charge_std:
+                steady_state_counter += 1
+                if steady_state_counter > Steady_state_rep:
+                    not_in_steady_state = False
+
+            else:
+                decreasing += 1
+                if decreasing > 3*Steady_state_rep:
+                    print("still " + str(dist) + " away, there have been " + str(not_decreasing) + " errors until now")
+                    not_in_steady_state = False
+
+            dist = dist_new
 
         I_vec[cycle] = (sum(dQ_dt) / len(dQ_dt))
 
@@ -212,7 +247,7 @@ I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run
 
-I_V = plt.plot(Vleft / Volts, I_vec_avg/Amp)
+I_V = plt.plot(Vleft / Volts, I_vec_avg / Amp)
 plt.xlabel("Voltage")
 plt.ylabel("Current")
 if increase:
