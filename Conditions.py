@@ -32,7 +32,7 @@ for i in range(array_size):
         neighbours_ij = return_neighbours(row_num, x_value, y_value)  # return coordinates of ith's neighbours
 
         if neighbour in neighbours_ij:
-            Cij[i][j] = -abs(np.random.normal(C, C * 10))  # [C]ij = -Cij = -Cji
+            Cij[i][j] = -abs(np.random.normal(C*10, C))  # [C]ij = -Cij = -Cji
             Cij[j][i] = Cij[i][j]
 
 for i in range(array_size):
