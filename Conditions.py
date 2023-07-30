@@ -9,14 +9,14 @@ array_size = row_num * row_num
 islands = list(range(array_size))
 
 # define tunneling parameters
-R = 1000
+R = 1
 C = 1
 R_t = [math.exp(random.random()) * R for i in range(array_size)]
 
 Cij = np.zeros((array_size, array_size))
 
 # define relaxation time parameters
-Cg = 20 * C
+Cg = 10 * C
 Rg = 1000 * R
 
 
@@ -32,7 +32,7 @@ for i in range(array_size):
         neighbours_ij = return_neighbours(row_num, x_value, y_value)  # return coordinates of ith's neighbours
 
         if neighbour in neighbours_ij:
-            Cij[i][j] = -abs(np.random.normal(C*10, C))  # [C]ij = -Cij = -Cji
+            Cij[i][j] = -abs(np.random.normal(C, C/10))  # [C]ij = -Cij = -Cji
             Cij[j][i] = Cij[i][j]
 
 for i in range(array_size):
