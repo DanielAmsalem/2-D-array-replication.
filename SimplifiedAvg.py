@@ -4,9 +4,9 @@ import Functions
 import Functions as F
 import Conditions as Cond
 
-
 # Conditions
 loops = 1000
+steps = 1000
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -26,8 +26,8 @@ Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
-#Gillespie parameters
-Steady_charge_std = 1
+# Gillespie parameter, KS statistic value for significance
+KS_boundary = 1e-3
 Steady_state_rep = 100
 
 # implements increasing\decreasing choice
@@ -42,15 +42,16 @@ I_matrix = np.zeros((loops, cycles))
 
 for loop in range(loops):
     # general Charge distribution vectors
-    Qg = np.zeros(array_size)
-    n = np.zeros(array_size)
+    Qg, Q_avg, Q_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
+    n, n_avg, n_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
+    I_avg, I_var = 0, 0
 
     # vector counting charge flow
     I_vec = np.zeros(cycles)
 
     for cycle in range(cycles):
-        num_of_reactions = 0
-        steady_state_counter = 0
+        k = 0
+        zero_curr_steady_state_counter = 0
         dist = 0
         not_decreasing = 0
         decreasing = 0
@@ -60,12 +61,11 @@ for loop in range(loops):
 
         # starting conditions
         not_in_steady_state = True
-
-        dQ_dt = []
+        t = 0
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
-            num_of_reactions += 1
+            k += 1
             V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
@@ -120,7 +120,7 @@ for loop in range(loops):
                 # return "borrowed electron" used for calculation
                 n_tag[isle] -= e
 
-                # for ith transition to electrode there must be atleast one electron at isle i
+                # for ith transition to electrode there must be at least one electron at isle i
                 if n_tag[isle] >= e:
                     n_tag[isle] -= e
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
@@ -164,8 +164,10 @@ for loop in range(loops):
                         R += Gamma[-1]
                         reaction_index += [(isle, "to")]
 
-            # time for reaction
-            if R > cycle_voltage/(e*Cond.Rg):  # transition occurred, limit for R is the typical ground drain current
+            # transition occurred, limit for R is the typical ground drain current
+            if R > cycle_voltage / (e * Cond.Rg):
+                zero_curr_steady_state_counter = 0
+
                 # typical interaction time
                 dt = np.log(1 / np.random.random()) / R
 
@@ -174,10 +176,12 @@ for loop in range(loops):
                 x = np.random.random() * R
                 chosen_rate = 0
                 for i in range(len(Gamma)):
-                    if r <= x:
-                        r += Gamma[i]
+                    r += Gamma[i]
+                    if r < x:
+                        pass
                     else:
                         # register transition
+                        uuu = i
                         chosen_rate = Gamma[i]
                         l, m = reaction_index[i]
                         if isinstance(m, int):  # island to island transition
@@ -185,61 +189,64 @@ for loop in range(loops):
                             n[m] += e
                             break
                         elif isinstance(m, str):  # side - island transition
-                            if m == "from":  # side to island
+                            if m == "from":  # electrode side to island
                                 n[l] += e
                                 break
-                            elif m == "to":  # island to side
+                            elif m == "to":  # island to side electrode
                                 n[l] -= e
                                 break
                         else:
                             raise NameError
 
-            else:  # no transition occurred
+            else:  # rates too low, Tau leap instead
                 dt = default_dt
-                chosen_rate = 0
-                steady_state_counter += 1
-                if steady_state_counter > Steady_state_rep:
+                chosen_rate = None
+                zero_curr_steady_state_counter += 1
+                if zero_curr_steady_state_counter > Steady_state_rep:
                     not_in_steady_state = False
 
-            Qn = []
-            for i in islands:
-                summ = 0
-                for j in islands:
-                    summ += Tau_matrix[i][j] * (e * n[j] + Cond.VxCix(cycle_voltage, Vright)[j]) / Cg[j]
-                Qn += [(summ / Rg[i]) - e * n[i] - Cond.VxCix(cycle_voltage, Vright)[i]]
-
             # calculate dQ/dt = (T^-1)(Qg-Qn)
+            Qn = F.return_Qn_for_n(n, Cond.VxCix(cycle_voltage, Vright), Rg, Cg, islands, Tau_matrix)
             Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
 
             # update Qg, I
             Qg = Qg + (Qdot_steady * dt)
-            dQ_dt += [chosen_rate]
+            I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
+
+            # update statistics
+            I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
+            Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
+            n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
             # calculate distance from steady state:
-            dist_new = np.max(np.abs(e * n + Cond.VxCix(cycle_voltage, Vright) - Qn))
+            dist_new = np.max(np.abs(
+                F.return_Qn_for_n(n_avg, Cond.VxCix(cycle_voltage, Vright), Rg, Cg, islands, Tau_matrix)
+                - Q_avg))
 
             # check if distance from steady state is larger than the last by more than the allowed error
-            if dist_new > dist + Steady_charge_std:
+            if dist_new > dist and k > 1:
                 not_decreasing += 1
+                if not_decreasing == 30000:
+                    print(l, m)
+                    raise NameError
                 if not_decreasing > Steady_state_rep:
-                    print("dist is " + str(dist_new))
-                    #raise NameError
+                    print(l,m)
+                    print(Gamma)
+                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors")
+                    # raise NameError
 
             # steady state condition
-            elif dist < Steady_charge_std:
-                steady_state_counter += 1
-                if steady_state_counter > Steady_state_rep:
-                    not_in_steady_state = False
+            elif dist_new < KS_boundary / Cond.row_num:
+                not_in_steady_state = False
+                print("steady state")
 
-            else:
-                decreasing += 1
-                if decreasing > 3*Steady_state_rep:
-                    print("still " + str(dist) + " away, there have been " + str(not_decreasing) + " errors until now")
-                    not_in_steady_state = False
+            elif k % 1000 == 0:
+                print("dist is " + str(dist_new) + " error num is " + str(not_decreasing))
 
             dist = dist_new
+            t += dt
 
-        I_vec[cycle] = (sum(dQ_dt) / len(dQ_dt))
+        I_vec[cycle] = I_avg
 
     I_matrix[loop] = I_vec
 

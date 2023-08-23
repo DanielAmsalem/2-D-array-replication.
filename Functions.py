@@ -40,11 +40,13 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
 def V_t(n, Qg, vl, vr, C_inverse, VxCix):
     return np.dot(C_inverse, e * n + VxCix(vl, vr) + Qg)
 
+
 def isNonNegative(x):
     if x < 0:
         raise ValueError
     else:
         return x
+
 
 def taylor(x, T):
     # 4th degree expansion of dE/(1-e^(dE*beta))
@@ -77,3 +79,55 @@ def gamma(dE, T, Rt):
         return isNonNegative(taylor(dE, beta) / const)
     else:
         raise ValueError
+
+
+def update_statistics(value, avg, n_var, total_time, time_step):
+    # from https://github.com/kasirershaharbgu/random_2D_tunneling_arrays/blob/main/random_2d_array_simulation.py#L1957
+    new_time = total_time + time_step
+    dist_from_avg = value - avg
+    local_std = dist_from_avg * time_step / new_time
+    new_n_var = n_var + dist_from_avg * total_time * local_std
+    new_avg = avg + local_std
+    return new_avg, new_n_var
+
+
+def return_Qn_for_n(n, VxCix, Rg, Cg, islands, Tau):
+    Qn = []
+    for i in islands:
+        summ = 0
+        for j in islands:
+            summ += Tau[i][j] * (e * n[j] + VxCix[j]) / Cg[j]
+        Qn += [(summ / Rg[i]) - e * n[i] - VxCix[i]]
+    return Qn
+
+def Get_current_from_gamma(gamma, reaction_index, near_right, near_left):
+    I_right = 0
+    I_down = 0
+    for i in range(len(gamma)):
+        l, m = reaction_index[i]
+
+        # positive side current
+        if ((l in near_left) and m =="to") or ((l in near_right) and m =="from"):
+            I_right += gamma[i]
+
+        # negative side current
+        elif ((l in near_left) and m =="from") or ((l in near_right) and m =="to"):
+            I_right -= gamma[i]
+
+        # right isle to isle current
+        elif l-m == -1:
+            I_right += gamma[i]
+
+        # left isle to isle current
+        elif l-m == 1:
+            I_right -= gamma[i]
+
+        # up isle to isle current
+        elif l-m == 4:
+            I_down -= gamma[i]
+
+        # down isle to isle current
+        elif l-m == -4:
+            I_down += gamma[i]
+
+    return I_right, I_down

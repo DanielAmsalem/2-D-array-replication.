@@ -9,16 +9,15 @@ array_size = row_num * row_num
 islands = list(range(array_size))
 
 # define tunneling parameters
-R = 1
-C = 1
+R = 10
+C = 1e-5
 R_t = [math.exp(random.random()) * R for i in range(array_size)]
 
 Cij = np.zeros((array_size, array_size))
 
 # define relaxation time parameters
-Cg = 10 * C
+Cg = 20 * C
 Rg = 1000 * R
-
 
 for i in range(array_size):
     x_value = i % row_num  # y position of ith SC
@@ -26,13 +25,13 @@ for i in range(array_size):
     for j in range(array_size):
         # coordinates of jth SC
         neighbour_x = j % row_num
-        neighbour_y = (j - j % row_num)/row_num
+        neighbour_y = (j - j % row_num) / row_num
 
         neighbour = (neighbour_x, neighbour_y)
         neighbours_ij = return_neighbours(row_num, x_value, y_value)  # return coordinates of ith's neighbours
 
         if neighbour in neighbours_ij:
-            Cij[i][j] = -abs(np.random.normal(C, C/10))  # [C]ij = -Cij = -Cji
+            Cij[i][j] = -abs(np.random.normal(C, C / 10))  # [C]ij = -Cij = -Cji
             Cij[j][i] = Cij[i][j]
 
 for i in range(array_size):
@@ -57,6 +56,8 @@ for i in near_left:
     Cix[i] = abs(np.random.normal(C, C / 10))
 for i in near_right:
     Cix[i] = abs(np.random.normal(C, C / 10))
+print("done")
+
 
 def VxCix(Vl, Vr):
     _VxCix = np.zeros(array_size)
@@ -65,6 +66,7 @@ def VxCix(Vl, Vr):
     for u in near_right:
         _VxCix[u] = Cix[u] * Vr
     return _VxCix
+
 
 # define tau matrix
 tau_inv_matrix = np.zeros((array_size, array_size))
@@ -79,5 +81,4 @@ Tau = tuple(tau_inv_matrix)  # for conditions
 
 eig_val_tau, eig_vec_tau = np.linalg.eig(tau_inv_matrix)
 eig_val_tau = eig_val_tau.reshape(1, eig_val_tau.size)  # turns array to column vector
-default_dt = -0.1/np.min(eig_val_tau)
-
+default_dt = -0.1 / np.min(eig_val_tau)
