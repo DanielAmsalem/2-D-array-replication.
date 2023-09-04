@@ -76,6 +76,7 @@ def gamma(dE, T, Rt):
         return isNonNegative(float(-dE / (const * (1 - exponent))))
     # for 0 > a > -0.0001, we expand by x/(1-e^x) = -1 + x/2 - x^2/12 + x^4/720 + O(x^6)
     elif -taylor_limit < a < 0:
+        print("expand")
         return isNonNegative(taylor(dE, beta) / const)
     else:
         raise ValueError
@@ -100,6 +101,7 @@ def return_Qn_for_n(n, VxCix, Rg, Cg, islands, Tau):
         Qn += [(summ / Rg[i]) - e * n[i] - VxCix[i]]
     return Qn
 
+
 def Get_current_from_gamma(gamma, reaction_index, near_right, near_left):
     I_right = 0
     I_down = 0
@@ -107,27 +109,38 @@ def Get_current_from_gamma(gamma, reaction_index, near_right, near_left):
         l, m = reaction_index[i]
 
         # positive side current
-        if ((l in near_left) and m =="to") or ((l in near_right) and m =="from"):
+        if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
             I_right += gamma[i]
 
         # negative side current
-        elif ((l in near_left) and m =="from") or ((l in near_right) and m =="to"):
+        elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
             I_right -= gamma[i]
 
         # right isle to isle current
-        elif l-m == -1:
+        elif l - m == -1:
             I_right += gamma[i]
 
         # left isle to isle current
-        elif l-m == 1:
+        elif l - m == 1:
             I_right -= gamma[i]
 
         # up isle to isle current
-        elif l-m == 4:
+        elif l - m == 4:
             I_down -= gamma[i]
 
         # down isle to isle current
-        elif l-m == -4:
+        elif l - m == -4:
             I_down += gamma[i]
 
     return I_right, I_down
+
+
+def developQ(Q, dt, InvTau, b):
+    InvTauEigenVal, InvTauEigenVec = np.linalg.eig(InvTau)
+    Q_eigenbasis = InvTauEigenVec.dot(Q)
+    b = InvTauEigenVec.dot(b)
+
+    exponent = np.exp(InvTauEigenVal * dt)
+    Q_eigenbasis = Q_eigenbasis * exponent + (b / InvTauEigenVal) * (exponent - 1)
+    Q = InvTauEigenVec.dot(Q_eigenbasis)
+    return Q

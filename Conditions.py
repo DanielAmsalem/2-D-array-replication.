@@ -45,7 +45,7 @@ for i in range(array_size):
 
     Cij[i][i] += Cg
 
-C_inverse = tuple(np.linalg.inv(Cij))  # define inverse
+C_inverse = np.linalg.inv(Cij)  # define inverse
 
 near_right = islands[(row_num - 1)::row_num]
 near_left = islands[0::row_num]

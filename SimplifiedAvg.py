@@ -27,7 +27,7 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = 1e-3
+KS_boundary = 1e-2
 Steady_state_rep = 100
 
 # implements increasing\decreasing choice
@@ -135,7 +135,7 @@ for loop in range(loops):
             # similarly, for right side
             dE_right = 0
             near_right = islands[(row_num - 1)::row_num]
-            for isle in islands:
+            for isle in near_right:
                 n_tag = np.array(list(n))
 
                 # for ith transition from electrode
@@ -181,7 +181,6 @@ for loop in range(loops):
                         pass
                     else:
                         # register transition
-                        uuu = i
                         chosen_rate = Gamma[i]
                         l, m = reaction_index[i]
                         if isinstance(m, int):  # island to island transition
@@ -209,8 +208,11 @@ for loop in range(loops):
             Qn = F.return_Qn_for_n(n, Cond.VxCix(cycle_voltage, Vright), Rg, Cg, islands, Tau_matrix)
             Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
 
-            # update Qg, I
-            Qg = Qg + (Qdot_steady * dt)
+            # solve ODE to update Qg
+            b = -Cond.C_inverse.dot(e * n + Cond.VxCix(cycle_voltage, Vright)) / Rg
+            Qg = F.developQ(Qg, dt, Cond.tau_inv_matrix, b)
+
+            # update I
             I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
 
             # update statistics
@@ -226,13 +228,14 @@ for loop in range(loops):
             # check if distance from steady state is larger than the last by more than the allowed error
             if dist_new > dist and k > 1:
                 not_decreasing += 1
-                if not_decreasing == 30000:
+                if not_decreasing == 5000:
                     print(l, m)
                     raise NameError
-                if not_decreasing > Steady_state_rep:
-                    print(l,m)
-                    print(Gamma)
-                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors")
+                if not_decreasing % Steady_state_rep == 1:
+                    print(l, m)
+                    # print(Gamma)
+                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
+                          + str(k))
                     # raise NameError
 
             # steady state condition
@@ -252,7 +255,7 @@ for loop in range(loops):
 
 I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
-    I_vec_avg += run
+    I_vec_avg += run / len(I_matrix)
 
 I_V = plt.plot(Vleft / Volts, I_vec_avg / Amp)
 plt.xlabel("Voltage")
