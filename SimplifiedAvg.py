@@ -52,9 +52,9 @@ for loop in range(loops):
     for cycle in range(cycles):
         k = 0
         zero_curr_steady_state_counter = 0
-        dist = 0
         not_decreasing = 0
         decreasing = 0
+        lastV = np.zeros(array_size)
 
         cycle_voltage = Vleft[cycle]
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
@@ -66,7 +66,7 @@ for loop in range(loops):
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
             k += 1
-            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix))  # find V_i for ith island
+            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, lastV))  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
             R = 0
@@ -91,7 +91,7 @@ for loop in range(loops):
                     n_tag[j] += e
 
                     # calculate energy difference due to transition
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
                     # dEij must be negative fo transition i->j
@@ -108,7 +108,7 @@ for loop in range(loops):
 
                 # for ith transition from electrode
                 n_tag[isle] += e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
@@ -123,7 +123,7 @@ for loop in range(loops):
                 # for ith transition to electrode there must be at least one electron at isle i
                 if n_tag[isle] >= e:
                     n_tag[isle] -= e
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                     dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                     # rate for i->V_left
@@ -140,7 +140,7 @@ for loop in range(loops):
 
                 # for ith transition from electrode
                 n_tag[isle] += e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                 dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                 # rate for V_right->i
@@ -155,7 +155,7 @@ for loop in range(loops):
                 # for ith transition to electrode
                 if n_tag[isle] >= e:
                     n_tag[isle] -= e
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                     dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                     # rate for i->V_right
@@ -204,13 +204,9 @@ for loop in range(loops):
                 if zero_curr_steady_state_counter > Steady_state_rep:
                     not_in_steady_state = False
 
-            # calculate dQ/dt = (T^-1)(Qg-Qn)
-            Qn = F.return_Qn_for_n(n, Cond.VxCix(cycle_voltage, Vright), Rg, Cg, islands, Tau_matrix)
-            Qdot_steady = np.dot(Tau_inv_matrix, Qg - Qn)
-
-            # solve ODE to update Qg
-            b = -Cond.C_inverse.dot(e * n + Cond.VxCix(cycle_voltage, Vright)) / Rg
-            Qg = F.developQ(Qg, dt, Cond.tau_inv_matrix, b)
+            # calculate Qn, solve ODE to update Qg --> Q, dQ/dt = (T^-1)(Q-Qn)
+            Qn = F.return_Qn_for_n(n, Cond.VxCix(cycle_voltage, Vright, V), Rg, Cg, islands, Tau_matrix)
+            Qg = F.developQ(Qg, dt, Cond.tau_inv_matrix, Qn)
 
             # update I
             I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
@@ -221,33 +217,33 @@ for loop in range(loops):
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
             # calculate distance from steady state:
-            dist_new = np.max(np.abs(
-                F.return_Qn_for_n(n_avg, Cond.VxCix(cycle_voltage, Vright), Rg, Cg, islands, Tau_matrix)
-                - Q_avg))
+            steady_Q = F.return_Qn_for_n(n_avg, Cond.VxCix(cycle_voltage, Vright, V), Rg, Cg, islands, Tau_matrix)
+            dist_new = np.max(np.abs(steady_Q - Q_avg))
 
             # check if distance from steady state is larger than the last by more than the allowed error
-            if dist_new > dist and k > 1:
-                not_decreasing += 1
-                if not_decreasing == 5000:
-                    print(l, m)
-                    raise NameError
-                if not_decreasing % Steady_state_rep == 1:
-                    print(l, m)
-                    # print(Gamma)
+            if k > 1:
+                if (dist_new > dist) and k < 500:
+                    not_decreasing += 1
+                    if not_decreasing == 50000:
+                        print(l, m)
+                        raise NameError
+                    # if not_decreasing % Steady_state_rep == 1:
+
+
+                # steady state condition
+                elif (dist_new < KS_boundary / row_num) or k == 500:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k))
-                    # raise NameError
+                    not_in_steady_state = False
 
-            # steady state condition
-            elif dist_new < KS_boundary / Cond.row_num:
-                not_in_steady_state = False
-                print("steady state")
 
-            elif k % 1000 == 0:
-                print("dist is " + str(dist_new) + " error num is " + str(not_decreasing))
+                elif k % 1000 == 0:
+
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing))
 
             dist = dist_new
             t += dt
+            lastV = V
 
         I_vec[cycle] = I_avg
 

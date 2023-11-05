@@ -59,13 +59,13 @@ for i in near_right:
 print("done")
 
 
-def VxCix(Vl, Vr):
+def VxCix(Vl, Vr, V):
     _VxCix = np.zeros(array_size)
     for u in near_left:
-        _VxCix[u] = Cix[u] * Vl
+        _VxCix[u] = Cix[u] * (Vl-V[u])
     for u in near_right:
-        _VxCix[u] = Cix[u] * Vr
-    return _VxCix
+        _VxCix[u] = Cix[u] * (Vr-V[u])
+    return np.array(_VxCix)
 
 
 # define tau matrix

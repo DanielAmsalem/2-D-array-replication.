@@ -37,8 +37,8 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
     return neighbours
 
 
-def V_t(n, Qg, vl, vr, C_inverse, VxCix):
-    return np.dot(C_inverse, e * n + VxCix(vl, vr) + Qg)
+def V_t(n, Qg, vl, vr, C_inverse, VxCix, V):
+    return e*np.dot(C_inverse, n + VxCix(vl, vr, V) + Qg)
 
 
 def isNonNegative(x):
@@ -142,5 +142,6 @@ def developQ(Q, dt, InvTau, b):
 
     exponent = np.exp(InvTauEigenVal * dt)
     Q_eigenbasis = Q_eigenbasis * exponent + (b / InvTauEigenVal) * (exponent - 1)
-    Q = InvTauEigenVec.dot(Q_eigenbasis)
+    Q = np.linalg.solve(InvTauEigenVec, Q_eigenbasis)
     return Q
+
