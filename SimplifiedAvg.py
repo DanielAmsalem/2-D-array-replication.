@@ -117,7 +117,7 @@ for loop in range(loops):
                 V_tag[isle] += Cond.Cg * e
 
                 V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
-                dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
+                dE_left = (V[isle] + V_new[isle] + 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
                 if dE_left < 0:
@@ -136,8 +136,8 @@ for loop in range(loops):
                     n_tag[isle] -= e
                     V_tag[isle] -= Cond.Cg * e
 
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
-                    dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
+                    dE_left = -(V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                     # rate for i->V_left
                     if dE_left < 0:
@@ -156,7 +156,7 @@ for loop in range(loops):
                 n_tag[isle] += e
                 V_tag[isle] += Cond.Cg * e
 
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
                 dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                 # rate for V_right->i
@@ -175,8 +175,8 @@ for loop in range(loops):
                     n_tag[isle] -= e
                     V_tag[isle] -= Cond.Cg * e
 
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
-                    dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
+                    dE_right = -(V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                     # rate for i->V_right
                     if dE_right < 0:

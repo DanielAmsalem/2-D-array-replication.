@@ -28,7 +28,7 @@ Cg = 20 * C
 Rg = 1000 * R
 
 #Capacitance Cond
-Ch = np.random.normal(5*C,C/10, size=(row_num, row_num+1))
+Ch = np.random.normal(C,C/10, size=(row_num, row_num+1))
 Cv = np.random.normal(C,C/10, size=(row_num + 1, row_num))
 
 diagonal = Ch[:, :-1] + Ch[:, 1:] + Cv[:-1, :] + Cv[1:, :]
