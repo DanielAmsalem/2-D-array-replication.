@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import Functions
 import Functions as F
 import Conditions as Cond
+import copy
 
 # Conditions
 loops = 1000
@@ -19,15 +20,15 @@ Tau_matrix = np.linalg.inv(Tau_inv_matrix)
 increase = True  # true if increasing else decreasing voltage during run
 
 # parameters
-e = 1
-kB = 1
+e = Cond.e
+kB = Cond.kB
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = 1e-2
+KS_boundary = e*1e-2
 Steady_state_rep = 100
 
 # implements increasing\decreasing choice
@@ -66,7 +67,7 @@ for loop in range(loops):
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
             k += 1
-            V = tuple(F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, lastV))  # find V_i for ith island
+            V = F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, lastV)  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
             R = 0
@@ -85,13 +86,17 @@ for loop in range(loops):
                 # else calculate transition rate to jth island
                 neighbour_list = Functions.neighbour_list(Cond.row_num, i)
                 for j in neighbour_list:
+                    V_tag = copy.copy(V)
                     n_tag = np.array(list(n))
+
                     # for isle i to isle j transition
                     n_tag[i] -= e
                     n_tag[j] += e
+                    V_tag[i] -= Cond.Cg * e
+                    V_tag[j] += Cond.Cg * e
 
                     # calculate energy difference due to transition
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
+                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
                     # dEij must be negative fo transition i->j
@@ -104,11 +109,14 @@ for loop in range(loops):
             dE_left = 0
             near_left = islands[0::row_num]
             for isle in near_left:
+                V_tag = copy.copy(V)
                 n_tag = np.array(list(n))
 
                 # for ith transition from electrode
                 n_tag[isle] += e
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
+                V_tag[isle] += Cond.Cg * e
+
+                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
@@ -119,10 +127,15 @@ for loop in range(loops):
 
                 # return "borrowed electron" used for calculation
                 n_tag[isle] -= e
+                V_tag[isle] -= Cond.Cg * e
 
                 # for ith transition to electrode there must be at least one electron at isle i
                 if n_tag[isle] >= e:
+
+                    # for ith transition from electrode
                     n_tag[isle] -= e
+                    V_tag[isle] -= Cond.Cg * e
+
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                     dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
@@ -136,10 +149,13 @@ for loop in range(loops):
             dE_right = 0
             near_right = islands[(row_num - 1)::row_num]
             for isle in near_right:
+                V_tag = copy.copy(V)
                 n_tag = np.array(list(n))
 
                 # for ith transition from electrode
                 n_tag[isle] += e
+                V_tag[isle] += Cond.Cg * e
+
                 V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                 dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
@@ -151,10 +167,14 @@ for loop in range(loops):
 
                 # return "borrowed electron" used for calculation
                 n_tag[isle] -= e
+                V_tag[isle] -= Cond.Cg * e
 
                 # for ith transition to electrode
                 if n_tag[isle] >= e:
+                    # for ith transition from electrode
                     n_tag[isle] -= e
+                    V_tag[isle] -= Cond.Cg * e
+
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V)
                     dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
@@ -186,13 +206,17 @@ for loop in range(loops):
                         if isinstance(m, int):  # island to island transition
                             n[l] -= e
                             n[m] += e
+                            V[l] -= Cond.Cg*e
+                            V[m] += Cond.Cg*e
                             break
                         elif isinstance(m, str):  # side - island transition
                             if m == "from":  # electrode side to island
                                 n[l] += e
+                                V[l] += Cond.Cg * e
                                 break
                             elif m == "to":  # island to side electrode
                                 n[l] -= e
+                                V[l] -= Cond.Cg * e
                                 break
                         else:
                             raise NameError
@@ -202,7 +226,9 @@ for loop in range(loops):
                 chosen_rate = None
                 zero_curr_steady_state_counter += 1
                 if zero_curr_steady_state_counter > Steady_state_rep:
+                    print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
+
 
             # calculate Qn, solve ODE to update Qg --> Q, dQ/dt = (T^-1)(Q-Qn)
             Qn = F.return_Qn_for_n(n, Cond.VxCix(cycle_voltage, Vright, V), Rg, Cg, islands, Tau_matrix)
@@ -222,23 +248,23 @@ for loop in range(loops):
 
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 1:
-                if (dist_new > dist) and k < 500:
+                if dist_new > dist:
+                    if dist_new - dist > 0.1 and k > 10:
+                        print("err " + str(dist_new))
                     not_decreasing += 1
                     if not_decreasing == 50000:
                         print(l, m)
                         raise NameError
                     # if not_decreasing % Steady_state_rep == 1:
 
-
                 # steady state condition
-                elif (dist_new < KS_boundary / row_num) or k == 500:
+                elif dist_new < KS_boundary:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k))
+                    print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
-
                 elif k % 1000 == 0:
-
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing))
 
             dist = dist_new

@@ -4,6 +4,7 @@ import math
 # parameters
 kB = 1
 e = 1
+taylor_limit = 0.001
 
 
 def neighbour_list(n, i):  # return positions of neighbours of ith position in nxn matrix
@@ -38,7 +39,8 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
 
 
 def V_t(n, Qg, vl, vr, C_inverse, VxCix, V):
-    return e*np.dot(C_inverse, n + VxCix(vl, vr, V) + Qg)
+    return np.dot(C_inverse, e*n + e*VxCix(vl, vr, V) + Qg)
+
 
 
 def isNonNegative(x):
@@ -49,7 +51,7 @@ def isNonNegative(x):
 
 
 def taylor(x, T):
-    # 4th degree expansion of dE/(1-e^(dE*beta))
+    # 4th degree expansion of x/(1-e^(x*T))
     return float(
         T -
         x / 2 +
@@ -69,8 +71,6 @@ def gamma(dE, T, Rt):
     exponent = math.exp(a)
     const = e * e * Rt
 
-    taylor_limit = 0.001
-
     # for an a smaller than -0.0001 we do not expect non-regular behaviour
     if a <= -taylor_limit:
         return isNonNegative(float(-dE / (const * (1 - exponent))))
@@ -80,6 +80,9 @@ def gamma(dE, T, Rt):
         return isNonNegative(taylor(dE, beta) / const)
     else:
         raise ValueError
+
+
+
 
 
 def update_statistics(value, avg, n_var, total_time, time_step):
