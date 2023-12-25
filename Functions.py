@@ -38,8 +38,8 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
     return neighbours
 
 
-def V_t(n, Qg, vl, vr, C_inverse, VxCix, V):
-    return np.dot(C_inverse, e*n + e*VxCix(vl, vr, V) + Qg)
+def V_t(n, Qg, vl, vr, C_inverse, VxCix):
+    return np.dot(C_inverse, e*n + e*VxCix(vl, vr) + Qg)
 
 
 

@@ -54,12 +54,12 @@ for i in near_right:
 print("done")
 
 
-def VxCix(Vl, Vr, V):
+def VxCix(Vl, Vr):
     _VxCix = np.zeros(array_size)
     for u in near_left:
-        _VxCix[u] = Cix[u] * (V[u])
+        _VxCix[u] = Cix[u] * (Vl)
     for u in near_right:
-        _VxCix[u] = Cix[u] * (V[u])
+        _VxCix[u] = Cix[u] * (Vr)
     return np.array(_VxCix)
 
 
