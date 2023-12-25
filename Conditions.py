@@ -14,7 +14,7 @@ distribute_R = False
 e = Functions.e
 kB = Functions.kB
 R = 10
-C = 1
+C = 1e-5
 
 if distribute_R:
     R_t = [math.exp(random.random()) * R for i in range(array_size)]

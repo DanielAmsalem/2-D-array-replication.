@@ -234,7 +234,7 @@ for loop in range(loops):
                 if dist_new > dist:
                     print("err " + str(dist_new))
                     not_decreasing += 1
-                    if not_decreasing == 50000:
+                    if not_decreasing == 1000:
                         print(l, m)
                         raise NameError
                     # if not_decreasing % Steady_state_rep == 1:
