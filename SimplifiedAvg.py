@@ -28,7 +28,7 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e*1e-2
+KS_boundary = e*1e-2/row_num
 Steady_state_rep = 100
 
 # implements increasing\decreasing choice
@@ -84,7 +84,7 @@ for loop in range(loops):
                     continue
 
                 # else calculate transition rate to jth island
-                neighbour_list = Functions.neighbour_list(Cond.row_num, i)
+                neighbour_list = F.neighbour_list(Cond.row_num, i)
                 for j in neighbour_list:
                     V_tag = copy.copy(V)
                     n_tag = np.array(list(n))
@@ -117,7 +117,7 @@ for loop in range(loops):
                 V_tag[isle] += Cond.Cg * e
 
                 V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
-                dE_left = (V[isle] + V_new[isle] + 2 * cycle_voltage) * e / 2
+                dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
                 if dE_left < 0:
@@ -137,7 +137,7 @@ for loop in range(loops):
                     V_tag[isle] -= Cond.Cg * e
 
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
-                    dE_left = -(V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
+                    dE_left = (2 * cycle_voltage - V[isle] - V_new[isle]) * e / 2
 
                     # rate for i->V_left
                     if dE_left < 0:
@@ -176,7 +176,7 @@ for loop in range(loops):
                     V_tag[isle] -= Cond.Cg * e
 
                     V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix, V_tag)
-                    dE_right = -(V[isle] + V_new[isle] - 2 * Vright) * e / 2
+                    dE_right = (2 * Vright - V[isle] - V_new[isle]) * e / 2
 
                     # rate for i->V_right
                     if dE_right < 0:
@@ -249,8 +249,7 @@ for loop in range(loops):
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 1:
                 if dist_new > dist:
-                    if dist_new - dist > 0.1 and k > 10:
-                        print("err " + str(dist_new))
+                    print("err " + str(dist_new))
                     not_decreasing += 1
                     if not_decreasing == 50000:
                         print(l, m)
