@@ -8,6 +8,7 @@ taylor_limit = 0.001
 
 
 def neighbour_list(n, i):  # return positions of neighbours of ith position in nxn matrix
+    # position of denoted as [(0,...,n-1),(n...2n-1),..(n(n-1),...n^2-1)]
     x = i % n
     y = (i - i % n) / n
     neighbours = []
@@ -39,8 +40,7 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
 
 
 def V_t(n, Qg, vl, vr, C_inverse, VxCix):
-    return np.dot(C_inverse, e*n + e*VxCix(vl, vr) + Qg)
-
+    return np.dot(C_inverse, e * n + e * VxCix(vl, vr) + Qg)
 
 
 def isNonNegative(x):
@@ -80,9 +80,6 @@ def gamma(dE, T, Rt):
         return isNonNegative(taylor(dE, beta) / const)
     else:
         raise ValueError
-
-
-
 
 
 def update_statistics(value, avg, n_var, total_time, time_step):
@@ -147,4 +144,3 @@ def developQ(Q, dt, InvTau, b):
     Q_eigenbasis = Q_eigenbasis * exponent + (b / InvTauEigenVal) * (exponent - 1)
     Q = np.linalg.solve(InvTauEigenVec, Q_eigenbasis)
     return Q
-

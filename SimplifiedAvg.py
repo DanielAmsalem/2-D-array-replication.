@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import Functions
 import Functions as F
 import Conditions as Cond
 import copy
@@ -213,7 +212,6 @@ for loop in range(loops):
                 if zero_curr_steady_state_counter > Steady_state_rep:
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
-
 
             # calculate Qn, solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qn = F.return_Qn_for_n(n, Cond.VxCix(cycle_voltage, Vright), Rg, Cg, islands, Tau_matrix)
