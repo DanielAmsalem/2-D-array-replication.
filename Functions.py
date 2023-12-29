@@ -7,6 +7,15 @@ e = 1
 taylor_limit = 0.001
 
 
+def flattenToColumn(a):
+    """
+    Returns the given array, reshaped into a column array.
+    :param a: (N,M) numpy array.
+    :return: (N*M,1) numpy array.
+    """
+    return a.reshape((a.size, 1))
+
+
 def neighbour_list(n, i):  # return positions of neighbours of ith position in nxn matrix
     # position of denoted as [(0,...,n-1),(n...2n-1),..(n(n-1),...n^2-1)]
     x = i % n
@@ -92,55 +101,52 @@ def update_statistics(value, avg, n_var, total_time, time_step):
     return new_avg, new_n_var
 
 
-def return_Qn_for_n(n, VxCix, Rg, Cg, islands, Tau):
-    Qn = []
-    for i in islands:
-        summ = 0
-        for j in islands:
-            summ += Tau[i][j] * (e * n[j] + VxCix[j]) / Cg[j]
-        Qn += [(summ / Rg[i]) - e * n[i] - VxCix[i]]
-    return Qn
-
-
-def Get_current_from_gamma(gamma, reaction_index, near_right, near_left):
+def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
     I_right = 0
     I_down = 0
-    for i in range(len(gamma)):
+    for i in range(len(gamma_list)):
         l, m = reaction_index[i]
 
         # positive side current
         if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
-            I_right += gamma[i]
+            I_right += gamma_list[i]
 
         # negative side current
         elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
-            I_right -= gamma[i]
+            I_right -= gamma_list[i]
 
         # right isle to isle current
         elif l - m == -1:
-            I_right += gamma[i]
+            I_right += gamma_list[i]
 
         # left isle to isle current
         elif l - m == 1:
-            I_right -= gamma[i]
+            I_right -= gamma_list[i]
 
         # up isle to isle current
         elif l - m == 4:
-            I_down -= gamma[i]
+            I_down -= gamma_list[i]
 
         # down isle to isle current
         elif l - m == -4:
-            I_down += gamma[i]
+            I_down += gamma_list[i]
 
     return I_right, I_down
 
 
-def developQ(Q, dt, InvTau, b):
-    InvTauEigenVal, InvTauEigenVec = np.linalg.eig(InvTau)
-    Q_eigenbasis = InvTauEigenVec.dot(Q)
-    b = InvTauEigenVec.dot(b)
+def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, Rg, C_inverse, n, VxCix, InvTauEigenVecInv):
+    # gate charge relaxation, given by dQ/dt=inv_tau*Q + b
+    b = -C_inverse.dot(n * e + VxCix * e) / Rg
 
+    # exponent for time step
     exponent = np.exp(InvTauEigenVal * dt)
-    Q_eigenbasis = Q_eigenbasis * exponent + (b / InvTauEigenVal) * (exponent - 1)
-    Q = np.linalg.solve(InvTauEigenVec, Q_eigenbasis)
-    return Q
+
+    # basis change
+    Q_eigenbasis, b = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
+
+    # solution in time
+    Q_eigenbasis = exponent * Q_eigenbasis + (b / InvTauEigenVal) * (exponent - 1)
+
+    # revert to old basis
+    return InvTauEigenVec.dot(Q_eigenbasis)
+
