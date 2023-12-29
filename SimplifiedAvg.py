@@ -252,6 +252,7 @@ for loop in range(loops):
                 elif k % 1000 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing))
 
+            #update time
             dist = dist_new
             t += dt
 

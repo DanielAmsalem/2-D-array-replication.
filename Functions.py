@@ -135,7 +135,7 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
 
 
 def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, Rg, C_inverse, n, VxCix, InvTauEigenVecInv):
-    # gate charge relaxation, given by dQ/dt=inv_tau*Q + b
+    # gate charge relaxation, for dQ/dt=inv_tau*Q + b
     b = -C_inverse.dot(n * e + VxCix * e) / Rg
 
     # exponent for time step

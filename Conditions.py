@@ -73,7 +73,6 @@ print(CGMat)
 matrixQnPart = Tau * CGMat - np.eye(Tau.shape[0])
 print("done")
 
-
 def VxCix(Vl, Vr):
     _VxCix = np.zeros(array_size)
     for u in near_left:
