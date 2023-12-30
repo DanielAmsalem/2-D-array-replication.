@@ -26,7 +26,7 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e * 10e-2 / row_num
+KS_boundary = e * 1e-3 / row_num
 Steady_state_rep = 100
 
 # implements increasing\decreasing choice
@@ -194,13 +194,16 @@ for loop in range(loops):
                         if isinstance(m, int):  # island to island transition
                             n[l] -= e
                             n[m] += e
+                            zero_curr_steady_state_counter = 0
                             break
                         elif isinstance(m, str):  # side - island transition
                             if m == "from":  # electrode side to island
                                 n[l] += e
+                                zero_curr_steady_state_counter = 0
                                 break
                             elif m == "to":  # island to side electrode
                                 n[l] -= e
+                                zero_curr_steady_state_counter = 0
                                 break
                         else:
                             raise NameError
@@ -209,7 +212,7 @@ for loop in range(loops):
                 dt = default_dt
                 chosen_rate = None
                 zero_curr_steady_state_counter += 1
-                if zero_curr_steady_state_counter > Steady_state_rep:
+                if zero_curr_steady_state_counter % Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
@@ -239,12 +242,13 @@ for loop in range(loops):
                     not_in_steady_state = False
 
                 # convergence
-                if dist_new - dist > 0:
+                if dist_new > dist:
                     print("err " + str(dist_new))
                     not_decreasing += 1
-                    if not_decreasing == 100000:
+                    if not_decreasing == 10000:
                         print(l, m)
                         print(Qg)
+                        print(V)
                         print(n)
                         print(cycle_voltage)
                         raise NameError

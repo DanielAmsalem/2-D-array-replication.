@@ -136,17 +136,16 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
 
 def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, Rg, C_inverse, n, VxCix, InvTauEigenVecInv):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
-    b = -C_inverse.dot(n * e + VxCix * e) / Rg
-
+    b = -C_inverse.dot(n * e + VxCix * e)/Rg
     # exponent for time step
     exponent = np.exp(InvTauEigenVal * dt)
 
     # basis change
-    Q_eigenbasis, b = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
+    Q_in_eigenbasis, b = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
 
     # solution in time
-    Q_eigenbasis = exponent * Q_eigenbasis + (b / InvTauEigenVal) * (exponent - 1)
+    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / InvTauEigenVal * exponent) - (b / InvTauEigenVal)
 
     # revert to old basis
-    return InvTauEigenVec.dot(Q_eigenbasis)
+    return InvTauEigenVec.dot(Q_new_in_eigenbasis)
 

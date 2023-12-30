@@ -66,12 +66,10 @@ default_dt = -0.1 / np.min(InvTauEigenValues)
 
 # Cg matrix, and Qn calculation
 Tau = np.linalg.inv(Tau_inv)
-VEC = np.array([1/Cg]*array_size)
-print(VEC)
-CGMat = np.full((array_size,array_size), 1/Cg)
-print(CGMat)
+CGMat = np.full((array_size, array_size), 1 / Cg)
 matrixQnPart = Tau * CGMat - np.eye(Tau.shape[0])
 print("done")
+
 
 def VxCix(Vl, Vr):
     _VxCix = np.zeros(array_size)
@@ -80,4 +78,3 @@ def VxCix(Vl, Vr):
     for u in near_right:
         _VxCix[u] = Cix[u] * Vr
     return np.array(_VxCix)
-
