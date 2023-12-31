@@ -1,5 +1,4 @@
 import numpy as np
-import math
 
 # parameters
 kB = 1
