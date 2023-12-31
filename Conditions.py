@@ -1,11 +1,8 @@
 import numpy as np
-import math
-import random
-from Functions import return_neighbours
 import Functions
 
 # parameters
-row_num = 4
+row_num = 1
 array_size = row_num * row_num
 islands = list(range(array_size))
 distribute_R = False
@@ -16,16 +13,21 @@ kB = Functions.kB
 R = 10
 C = 1
 
-if distribute_R:
-    R_t = np.array([math.exp(random.random()) * R for i in range(array_size)])
-else:
-    R_t = np.array([R for i in range(array_size)])
-
-Cij = np.zeros((array_size, array_size))
-
 # define relaxation time parameters
 Cg = 20 * C
 Rg = 1000 * R
+
+near_right = islands[(row_num - 1)::row_num]
+near_left = islands[0::row_num]
+
+if distribute_R:
+    R_t_ij = np.random.exponential(1, (array_size, array_size)) * R
+    R_i = np.random.exponential(1, array_size) * R
+    R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
+else:
+    R_t_ij = np.full((array_size, array_size), R)
+    R_i = np.full(array_size, R)
+    R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
 
 # Capacitance Cond
 Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
@@ -42,18 +44,22 @@ C_mat = np.diagflat(diagonal) - np.diagflat(second_diagonal, k=1) - np.diagflat(
 invC = np.linalg.inv(C_mat)
 C_inverse = np.linalg.inv(C_mat + np.diagflat([Cg] * array_size))  # define inverse
 
-near_right = islands[(row_num - 1)::row_num]
-near_left = islands[0::row_num]
 
-# define capacitance Cix
-if array_size == 1:
-    Cix = np.array([2 * C, C])
-else:
-    Cix = np.zeros(array_size)
-    for i in near_left:
-        Cix[i] = abs(np.random.normal(C, 0))
-    for i in near_right:
-        Cix[i] = abs(np.random.normal(C / 2, 0))
+Cix = np.zeros(array_size)
+for i in near_left:
+    Cix[i] = abs(np.random.normal(C, 0))
+for i in near_right:
+    Cix[i] = abs(np.random.normal(C / 2, 0))
+
+
+def VxCix(Vl, Vr):
+    _VxCix = np.zeros(array_size)
+    for u in near_left:
+        _VxCix[u] = Cix[u] * Vl
+    for u in near_right:
+        _VxCix[u] = Cix[u] * Vr
+    return np.array(_VxCix)
+
 
 # define tau matrix
 res = C_inverse + np.diagflat([1 / Cg] * array_size)
@@ -71,10 +77,4 @@ matrixQnPart = Tau * CGMat - np.eye(Tau.shape[0])
 print("done")
 
 
-def VxCix(Vl, Vr):
-    _VxCix = np.zeros(array_size)
-    for u in near_left:
-        _VxCix[u] = Cix[u] * Vl
-    for u in near_right:
-        _VxCix[u] = Cix[u] * Vr
-    return np.array(_VxCix)
+

@@ -7,6 +7,7 @@ e = 1
 taylor_limit = 0.001
 
 
+
 def flattenToColumn(a):
     """
     Returns the given array, reshaped into a column array.
@@ -52,6 +53,7 @@ def V_t(n, Qg, vl, vr, C_inverse, VxCix):
     return np.dot(C_inverse, e * n + e * VxCix(vl, vr) + Qg)
 
 
+
 def isNonNegative(x):
     if x < 0:
         raise ValueError
@@ -64,9 +66,9 @@ def taylor(x, T):
     return float(
         T -
         x / 2 +
-        T * math.pow(x, 2) / 12 -
-        math.pow(T, 3) * math.pow(x, 4) / 720 +
-        math.pow(T, 5) * math.pow(x, 6) / 30240)
+        T * np.power(x, 2) / 12 -
+        np.power(T, 3) * np.power(x, 4) / 720 +
+        np.power(T, 5) * np.power(x, 6) / 30240)
 
 
 def gamma(dE, T, Rt):
@@ -77,7 +79,7 @@ def gamma(dE, T, Rt):
     except OverflowError:  # T may be too small
         return NameError
 
-    exponent = math.exp(a)
+    exponent = np.exp(a)
     const = e * e * Rt
 
     # for an a smaller than -0.0001 we do not expect non-regular behaviour

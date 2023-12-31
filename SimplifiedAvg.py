@@ -5,12 +5,16 @@ import Conditions as Cond
 import copy
 
 # Conditions
+Disable = True
 loops = 1000
 steps = 1000
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
-R_t = Cond.R_t
+near_left = Cond.near_left
+near_right = Cond.near_right
+R_t_ij = Cond.R_t_ij
+R_t_i = Cond.R_t_i
 Rg = [Cond.Rg] * array_size
 Cg = [Cond.Cg] * array_size
 default_dt = Cond.default_dt
@@ -26,7 +30,7 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e * 1e-3 / row_num
+KS_boundary = e * 1e-3
 Steady_state_rep = 100
 
 # implements increasing\decreasing choice
@@ -57,6 +61,9 @@ for loop in range(loops):
         cycle_voltage = Vleft[cycle]
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
 
+        # useful voltage dependent constants
+        Const_Qn_part = Cond.matrixQnPart.dot(Cond.VxCix(cycle_voltage, Vright) * e)
+
         # starting conditions
         not_in_steady_state = True
         t = 0
@@ -79,7 +86,7 @@ for loop in range(loops):
             # island i to island j transition
             for i in islands:
                 # if island i is empty pass over
-                if n[i] == 0:
+                if n[i] == 0 or array_size == 1:
                     continue
 
                 # else calculate transition rate to jth island
@@ -97,13 +104,11 @@ for loop in range(loops):
 
                     # dEij must be negative fo transition i->j
                     if dEij[i][j] < 0:
-                        Gamma += [F.gamma(dEij[i][j], T, R_t[i])]
+                        Gamma += [F.gamma(dEij[i][j], T, R_t_ij[i][j])]
                         R += Gamma[-1]
                         reaction_index += [(i, j)]
 
             # left electrode to island transition:
-            dE_left = 0
-            near_left = islands[0::row_num]
             for isle in near_left:
                 n_tag = copy.copy(n)
 
@@ -115,7 +120,7 @@ for loop in range(loops):
 
                 # rate for V_left->i
                 if dE_left < 0:
-                    Gamma += [F.gamma(dE_left, T, R_t[isle])]
+                    Gamma += [F.gamma(dE_left, T, R_t_i[isle])]
                     R += Gamma[-1]
                     reaction_index += [(isle, "from")]
 
@@ -133,13 +138,11 @@ for loop in range(loops):
 
                     # rate for i->V_left
                     if dE_left < 0:
-                        Gamma += [F.gamma(dE_left, T, R_t[isle])]
+                        Gamma += [F.gamma(dE_left, T, R_t_i[isle])]
                         R += Gamma[-1]
                         reaction_index += [(isle, "to")]
 
             # similarly, for right side
-            dE_right = 0
-            near_right = islands[(row_num - 1)::row_num]
             for isle in near_right:
                 n_tag = copy.copy(n)
 
@@ -151,7 +154,7 @@ for loop in range(loops):
 
                 # rate for V_right->i
                 if dE_right < 0:
-                    Gamma += [F.gamma(dE_right, T, R_t[isle])]
+                    Gamma += [F.gamma(dE_right, T, R_t_i[isle])]
                     R += Gamma[-1]
                     reaction_index += [(isle, "from")]
 
@@ -168,7 +171,7 @@ for loop in range(loops):
 
                     # rate for i->V_right
                     if dE_right < 0:
-                        Gamma += [F.gamma(dE_right, T, R_t[isle])]
+                        Gamma += [F.gamma(dE_right, T, R_t_i[isle])]
                         R += Gamma[-1]
                         reaction_index += [(isle, "to")]
 
@@ -229,8 +232,10 @@ for loop in range(loops):
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
             # calculate distance from steady state:
-            steady_Q = Cond.matrixQnPart.dot(e * n_avg + Cond.VxCix(cycle_voltage, Vright) * e) / Cond.Rg
+            steady_Q = (Cond.matrixQnPart.dot(e * n_avg) + Const_Qn_part) / Cond.Rg
             dist_new = np.max(np.abs(steady_Q - Q_avg))
+            max_diff_index = np.argmax(dist_new)
+            std = np.sqrt(Q_var[max_diff_index])
 
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 1:
@@ -243,9 +248,9 @@ for loop in range(loops):
 
                 # convergence
                 if dist_new > dist:
-                    print("err " + str(dist_new))
+                    print("err " + str(dist_new) + " std is " + str(std))
                     not_decreasing += 1
-                    if not_decreasing == 10000:
+                    if not_decreasing == Steady_state_rep and Disable:
                         print(l, m)
                         print(Qg)
                         print(V)
@@ -254,7 +259,7 @@ for loop in range(loops):
                         raise NameError
 
                 elif k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing))
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
 
             #update time
             dist = dist_new
