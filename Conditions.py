@@ -14,8 +14,8 @@ R = 10
 C = 1
 
 # define relaxation time parameters
-Cg = 20 * C
-Rg = 1000 * R
+Cg = 10 * C
+Rg = 100 * R
 
 near_right = islands[(row_num - 1)::row_num]
 near_left = islands[0::row_num]
@@ -72,9 +72,8 @@ default_dt = -0.1 / np.min(InvTauEigenValues)
 
 # Cg matrix, and Qn calculation
 Tau = np.linalg.inv(Tau_inv)
-CGMat = np.full((array_size, array_size), 1 / Cg)
-matrixQnPart = Tau * CGMat - np.eye(Tau.shape[0])
+matrixQnPart = Tau / (Cg * Rg) - np.eye(Tau.shape[0])
 print("done")
-
+print(default_dt)
 
 

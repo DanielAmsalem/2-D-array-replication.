@@ -1,10 +1,11 @@
 import numpy as np
 
+import Functions
+
 # parameters
 kB = 1
 e = 1
 taylor_limit = 0.001
-
 
 
 def flattenToColumn(a):
@@ -16,8 +17,12 @@ def flattenToColumn(a):
     return a.reshape((a.size, 1))
 
 
-def neighbour_list(n, i):  # return positions of neighbours of ith position in nxn matrix
-    # position of denoted as [(0,...,n-1),(n...2n-1),..(n(n-1),...n^2-1)]
+def neighbour_list(n, i):
+    """
+    :param n: integer     :param i: integer
+    :return: positions of neighbours of ith position in nxn matrix
+    position of denoted as [(0,...,n-1),(n...2n-1),..(n(n-1),...n^2-1)]
+    """
     x = i % n
     y = (i - i % n) / n
     neighbours = []
@@ -33,7 +38,11 @@ def neighbour_list(n, i):  # return positions of neighbours of ith position in n
     return neighbours
 
 
-def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nxn matrix
+def return_neighbours(n, I, J):
+    """
+    :param n: integer  :param I: integer  :param J: integer
+    :return: positions of neighbours of (i,j) in nxn matrix
+    """
     I, J = int(I), int(J)
     neighbours = []
     if I + 1 < n:  # right neighbour
@@ -48,9 +57,8 @@ def return_neighbours(n, I, J):  # Return positions of neighbours of (i,j) in nx
     return neighbours
 
 
-def V_t(n, Qg, vl, vr, C_inverse, VxCix):
-    return np.dot(C_inverse, e * n + e * VxCix(vl, vr) + Qg)
-
+def getVoltage(n, Qg, C_inverse, VxCix):
+    return np.dot(C_inverse, e * n + e * VxCix - Qg)
 
 
 def isNonNegative(x):
@@ -71,7 +79,12 @@ def taylor(x, T):
 
 
 def gamma(dE, T, Rt):
-    # dE is strictly negative; dE<0
+    """
+    :param dE: is strictly negative real number; dE<0
+    :param T:
+    :param Rt:
+    :return:
+    """
     try:
         beta = 1 / (T * kB)
         a = dE * beta
@@ -135,9 +148,12 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
     return I_right, I_down
 
 
-def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, Rg, C_inverse, n, VxCix, InvTauEigenVecInv):
+def Paper_developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
+                   InvTauEigenVecInv, InvTau,
+                   C_inverse, VxCix, Rg, Tau, Cg):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
-    b = -C_inverse.dot(n * e + VxCix * e)/Rg
+    b = -C_inverse.dot(e * n + e * VxCix) / Rg
+
     # exponent for time step
     exponent = np.exp(InvTauEigenVal * dt)
 
@@ -145,8 +161,44 @@ def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, Rg, C_inverse, n, VxCix, Inv
     Q_in_eigenbasis, b = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
 
     # solution in time
-    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / InvTauEigenVal * exponent) - (b / InvTauEigenVal)
+    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / InvTauEigenVal) * (exponent - 1)
 
     # revert to old basis
     return InvTauEigenVec.dot(Q_new_in_eigenbasis)
 
+
+
+def return_Qn_for_n(n, VxCix, Cg, Rg, Tau, matrixQn):
+    """
+    returns Qn for given n vector of array (NxN)
+    :param n: (1,N) numpy array
+    :param VxCix: (1,N) numpy array
+    :param Cg: (1,N) numpy array
+    :param Rg: (1,N) numpy array
+    :param Tau: (N,N) numpy array
+    :return:
+    """
+    return Tau.dot((e * n + e * VxCix) / Cg) / Rg - e * n - e * VxCix
+    # return matrixQn.dot((e * n + e * VxCix))
+
+
+def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
+             InvTauEigenVecInv, InvTau,
+             C_inverse, VxCix, Rg, Tau, Cg, matrixQn):
+    # gate charge relaxation, for dQ/dt=inv_tau*(Q + b), b = -Qn
+    # b = -e * n - e * VxCix
+    b = -Functions.return_Qn_for_n(n, VxCix, Cg, Rg, Tau, matrixQn)
+    # b = -C_inverse.dot(e * n + e * VxCix)/Rg
+
+    # exponent for time step
+    exponent = np.exp(InvTauEigenVal * dt)
+
+    # basis change
+    Q_in_eigenbasis, b_in_eigenbasis = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
+
+
+    # solution in time
+    Q_new_in_eigenbasis = exponent * (Q_in_eigenbasis + b_in_eigenbasis)
+
+    # revert to old basis
+    return InvTauEigenVec.dot(Q_new_in_eigenbasis) - b

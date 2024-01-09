@@ -5,7 +5,7 @@ import Conditions as Cond
 import copy
 
 # Conditions
-Disable = True
+Enable, Print = False, False
 loops = 1000
 steps = 1000
 row_num = Cond.row_num
@@ -15,8 +15,8 @@ near_left = Cond.near_left
 near_right = Cond.near_right
 R_t_ij = Cond.R_t_ij
 R_t_i = Cond.R_t_i
-Rg = [Cond.Rg] * array_size
-Cg = [Cond.Cg] * array_size
+Rg = np.array([Cond.Rg] * array_size)
+Cg = np.array([Cond.Cg] * array_size)
 default_dt = Cond.default_dt
 Tau = Cond.Tau
 increase = True  # true if increasing else decreasing voltage during run
@@ -30,8 +30,8 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e * 1e-3
-Steady_state_rep = 100
+KS_boundary = e * 10e-2
+Steady_state_rep = 500
 
 # implements increasing\decreasing choice
 if increase:
@@ -58,11 +58,8 @@ for loop in range(loops):
         not_decreasing = 0
         decreasing = 0
 
-        cycle_voltage = Vleft[cycle]
+        cycle_voltage = float(Vleft[cycle])
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
-
-        # useful voltage dependent constants
-        Const_Qn_part = Cond.matrixQnPart.dot(Cond.VxCix(cycle_voltage, Vright) * e)
 
         # starting conditions
         not_in_steady_state = True
@@ -73,7 +70,8 @@ for loop in range(loops):
             k += 1
             l, m = None, None
 
-            V = F.V_t(n, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)  # find V_i for ith island
+            VxCix = Cond.VxCix(cycle_voltage, Vright)
+            V = F.getVoltage(n, Qg, Cond.C_inverse, VxCix)  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
             R = 0
@@ -99,7 +97,9 @@ for loop in range(loops):
                     n_tag[j] += e
 
                     # calculate energy difference due to transition
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
+                    if any(v < 0 for v in V_new):
+                        continue
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
                     # dEij must be negative fo transition i->j
@@ -115,7 +115,7 @@ for loop in range(loops):
                 # for ith transition from electrode
                 n_tag[isle] += e
 
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
@@ -133,7 +133,7 @@ for loop in range(loops):
                     # for ith transition from electrode
                     n_tag[isle] -= e
 
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
                     dE_left = (2 * cycle_voltage - V[isle] - V_new[isle]) * e / 2
 
                     # rate for i->V_left
@@ -149,7 +149,7 @@ for loop in range(loops):
                 # for ith transition from electrode
                 n_tag[isle] += e
 
-                V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
                 dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                 # rate for V_right->i
@@ -166,7 +166,7 @@ for loop in range(loops):
                     # for ith transition to electrode
                     n_tag[isle] -= e
 
-                    V_new = F.V_t(n_tag, Qg, cycle_voltage, Vright, Cond.C_inverse, Cond.VxCix)
+                    V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
                     dE_right = (2 * Vright - V[isle] - V_new[isle]) * e / 2
 
                     # rate for i->V_right
@@ -185,36 +185,32 @@ for loop in range(loops):
                 # picking a specific transition
                 r = 0
                 x = np.random.random() * R
-                chosen_rate = 0
                 for i in range(len(Gamma)):
                     r += Gamma[i]
                     if r < x:
                         pass
                     else:
                         # register transition
-                        chosen_rate = Gamma[i]
                         l, m = reaction_index[i]
+                        chosen_rate = Gamma[i]
                         if isinstance(m, int):  # island to island transition
                             n[l] -= e
                             n[m] += e
-                            zero_curr_steady_state_counter = 0
                             break
                         elif isinstance(m, str):  # side - island transition
                             if m == "from":  # electrode side to island
                                 n[l] += e
-                                zero_curr_steady_state_counter = 0
                                 break
                             elif m == "to":  # island to side electrode
                                 n[l] -= e
-                                zero_curr_steady_state_counter = 0
                                 break
                         else:
                             raise NameError
 
             else:  # rates too low, Tau leap instead
                 dt = default_dt
-                chosen_rate = None
                 zero_curr_steady_state_counter += 1
+                chosen_rate = 0
                 if zero_curr_steady_state_counter % Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
@@ -224,7 +220,9 @@ for loop in range(loops):
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
-                            Rg, Cond.C_inverse, n, Cond.VxCix(cycle_voltage, Vright), Cond.InvTauEigenVectorsInv)
+                            n, Cond.InvTauEigenVectorsInv,
+                            Cond.Tau_inv, Cond.C_inverse, VxCix,
+                            Rg, Tau, Cg, Cond.matrixQnPart)
 
             # update statistics
             I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
@@ -232,7 +230,7 @@ for loop in range(loops):
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
             # calculate distance from steady state:
-            steady_Q = (Cond.matrixQnPart.dot(e * n_avg) + Const_Qn_part) / Cond.Rg
+            steady_Q = F.return_Qn_for_n(n_avg, VxCix, Cg, Rg, Tau, Cond.matrixQnPart)
             dist_new = np.max(np.abs(steady_Q - Q_avg))
             max_diff_index = np.argmax(dist_new)
             std = np.sqrt(Q_var[max_diff_index])
@@ -247,21 +245,33 @@ for loop in range(loops):
                     not_in_steady_state = False
 
                 # convergence
-                if dist_new > dist:
-                    print("err " + str(dist_new) + " std is " + str(std))
-                    not_decreasing += 1
-                    if not_decreasing == Steady_state_rep and Disable:
-                        print(l, m)
+                if dist_new - dist > 0:
+                    if Print:
+                        print("err " + str(dist_new) + " std is " + str(std))
                         print(Qg)
+                        print(steady_Q)
                         print(V)
                         print(n)
+                        print(I_avg, abs(cycle_voltage / (e * Cond.Rg)))
+                        print(R, chosen_rate)
+                        print(cycle_voltage)
+                    not_decreasing += 1
+
+                    if not_decreasing == 1000 and Enable:
+                        print("k is " + str(k) + " error num is " + str(not_decreasing))
+                        print(Qg)
+                        print(steady_Q)
+                        print(V)
+                        print(n)
+                        print(I_avg, abs(cycle_voltage / (e * Cond.Rg)))
+                        print(R, chosen_rate)
                         print(cycle_voltage)
                         raise NameError
 
                 elif k % 1000 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
 
-            #update time
+            # update time
             dist = dist_new
             t += dt
 
