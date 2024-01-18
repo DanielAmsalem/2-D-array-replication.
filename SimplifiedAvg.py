@@ -30,7 +30,7 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e * 10e-2
+KS_boundary = e * 1e-3
 Steady_state_rep = 500
 
 # implements increasing\decreasing choice
@@ -238,7 +238,12 @@ for loop in range(loops):
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 1:
                 # steady state condition
-                if abs(dist_new / e) < KS_boundary:
+                if abs(dist_new / e) < KS_boundary*(np.log(k)**2):
+                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
+                          + str(k))
+                    print("counter is " + str(zero_curr_steady_state_counter))
+                    not_in_steady_state = False
+                elif cycle_voltage > 0.5*Volts and abs(dist_new / e) < KS_boundary*(np.log(k*cycle_voltage/Volts)**3):
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k))
                     print("counter is " + str(zero_curr_steady_state_counter))
