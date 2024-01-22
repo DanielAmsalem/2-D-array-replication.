@@ -30,8 +30,8 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e * 1e-3
-Steady_state_rep = 500
+KS_boundary = e * 1e-2
+Steady_state_rep = 100
 
 # implements increasing\decreasing choice
 if increase:
@@ -238,19 +238,14 @@ for loop in range(loops):
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 1:
                 # steady state condition
-                if abs(dist_new / e) < KS_boundary*(np.log(k)**2):
-                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                          + str(k))
-                    print("counter is " + str(zero_curr_steady_state_counter))
-                    not_in_steady_state = False
-                elif cycle_voltage > 0.5*Volts and abs(dist_new / e) < KS_boundary*(np.log(k*cycle_voltage/Volts)**3):
+                if abs(dist_new / std) < KS_boundary:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k))
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
                 # convergence
-                if dist_new - dist > 0:
+                if dist_new - dist > KS_boundary:
                     if Print:
                         print("err " + str(dist_new) + " std is " + str(std))
                         print(Qg)
@@ -261,17 +256,6 @@ for loop in range(loops):
                         print(R, chosen_rate)
                         print(cycle_voltage)
                     not_decreasing += 1
-
-                    if not_decreasing == 1000 and Enable:
-                        print("k is " + str(k) + " error num is " + str(not_decreasing))
-                        print(Qg)
-                        print(steady_Q)
-                        print(V)
-                        print(n)
-                        print(I_avg, abs(cycle_voltage / (e * Cond.Rg)))
-                        print(R, chosen_rate)
-                        print(cycle_voltage)
-                        raise NameError
 
                 elif k % 1000 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
