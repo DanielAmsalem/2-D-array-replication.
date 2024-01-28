@@ -237,9 +237,9 @@ def Get_Steady_State():
 
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 100:
-                std = np.sqrt(Q_var[max_diff_index]) #* (k + 1) / (k * t))
+                std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
-                if abs(dist_new) < std*KS_boundary:
+                if abs(dist_new) < std/2 and std < 1/2:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k) + " std is " + str(std))
                     print("counter is " + str(zero_curr_steady_state_counter))
