@@ -5,7 +5,7 @@ import Functions
 # parameters
 kB = 1
 e = 1
-taylor_limit = 0.001
+taylor_limit = 0.0001
 
 
 def flattenToColumn(a):

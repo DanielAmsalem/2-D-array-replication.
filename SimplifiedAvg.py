@@ -19,6 +19,7 @@ Rg = np.array([Cond.Rg] * array_size)
 Cg = np.array([Cond.Cg] * array_size)
 default_dt = Cond.default_dt
 Tau = Cond.Tau
+C_inv = copy.copy(Cond.C_inverse)
 increase = True  # true if increasing else decreasing voltage during run
 
 # parameters
@@ -71,7 +72,7 @@ for loop in range(loops):
             l, m = None, None
 
             VxCix = Cond.VxCix(cycle_voltage, Vright)
-            V = F.getVoltage(n, Qg, Cond.C_inverse, VxCix)  # find V_i for ith island
+            V = F.getVoltage(n, Qg, C_inv, VxCix)  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
             R = 0
@@ -97,7 +98,7 @@ for loop in range(loops):
                     n_tag[j] += e
 
                     # calculate energy difference due to transition
-                    V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
+                    V_new = F.getVoltage(n_tag, Qg, C_inv, VxCix)
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
                     # dEij must be negative for transition i->j
@@ -113,7 +114,7 @@ for loop in range(loops):
                 # for ith transition from electrode
                 n_tag[isle] += e
 
-                V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
+                V_new = F.getVoltage(n_tag, Qg, C_inv, VxCix)
                 dE_left = (V[isle] + V_new[isle] - 2 * cycle_voltage) * e / 2
 
                 # rate for V_left->i
@@ -131,7 +132,7 @@ for loop in range(loops):
                     # for ith transition from electrode
                     n_tag[isle] -= e
 
-                    V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
+                    V_new = F.getVoltage(n_tag, Qg, C_inv, VxCix)
                     dE_left = (2 * cycle_voltage - V[isle] - V_new[isle]) * e / 2
 
                     # rate for i->V_left
@@ -147,7 +148,7 @@ for loop in range(loops):
                 # for ith transition from electrode
                 n_tag[isle] += e
 
-                V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
+                V_new = F.getVoltage(n_tag, Qg, C_inv, VxCix)
                 dE_right = (V[isle] + V_new[isle] - 2 * Vright) * e / 2
 
                 # rate for V_right->i
@@ -164,7 +165,7 @@ for loop in range(loops):
                     # for ith transition to electrode
                     n_tag[isle] -= e
 
-                    V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
+                    V_new = F.getVoltage(n_tag, Qg, C_inv, VxCix)
                     dE_right = (2 * Vright - V[isle] - V_new[isle]) * e / 2
 
                     # rate for i->V_right
@@ -219,7 +220,7 @@ for loop in range(loops):
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
                             n, Cond.InvTauEigenVectorsInv,
-                            Cond.Tau_inv, Cond.C_inverse, VxCix,
+                            Cond.Tau_inv, C_inv, VxCix,
                             Rg, Tau, Cg, Cond.matrixQnPart)
 
             # update statistics
