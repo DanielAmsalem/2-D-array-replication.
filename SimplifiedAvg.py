@@ -98,11 +98,9 @@ for loop in range(loops):
 
                     # calculate energy difference due to transition
                     V_new = F.getVoltage(n_tag, Qg, Cond.C_inverse, VxCix)
-                    if any(v < 0 for v in V_new):
-                        continue
                     dEij[i][j] = e * (V[j] + V_new[j] - V[i] - V_new[i]) / 2
 
-                    # dEij must be negative fo transition i->j
+                    # dEij must be negative for transition i->j
                     if dEij[i][j] < 0:
                         Gamma += [F.gamma(dEij[i][j], T, R_t_ij[i][j])]
                         R += Gamma[-1]
