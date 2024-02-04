@@ -78,15 +78,12 @@ def taylor(x, T):
         np.power(T, 5) * np.power(x, 6) / 30240)
 
 
-def gamma(dE, T, Rt):
+def gamma(dE, Temp, Rt):
     """
-    :param dE: is strictly negative real number; dE<0
-    :param T:
-    :param Rt:
-    :return:
+    dE is a strictly negative real number; dE<0
     """
     try:
-        beta = 1 / (T * kB)
+        beta = 1 / (Temp * kB)
         a = dE * beta
     except OverflowError:  # T may be too small
         return NameError
@@ -200,3 +197,9 @@ def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
 
     # revert to old basis
     return InvTauEigenVec.dot(Q_new_in_eigenbasis) - b
+
+
+def getWork(i, j, C_inv, curr_V):
+    Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
+                (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
+    return Work

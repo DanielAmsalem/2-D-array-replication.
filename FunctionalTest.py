@@ -4,6 +4,7 @@ import Functions as F
 import Conditions as Cond
 import copy
 from line_profiler_pycharm import profile
+import time
 
 # Conditions
 Enable, Print = False, False
@@ -21,6 +22,7 @@ default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
 increase = True  # true if increasing else decreasing voltage during run
+taylor_limit = 0.0001
 
 # parameters
 e = Cond.e
@@ -33,6 +35,21 @@ T = 0.001 * e * e / (Cond.C * kB)
 # Gillespie parameter, KS statistic value for significance
 KS_boundary = e * 1e-2
 Steady_state_rep = 100
+
+
+@profile
+def gamma(dE, Temp, Rt):
+    """
+    dE is a strictly negative real number; dE<0
+    """
+    try:
+        beta = 1 / (Temp * kB)
+        a = dE * beta
+    except OverflowError:  # T may be too small
+        return NameError
+
+    return float(-dE / (e * e * Rt * (1 - np.exp(a))))
+
 
 @profile
 def execute_transition(Gamma_list, n_list, RR, reaction_index_):
@@ -76,90 +93,61 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
         # else calculate transition rate to jth island
         neighbour_list = F.neighbour_list(Cond.row_num, i)
         for j in neighbour_list:
-            n_tag = copy.copy(n_list)
-
-            # for isle i to isle j transition
-            n_tag[i] -= e
-            n_tag[j] += e
-
             # calculate energy difference due to transition
-            V_new = F.getVoltage(n_tag, Q, C_inv, VxCix_)
-            dEij[i][j] = e * (curr_V[j] + V_new[j] - curr_V[i] - V_new[i]) / 2
+            dEij[i][j] = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
+                              (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
 
             # dEij must be negative fo transition i->j
             if dEij[i][j] < 0:
-                Gamma_ += [F.gamma(dEij[i][j], T, R_t_ij[i][j])]
+                Gamma_ += [gamma(dEij[i][j], T, R_t_ij[i][j])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(i, j)]
 
     # left electrode to island transition:
     for isle in near_left:
-        n_tag = copy.copy(n_list)
-
         # for ith transition from electrode
-        n_tag[isle] += e
-
-        V_new = F.getVoltage(n_tag, Q, C_inv, VxCix_)
-        dE_left = (curr_V[isle] + V_new[isle] - 2 * cycle_voltage_) * e / 2
+        dE_left = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
 
         # rate for V_left->i
         if dE_left < 0:
-            Gamma_ += [F.gamma(dE_left, T, R_t_i[isle])]
+            Gamma_ += [gamma(dE_left, T, R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
-        # return "borrowed electron" used for calculation
-        n_tag[isle] -= e
-
         # for ith transition to electrode there must be at least one electron at isle i
-        if n_tag[isle] / e >= 1:
-
-            # for ith transition from electrode
-            n_tag[isle] -= e
-
-            V_new = F.getVoltage(n_tag, Q, C_inv, VxCix_)
-            dE_left = (2 * cycle_voltage_ - curr_V[isle] - V_new[isle]) * e / 2
+        if n_list[isle] / e >= 1:
+            dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] - e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_left
             if dE_left < 0:
-                Gamma_ += [F.gamma(dE_left, T, R_t_i[isle])]
+                Gamma_ += [gamma(dE_left, T, R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
     # similarly, for right side
     for isle in near_right:
-        n_tag = copy.copy(n_list)
-
         # for ith transition from electrode
-        n_tag[isle] += e
-
-        V_new = F.getVoltage(n_tag, Q, C_inv, VxCix_)
-        dE_right = (curr_V[isle] + V_new[isle] - 2 * Vright) * e / 2
+        dE_right = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * Vright) * e / 2
 
         # rate for V_right->i
         if dE_right < 0:
-            Gamma_ += [F.gamma(dE_right, T, R_t_i[isle])]
+            Gamma_ += [gamma(dE_right, T, R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
-        # return "borrowed electron" used for calculation
-        n_tag[isle] -= e
-
         # for ith transition to electrode
-        if n_tag[isle] / e >= 1:
+        if n_list[isle] / e >= 1:
             # for ith transition to electrode
-            n_tag[isle] -= e
-
-            V_new = F.getVoltage(n_tag, Q, C_inv, VxCix_)
-            dE_right = (2 * Vright - curr_V[isle] - V_new[isle]) * e / 2
+            dE_right = (2 * Vright - 2 * curr_V[isle] - e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_right
             if dE_right < 0:
-                Gamma_ += [F.gamma(dE_right, T, R_t_i[isle])]
+                Gamma_ += [gamma(dE_right, T, R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
     return Gamma_, RR, reaction_index_
+
 
 @profile
 def Get_Steady_State():
@@ -183,6 +171,7 @@ def Get_Steady_State():
         # starting conditions
         not_in_steady_state = True
         t = 0
+        t0 = time.time()
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -239,10 +228,12 @@ def Get_Steady_State():
             if k > 100:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
-                if abs(dist_new) < std/2 and std < 1/2:
+                if abs(dist_new) < std < np.sqrt(n_avg[max_diff_index]):
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                          + str(k) + " std is " + str(std))
+                          + str(k) + " std is " + str(std) + " n " + str(np.sum(n))
+                          + " expected std is " + str(np.sqrt(n_avg[max_diff_index])))
                     print("counter is " + str(zero_curr_steady_state_counter))
+                    print("timer is " + str(time.time() - t0))
                     not_in_steady_state = False
 
                 # convergence
@@ -260,6 +251,7 @@ def Get_Steady_State():
 
         I_vec[cycle] = I_avg
     return I_vec
+
 
 # implements increasing\decreasing choice
 if increase:
