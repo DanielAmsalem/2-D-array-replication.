@@ -2,7 +2,7 @@ import numpy as np
 import Functions
 
 # parameters
-row_num = 4
+row_num = 2
 array_size = row_num * row_num
 islands = list(range(array_size))
 distribute_R = True

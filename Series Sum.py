@@ -7,7 +7,7 @@ def sum_np(n, T, p):
     beta = 1 / (2 * T)
     summ = float(0)
     for i in range(n):
-        summ += (i ** p) * np.exp(-beta * i ** 2) / math.factorial(i)
+        summ += (i ** p) * np.exp(-beta * i ** 2)
     return summ
 
 
@@ -16,7 +16,7 @@ Temp = []
 mult = 1
 steps = 200
 for i in range(steps):
-    Temp.append(0.2 - ((0.2-0.001)/steps) * i)
+    Temp.append(0.07 - ((0.07-0.001)/steps) * i)
 
 variance = []
 for t in Temp:

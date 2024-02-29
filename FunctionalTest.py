@@ -87,15 +87,15 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
     # island i to island j transition
     for i in islands:
         # if island i is empty pass over
-        if n_list[i] == 0 or array_size == 1:
+        if n_list[i] == 0:
             continue
 
         # else calculate transition rate to jth island
         neighbour_list = F.neighbour_list(Cond.row_num, i)
         for j in neighbour_list:
             # calculate energy difference due to transition
-            dEij[i][j] = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
-                              (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
+            dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
+                              (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
 
             # dEij must be negative fo transition i->j
             if dEij[i][j] < 0:
@@ -106,7 +106,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
     # left electrode to island transition:
     for isle in near_left:
         # for ith transition from electrode
-        dE_left = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        dE_left = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
 
         # rate for V_left->i
         if dE_left < 0:
@@ -116,7 +116,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
 
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
-            dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] - e * C_inv[isle][isle]) * e / 2
+            dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_left
             if dE_left < 0:
@@ -127,7 +127,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
     # similarly, for right side
     for isle in near_right:
         # for ith transition from electrode
-        dE_right = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * Vright) * e / 2
+        dE_right = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * Vright) * e / 2
 
         # rate for V_right->i
         if dE_right < 0:
@@ -138,7 +138,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
         # for ith transition to electrode
         if n_list[isle] / e >= 1:
             # for ith transition to electrode
-            dE_right = (2 * Vright - 2 * curr_V[isle] - e * C_inv[isle][isle]) * e / 2
+            dE_right = (2 * Vright - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_right
             if dE_right < 0:
@@ -176,7 +176,6 @@ def Get_Steady_State():
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
             k += 1
-            l, m = None, None
 
             VxCix = copy.copy(Cond.VxCix(cycle_voltage, Vright))
             V = F.getVoltage(n, Qg, C_inv, VxCix)  # find V_i for ith island
@@ -200,7 +199,6 @@ def Get_Steady_State():
             else:  # rates too low, Tau leap instead
                 dt = default_dt
                 zero_curr_steady_state_counter += 1
-                chosen_rate = 0
                 if zero_curr_steady_state_counter % Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
@@ -228,18 +226,20 @@ def Get_Steady_State():
             if k > 100:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
-                if abs(dist_new) < std < np.sqrt(n_avg[max_diff_index]):
+                if abs(dist_new) < std < 0.1:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                          + str(k) + " std is " + str(std) + " n " + str(np.sum(n))
-                          + " expected std is " + str(np.sqrt(n_avg[max_diff_index])))
+                          + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
                     print("counter is " + str(zero_curr_steady_state_counter))
                     print("timer is " + str(time.time() - t0))
                     not_in_steady_state = False
 
                 # convergence
-                if dist_new - dist > KS_boundary:
+                if dist_new - dist > 0:
                     not_decreasing += 1
-                    if not_decreasing > 1000:
+                    if not_decreasing > 100000:
+                        print(k, not_decreasing)
+                        print(Qg)
+                        print(V)
                         raise NameError
 
                 elif k % 1000 == 0:
