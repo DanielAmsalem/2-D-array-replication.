@@ -20,7 +20,7 @@ for i in range(steps):
 
 variance = []
 for t in Temp:
-    variance.append(sum_np(m, t, 2) - (sum_np(m, t, 1)) ** 2)
+    variance.append(sum_np(m, t, 2)/sum_np(m, t, 0) - (sum_np(m, t, 1)/sum_np(m, t, 0)) ** 2)
 
 plt.plot(Temp, variance)
 plt.xlabel("T [e^2/kB*C]")
