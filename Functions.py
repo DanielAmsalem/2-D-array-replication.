@@ -58,7 +58,7 @@ def return_neighbours(n, I, J):
 
 
 def getVoltage(n, Qg, C_inverse, VxCix):
-    return np.dot(C_inverse, e * n + e * VxCix - Qg)
+    return np.dot(C_inverse, e * n + e * VxCix + Qg)
 
 
 def isNonNegative(x):

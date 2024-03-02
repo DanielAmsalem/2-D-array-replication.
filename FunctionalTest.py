@@ -97,7 +97,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, Q, VxCix_, curr_V, cycle_volt
             dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
                               (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
 
-            # dEij must be negative fo transition i->j
+            # dEij must be negative for transition i->j
             if dEij[i][j] < 0:
                 Gamma_ += [gamma(dEij[i][j], T, R_t_ij[i][j])]
                 RR += Gamma_[-1]
@@ -207,10 +207,9 @@ def Get_Steady_State():
             I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
-            Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
-                            n, Cond.InvTauEigenVectorsInv,
-                            Cond.Tau_inv, C_inv, VxCix,
-                            Rg, Tau, Cg, Cond.matrixQnPart)
+            Qg = F.Paper_developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
+                                  n, Cond.InvTauEigenVectorsInv, Cond.Tau_inv, C_inv, VxCix,
+                                  Rg, Tau, Cg)
 
             # update statistics
             I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
@@ -229,7 +228,7 @@ def Get_Steady_State():
                 if abs(dist_new) < std < 0.1:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                    print("counter is " + str(zero_curr_steady_state_counter))
+                    # print("counter is " + str(zero_curr_steady_state_counter))
                     print("timer is " + str(time.time() - t0))
                     not_in_steady_state = False
 
