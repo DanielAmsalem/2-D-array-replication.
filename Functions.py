@@ -183,7 +183,7 @@ def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
              C_inverse, VxCix, Rg, Tau, Cg, matrixQn):
     # gate charge relaxation, for dQ/dt=inv_tau*(Q + b), b = -Qn
     # b = -e * n - e * VxCix
-    b = -Functions.return_Qn_for_n(n, VxCix, Cg, Rg, Tau, matrixQn)
+    b = -return_Qn_for_n(n, VxCix, Cg, Rg, Tau, matrixQn)
     # b = -C_inverse.dot(e * n + e * VxCix) / Rg
     # b = Tau.dot(-C_inverse.dot(e * n + e * VxCix)/Rg)
 
