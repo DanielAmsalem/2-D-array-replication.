@@ -2,10 +2,11 @@ import numpy as np
 import Functions
 
 # parameters
-row_num = 2
+row_num = 4
 array_size = row_num * row_num
 islands = list(range(array_size))
-distribute_R = True
+distribute_R = False
+distribute_C = False
 
 # define tunneling parameters
 e = Functions.e
@@ -30,8 +31,12 @@ else:
     R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
 
 # Capacitance Cond
-Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
-Cv = np.random.normal(C, 0, size=(row_num + 1, row_num))
+if distribute_C:
+    Ch = np.random.normal(C, C/10, size=(row_num, row_num + 1))
+    Cv = np.random.normal(C, C/10, size=(row_num + 1, row_num))
+else:
+    Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
+    Cv = np.random.normal(C, 0, size=(row_num + 1, row_num))
 
 diagonal = Ch[:, :-1] + Ch[:, 1:] + Cv[:-1, :] + Cv[1:, :]
 second_diagonal = np.copy(Ch[:, 1:])

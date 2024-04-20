@@ -33,7 +33,6 @@ Vright = 0
 T = 0.001 * e * e / (Cond.C * kB)
 
 # Gillespie parameter, KS statistic value for significance
-KS_boundary = e * 1e-2
 Steady_state_rep = 100
 
 
@@ -207,9 +206,10 @@ def Get_Steady_State():
             I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
-            Qg = F.Paper_developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
-                                  n, Cond.InvTauEigenVectorsInv, Cond.Tau_inv, C_inv, VxCix,
-                                  Rg, Tau, Cg)
+            Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
+                            n, Cond.InvTauEigenVectorsInv,
+                            Cond.Tau_inv, C_inv, VxCix,
+                            Rg, Tau, Cg, Cond.matrixQnPart)
 
             # update statistics
             I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
@@ -235,8 +235,9 @@ def Get_Steady_State():
                 # convergence
                 if dist_new - dist > 0:
                     not_decreasing += 1
-                    if not_decreasing > 100000:
-                        print(k, not_decreasing)
+                    #print(dist_new)
+                    if not_decreasing > 10000:
+                        print(k, not_decreasing, std)
                         print(Qg)
                         print(V)
                         raise NameError

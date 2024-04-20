@@ -1,5 +1,5 @@
 import numpy as np
-
+import scipy
 import Functions
 
 # parameters
@@ -58,7 +58,7 @@ def return_neighbours(n, I, J):
 
 
 def getVoltage(n, Qg, C_inverse, VxCix):
-    return np.dot(C_inverse, e * n + e * VxCix + Qg)
+    return np.dot(C_inverse, e * n + e * VxCix - Qg)
 
 
 def isNonNegative(x):
@@ -104,6 +104,8 @@ def gamma(dE, Temp, Rt):
 
 def update_statistics(value, avg, n_var, total_time, time_step):
     # from https://github.com/kasirershaharbgu/random_2D_tunneling_arrays/blob/main/random_2d_array_simulation.py#L1957
+    # "Updating the statistics of a measured value according to West's
+    #         algorithm (as described in https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2973983/)"
     new_time = total_time + time_step
     dist_from_avg = value - avg
     local_std = dist_from_avg * time_step / new_time
