@@ -1,4 +1,5 @@
 import numpy as np
+from mpmath import quad, ninf, inf, mp
 
 # parameters
 kB = 1
@@ -164,7 +165,7 @@ def Paper_developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
     return InvTauEigenVec.dot(Q_new_in_eigenbasis)
 
 
-def return_Qn_for_n(n, VxCix, Cg, Rg, Tau, matrixQn):
+def return_Qn_for_n(n, VxCix, Cg, Rg, Tau):
     """
     returns Qn for given n vector of array (NxN)
     :param n: (1,N) numpy array
@@ -182,10 +183,7 @@ def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
              InvTauEigenVecInv, InvTau,
              C_inverse, VxCix, Rg, Tau, Cg, matrixQn):
     # gate charge relaxation, for dQ/dt=inv_tau*(Q + b), b = -Qn
-    # b = -e * n - e * VxCix
-    b = -return_Qn_for_n(n, VxCix, Cg, Rg, Tau, matrixQn)
-    # b = -C_inverse.dot(e * n + e * VxCix) / Rg
-    # b = Tau.dot(-C_inverse.dot(e * n + e * VxCix)/Rg)
+    b = -return_Qn_for_n(n, VxCix, Cg, Rg, Tau)
 
     # exponent for time step
     exponent = np.exp(InvTauEigenVal * dt)

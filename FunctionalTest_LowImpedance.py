@@ -225,7 +225,7 @@ def Get_Steady_State():
             if k > 100:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
-                if abs(dist_new) < std < 0.1:
+                if abs(dist_new) < std < 0.8 or abs(dist_new) < 0.05:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
                     # print("counter is " + str(zero_curr_steady_state_counter))
@@ -235,7 +235,7 @@ def Get_Steady_State():
                 # convergence
                 if dist_new - dist > 0:
                     not_decreasing += 1
-                    #print(dist_new)
+                    # print(dist_new)
                     if not_decreasing > 10000:
                         print(k, not_decreasing, std)
                         print(Qg)
