@@ -48,23 +48,33 @@ def high_impedance_p(x, Ec, T):
     :param T: Temperature.
     :return: P(x)
     """
-    sigma = 2 * Ec * T
-    mu = Ec
-    return exp(-(x - mu) ** 2 / (2 * sigma)) / sqrt(2 * np.pi * sigma)
+    sigma_squared = 2 * Ec * T
+    mu = -Ec
+    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
 @profile
 def Gamma_Gaussian(dE, Temp, Rt):
     global Ec
+    upper_cutoff = -0.03
+    lower_cutoff = -0.09
 
-    def f(E):
-        return high_impedance_p(E + dE, Ec, Temp) * E / (1 - exp(-E / Temp))
+    if lower_cutoff < dE < upper_cutoff:
+        def f(E):
+            return high_impedance_p(E + dE, Ec, Temp) * E / (1 - exp(-E / Temp))
 
-    mp.dps = 50
-    result = e ** 2 * quad(f, [Ec + dE - 2, Ec + dE + 2]) / Rt
-    mp.dps = 15
+        mp.dps = 50
+        result = float(e ** 2 * quad(f, [0, 0.01]) / Rt)
+        mp.dps = 15
 
-    return float(result)
+        if result >= 0:
+            return result
+        else:
+            return 0
+    elif dE < lower_cutoff:
+        return -(dE + Ec) * (e ** 2) * np.sqrt(4 * np.pi * Ec * T) / Rt
+    else:
+        return 0
 
 
 @profile
@@ -187,7 +197,7 @@ def Get_Steady_State():
         # starting conditions
         not_in_steady_state = True
         t = 0
-        t0 = copy.copy(time.time())
+        t0 = time.time()
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -208,6 +218,8 @@ def Get_Steady_State():
                 zero_curr_steady_state_counter = 0
                 # typical interaction time
                 dt = np.log(1 / np.random.random()) / R
+                if dt < 0:
+                    raise ValueError
 
                 # picking a specific transition
                 n, l, m, chosen_rate = execute_transition(Gamma, n, R, reaction_index)
@@ -242,8 +254,8 @@ def Get_Steady_State():
             if k > 5:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
-                print(k, dist_new)
-                if abs(dist_new) < std < 0.03:
+                # print(k, dist_new, std, t)
+                if abs(dist_new) < 0.01:
                     print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                           + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
                     # print("counter is " + str(zero_curr_steady_state_counter))
@@ -260,7 +272,7 @@ def Get_Steady_State():
                         print(V)
                         raise NameError
 
-                elif k % 1000 == 0:
+                elif k % 1800 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
 
             # update time
