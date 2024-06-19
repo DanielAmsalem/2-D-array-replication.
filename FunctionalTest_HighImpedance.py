@@ -6,11 +6,11 @@ import copy
 from line_profiler_pycharm import profile
 import time
 from mpmath import quad, ninf, inf, mp, exp, sqrt, re
-import scipy as sc
+import math
 
 # Conditions
 Enable, Print = False, False
-loops = 2
+loops = 400
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -52,29 +52,32 @@ def high_impedance_p(x, Ec, T):
     mu = -Ec
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
-
 @profile
 def Gamma_Gaussian(dE, Temp, Rt):
     global Ec
-    upper_cutoff = -0.03
-    lower_cutoff = -0.09
+    s = np.sqrt(2 * Ec * T)
+    lower_cutoff = -10 * s
+    upper_cutoff = 5 * s
 
-    if lower_cutoff < dE < upper_cutoff:
-        def f(E):
-            return high_impedance_p(E + dE, Ec, Temp) * E / (1 - exp(-E / Temp))
-
-        mp.dps = 50
-        result = float(e ** 2 * quad(f, [0, 0.01]) / Rt)
-        mp.dps = 15
-
-        if result >= 0:
-            return result
-        else:
-            return 0
-    elif dE < lower_cutoff:
-        return -(dE + Ec) * (e ** 2) * np.sqrt(4 * np.pi * Ec * T) / Rt
-    else:
+    if dE < lower_cutoff:  # small enough energy, integral is pretty much x time gaussian which analytical
+        part1 = s * np.exp(-((Ec + dE) ** 2) / (2 * (s ** 2))) / np.sqrt(2 * np.pi)
+        part2 = 0.5 * (Ec + dE) * (math.erf((dE + Ec) / (np.sqrt(2) * s)) - 1)
+        return part1 + part2
+    elif dE > upper_cutoff:  # large enough energy, probability is 0
         return 0
+    else:
+        def integrand_gauss(x):
+            val = (1 / (e * e * Rt)) * high_impedance_p(x + dE, Ec, Temp) * x / (1 - exp(-x / Temp))
+            return val
+
+        mp.dps = 30
+        probability = quad(integrand_gauss, [0, 0.1])
+        mp.dps = 15
+        return float(probability)
+
+
+def Gamma_Lorentz(dE, Temp, Rt):
+    global Ec
 
 
 @profile
@@ -175,6 +178,9 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     return Gamma_, RR, reaction_index_
 
 
+t0 = time.time()
+
+
 @profile
 def Get_Steady_State():
     # general Charge distribution vectors
@@ -197,7 +203,6 @@ def Get_Steady_State():
         # starting conditions
         not_in_steady_state = True
         t = 0
-        t0 = time.time()
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -251,6 +256,8 @@ def Get_Steady_State():
             max_diff_index = np.argmax(dist_new)
 
             # check if distance from steady state is larger than the last by more than the allowed error
+            if not k%10:
+                print(k)
             if k > 5:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
@@ -265,12 +272,14 @@ def Get_Steady_State():
                 # convergence
                 if dist_new - dist > 0:
                     not_decreasing += 1
-                    print(dist_new)
-                    if not_decreasing > 10000:
-                        print(k, not_decreasing, std)
-                        print(Qg)
-                        print(V)
-                        raise NameError
+                    if not not_decreasing % 100000:
+                        if abs(dist_new) < 0.02:
+                            print("dist is " + str(dist_new) + " there have been: " + str(
+                                not_decreasing) + " errors, k is "
+                                  + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                            # print("counter is " + str(zero_curr_steady_state_counter))
+                            print("timer is " + str(time.time() - t0))
+                            not_in_steady_state = False
 
                 elif k % 1800 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
