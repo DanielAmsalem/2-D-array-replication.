@@ -1,9 +1,7 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import Functions as F
 import Conditions as Cond
 import copy
-from line_profiler_pycharm import profile
 import time
 from mpmath import quad, ninf, inf, mp, exp, sqrt, re
 import math
@@ -39,7 +37,6 @@ Ec = e ** 2 / (2 * np.mean(Cg))
 Steady_state_rep = 100
 
 
-@profile
 def high_impedance_p(x, Ec, T):
     """
     P- function for high impedance.
@@ -52,30 +49,27 @@ def high_impedance_p(x, Ec, T):
     mu = -Ec
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
-@profile
+
 def Gamma_Gaussian(dE, Temp, Rt):
     global Ec
     s = np.sqrt(2 * Ec * T)
-    lower_cutoff = -10 * s
-    upper_cutoff = 5 * s
+    lower_cutoff = -1
 
     if dE < lower_cutoff:  # small enough energy, integral is pretty much x time gaussian which analytical
         part1 = s * np.exp(-((Ec + dE) ** 2) / (2 * (s ** 2))) / np.sqrt(2 * np.pi)
         part2 = 0.5 * (Ec + dE) * (math.erf((dE + Ec) / (np.sqrt(2) * s)) - 1)
         return part1 + part2
-    elif dE > upper_cutoff:  # large enough energy, probability is 0
-        return 0
-    else:
-        def integrand_gauss(x):
-            val = (1 / (e * e * Rt)) * high_impedance_p(x + dE, Ec, Temp) * x / (1 - exp(-x / Temp))
-            return val
 
-        mp.dps = 30
-        probability = quad(integrand_gauss, [0, 0.1])
-        mp.dps = 15
-        return float(probability)
+    def integrand_gauss(x):
+        val = (1 / (e * e * Rt)) * high_impedance_p(x + dE, Ec, Temp) * x / (1 - exp(-x / Temp))
+        return val
 
-@profile
+    mp.dps = 30
+    probability = quad(integrand_gauss, [-dE - 0.1, -dE + 0.1])
+    mp.dps = 15
+    return float(probability)
+
+
 def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     r = 0
     x = np.random.random() * RR
@@ -103,7 +97,6 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     return n_list, ll, mm, rate
 
 
-@profile
 def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -176,7 +169,6 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 t0 = time.time()
 
 
-@profile
 def Get_Steady_State():
     # general Charge distribution vectors
     Qg, Q_avg, Q_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
@@ -250,16 +242,20 @@ def Get_Steady_State():
             dist_new = np.max(np.abs(steady_Q - Q_avg))
             max_diff_index = np.argmax(dist_new)
 
+            try:
+                print(k, dist)
+            except UnboundLocalError:
+                pass
+
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 5:
-                not_in_steady_state = False
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std, t)
                 if abs(dist_new) < 0.01:
-                    # print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                    #      + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                    # print("timer is " + str(time.time() - t0))
+                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
+                          + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                    print("timer is " + str(time.time() - t0))
                     not_in_steady_state = False
 
                 # convergence
@@ -308,5 +304,3 @@ with open("book.csv", "w") as f:
     for row in range(len(Vleft)):
         to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
         file.writerow(to_write)
-
-
