@@ -15,3 +15,28 @@ Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
                             n, Cond.InvTauEigenVectorsInv,
                             Cond.Tau_inv, C_inv, VxCix,
                             Rg, Tau, Cg, Cond.matrixQnPart)
+
+#-----------------
+
+def Gamma_Gaussian(dE, Temp, Rt):
+    global Ec
+    s = np.sqrt(2 * Ec * T)
+    lower_cutoff = -1
+    high_cuttoff = 0.5
+
+    if dE < lower_cutoff:  # small enough energy, integral is pretty much x time gaussian which analytical
+        part1 = s * np.exp(-((Ec + dE) ** 2) / (2 * (s ** 2))) / np.sqrt(2 * np.pi)
+        part2 = 0.5 * (Ec + dE) * (math.erf((dE + Ec) / (np.sqrt(2) * s)) - 1)
+        return part1 + part2
+
+    if dE > high_cuttoff:
+        return 0
+
+    def integrand_gauss(x):
+        val = (1 / (e * e * Rt)) * high_impedance_p(x + dE, Ec, Temp) * x / (1 - exp(-x / Temp))
+        return val
+
+    mp.dps = 30
+    probability = quad(integrand_gauss, [-dE - 0.1, -dE + 0.1])
+    mp.dps = 15
+    return float(probability)
