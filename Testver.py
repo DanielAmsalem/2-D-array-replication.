@@ -1,14 +1,11 @@
-import matplotlib.pyplot as plt
 import Functions as F
 import Conditions as Cond
 import copy
 import time
 from mpmath import quad, mp, exp, sqrt
-from line_profiler_pycharm import profile
 import csv
 import os
 import sys
-import bisect
 import cupy as np
 
 #os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
@@ -46,8 +43,6 @@ Ec = e ** 2 / (2 * np.mean(Cg))
 Steady_state_rep = 100
 error = 0
 
-
-@profile
 def high_impedance_p(x, Ec, T):
     """
     P- function for high impedance.
@@ -85,7 +80,6 @@ def Gamma(dE, Temp, Rt):
         raise ValueError
 
 
-@profile
 def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     r = 0
     x = np.random.random() * RR
@@ -113,7 +107,6 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     return n_list, ll, mm, rate
 
 
-@profile
 def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -183,7 +176,6 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     return Gamma_, RR, reaction_index_
 
 
-@profile
 def Get_Steady_State():
     global error
 
@@ -307,43 +299,18 @@ else:
 cycles = len(Vleft)
 I_matrix = np.zeros((loops, cycles))
 
-plot = True
-if not plot:
-    for loop in range(loops):
-        I_vec = Get_Steady_State()
-        I_matrix[loop] = I_vec
+for loop in range(loops):
+    I_vec = Get_Steady_State()
+    I_matrix[loop] = I_vec
 
-    I_vec_avg = np.zeros(cycles)  # results vector
-    for run in I_matrix:
-        I_vec_avg += run / len(I_matrix)
+I_vec_avg = np.zeros(cycles)  # results vector
+for run in I_matrix:
+    I_vec_avg += run / len(I_matrix)
 
-    # w+ truncates file
-    with open("book.csv", "w+") as f:
-        file = csv.writer(f)
-        for row in range(len(Vleft)):
-            to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
-            file.writerow(to_write)
-else:
-    for loop in range(loops):
-        I_vec = Get_Steady_State()
-        I_matrix[loop] = I_vec
+# w+ truncates file
+with open("book.csv", "w+") as f:
+    file = csv.writer(f)
+    for row in range(len(Vleft)):
+        to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
+        file.writerow(to_write)
 
-    I_vec_avg = np.zeros(cycles)  # results vector
-    for run in I_matrix:
-        I_vec_avg += run / len(I_matrix)
-
-    # w+ truncates file
-    with open("book.csv", "w+") as f:
-        file = csv.writer(f)
-        for row in range(len(Vleft)):
-            to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
-            file.writerow(to_write)
-
-    I_V = plt.plot(Vleft / Volts, I_vec_avg / Amp)
-    plt.xlabel("Voltage")
-    plt.ylabel("Current")
-    if increase:
-        plt.title("increasing voltage")
-    else:
-        plt.title("decreasing voltage")
-    plt.show()
