@@ -1,4 +1,7 @@
-import cupy as np
+import numpy as np
+import matplotlib
+
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import Functions as F
 import Conditions as Cond
@@ -11,10 +14,10 @@ import os
 import sys
 import bisect
 
+#NORMAL ARRAY
 #os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
-Enable, Print = False, False
 loops = 400
 row_num = Cond.row_num
 array_size = Cond.array_size
@@ -30,8 +33,8 @@ Tau = Cond.Tau
 C_inv = Cond.C_inverse
 increase = True  # true if increasing else decreasing voltage during run
 taylor_limit = 0.0001
-pos_energy_bound = -0.02  # -0.02 for T=0.001, 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.07  # -0.07 for T=0.001
+pos_energy_bound = 1.3  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -1.4  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
 
 # parameters
 e = Cond.e
@@ -39,19 +42,20 @@ kB = Cond.kB
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
-T = 0.001 * e * e / (Cond.C * kB)
+T0 = 0.001 * e * e / (Cond.C * kB)
+T = 100 * T0
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
 error = 0
 
-# tablating integral values
+# tabulating integral values
 resolution = 0.000001
 num_of_calc = (pos_energy_bound - neg_energy_bound) / resolution
 vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
 table_val = []  #list of dE values
-table_prob = [] #list of gamma(dE) values
+table_prob = []  #list of gamma(dE) values
 s_eff = np.sqrt(2 * Ec * T)
 
 
@@ -67,6 +71,7 @@ def high_impedance_p(x, Ec, T):
     sigma_squared = 2 * Ec * T
     mu = -Ec
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
+
 
 wrote = True
 
@@ -106,6 +111,7 @@ else:
 
 t0 = time.time()
 
+@profile()
 def approximate_gamma_integral(dE):
     global table_val
     global table_prob
@@ -119,15 +125,16 @@ def approximate_gamma_integral(dE):
         else:
             return table_prob[1]
     elif idx == len(table_val):
-        if abs(table_val[idx-2] - dE) <= abs(table_val[idx-1] - dE):
-            return table_prob[idx-2]
+        if abs(table_val[idx - 2] - dE) <= abs(table_val[idx - 1] - dE):
+            return table_prob[idx - 2]
         else:
-            return table_prob[idx-1]
+            return table_prob[idx - 1]
     elif abs(table_val[idx - 1] - dE) <= abs(table_val[idx] - dE):
         return table_prob[idx - 1]
     else:
         return table_prob[idx]
 
+@profile()
 def Gamma_approx(dE, Temp, Rt):
     global Ec
     global e
@@ -263,9 +270,11 @@ def Get_Steady_State():
         zero_curr_steady_state_counter = 0
         not_decreasing = 0
 
+
         # starting conditions
         not_in_steady_state = True
         t = 0
+        steady_state_timer = 5 * Cond.default_dt  #steady state fixed time
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -319,16 +328,22 @@ def Get_Steady_State():
             max_diff_index = np.argmax(dist_new)
 
             # check if distance from steady state is larger than the last by more than the allowed error
+            dist_info = False
             if k > 5:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std)
-                if abs(dist_new) < 0.03:
-                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                          + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                    print("counter is " + str(zero_curr_steady_state_counter))
-                    print("timer is " + str(time.time() - t0))
-                    not_in_steady_state = False
+                if abs(dist_new) < 0.03 * np.sqrt(T / T0):
+                    if dist_info:
+                        print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
+                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                        # print("counter is " + str(zero_curr_steady_state_counter))
+                        print("timer is " + str(time.time() - t0))
+                        print(steady_state_timer, dt)
+
+                    steady_state_timer -= dt
+                    if steady_state_timer <= 0:
+                        not_in_steady_state = False
 
                 # convergence failsafe
                 if dist_new - dist > 0:
@@ -345,7 +360,7 @@ def Get_Steady_State():
                             not_in_steady_state = False
 
                 # update on non-convergence
-                elif k % 500 == 0:
+                elif k % 1000 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
 
             # update time

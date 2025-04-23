@@ -1,6 +1,6 @@
 import numpy as np
 import math
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 
 def sum_np(n, T, p):
@@ -22,11 +22,11 @@ variance = []
 for t in Temp:
     variance.append(sum_np(m, t, 2)/sum_np(m, t, 0) - (sum_np(m, t, 1)/sum_np(m, t, 0)) ** 2)
 
-plt.plot(Temp, variance)
-plt.xlabel("T [e^2/kB*C]")
-plt.ylabel("variance")
-plt.title("variance as a function of T")
-plt.show()
+#plt.plot(Temp, variance)
+#plt.xlabel("T [e^2/kB*C]")
+#plt.ylabel("variance")
+#plt.title("variance as a function of T")
+#plt.show()
 a = sum_np(m, 0.1, 2)
 b = sum_np(m, 0.1, 1)**2
 print(a,b)

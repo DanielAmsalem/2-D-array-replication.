@@ -1,21 +1,19 @@
-import matplotlib.pyplot as plt
+import numpy as np
 import Functions as F
 import Conditions as Cond
 import copy
 import time
 from mpmath import quad, mp, exp, sqrt
-from line_profiler_pycharm import profile
 import csv
 import os
 import sys
 import bisect
-import cupy as np
 
+#NORMAL ARRAY
 #os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
-Enable, Print = False, False
-loops = 400
+loops = 2
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -30,8 +28,8 @@ Tau = Cond.Tau
 C_inv = Cond.C_inverse
 increase = True  # true if increasing else decreasing voltage during run
 taylor_limit = 0.0001
-pos_energy_bound = -0.02  # -0.02 for T=0.001, 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.07  # -0.07 for T=0.001
+pos_energy_bound = 0.08  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -0.19  # -0.07 for T=0.001; -0.19 for T=0.01;
 
 # parameters
 e = Cond.e
@@ -39,15 +37,23 @@ kB = Cond.kB
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
-T = 0.001 * e * e / (Cond.C * kB)
+T0 = 0.001 * e * e / (Cond.C * kB)
+T = 10 * T0
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
 error = 0
 
+# tabulating integral values
+resolution = 0.000001
+num_of_calc = (pos_energy_bound - neg_energy_bound) / resolution
+vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
+table_val = []  #list of dE values
+table_prob = []  #list of gamma(dE) values
+s_eff = np.sqrt(2 * Ec * T)
 
-@profile
+
 def high_impedance_p(x, Ec, T):
     """
     P- function for high impedance.
@@ -61,31 +67,84 @@ def high_impedance_p(x, Ec, T):
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
+wrote = True
+
+if wrote:
+    with open('table.csv', newline='') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            try:
+                table_val.append(float(row[0]))
+                table_prob.append(float(row[1]))
+            except IndexError:
+                continue
+
+else:
+    rr = 0
+    with open("table.csv", "w+") as f:
+        file = csv.writer(f)
+        for val in vals_to_calc:
+            def integrand_gauss(x):
+                if x == 0:
+                    return T
+                result = high_impedance_p(x + val, Ec, T) * x / (1 - exp(-x / T))
+                return float(result)
+
+
+            mp.dps = 30
+            probability = quad(integrand_gauss, [-val - 0.1, -val + 0.1])
+            mp.dps = 15
+
+            table_val += [val]
+            table_prob += [probability]
+
+            file.writerow([float(val), float(probability)])
+
+            rr += 1
+            print("done " + str(rr) + "out of" + str(len(vals_to_calc)))
+
 t0 = time.time()
 
 
-def Gamma(dE, Temp, Rt):
+def approximate_gamma_integral(dE):
+    global table_val
+    global table_prob
+
+    idx = bisect.bisect_left(table_val, dE)
+
+    # Compare the two closest values: sorted_list[idx - 1] and sorted_list[idx]
+    if idx == 0:
+        if abs(table_val[0] - dE) <= abs(table_val[1] - dE):
+            return table_prob[0]
+        else:
+            return table_prob[1]
+    elif idx == len(table_val):
+        if abs(table_val[idx - 2] - dE) <= abs(table_val[idx - 1] - dE):
+            return table_prob[idx - 2]
+        else:
+            return table_prob[idx - 1]
+    elif abs(table_val[idx - 1] - dE) <= abs(table_val[idx] - dE):
+        return table_prob[idx - 1]
+    else:
+        return table_prob[idx]
+
+
+def Gamma_approx(dE, Temp, Rt):
     global Ec
     global e
-    # low bound starts at dE=-0.07 thence is analytical
-    # high bound starts at dE=-0.02 thence is 0
+    s = np.sqrt(2 * Ec * Temp)
 
-    # if dE < neg_energy_bound:
-    #    return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e ** 2) / Rt
-    if pos_energy_bound > dE:
-        def integrand_gauss(x):
-            val = (1 / (e * e * Rt)) * high_impedance_p(x + dE, Ec, Temp) * x / (1 - exp(-x / Temp))
-            return val
+    # low bound starts at dE=-0.07 from thence is analytical
+    # high bound starts at dE=-0.02 from thence is 0
 
-        mp.dps = 30
-        probability = quad(integrand_gauss, [-dE - 0.1, -dE + 0.1])
-        mp.dps = 15
-        return float(probability)
+    if dE < neg_energy_bound:
+        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e ** 2) / Rt
+    elif pos_energy_bound > dE > neg_energy_bound:
+        return approximate_gamma_integral(dE) * e ** 2 / Rt
     else:
         raise ValueError
 
 
-@profile
 def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     r = 0
     x = np.random.random() * RR
@@ -113,7 +172,6 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     return n_list, ll, mm, rate
 
 
-@profile
 def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -133,7 +191,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # dEij must be negative for transition i->j
             if dEij[i][j] < pos_energy_bound:
-                Gamma_ += [Gamma(dEij[i][j], T, R_t_ij[i][j])]
+                Gamma_ += [Gamma_approx(dEij[i][j], T, R_t_ij[i][j])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(i, j)]
 
@@ -144,7 +202,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
-            Gamma_ += [Gamma(dE_left, T, R_t_i[isle])]
+            Gamma_ += [Gamma_approx(dE_left, T, R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -154,7 +212,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
-                Gamma_ += [Gamma(dE_left, T, R_t_i[isle])]
+                Gamma_ += [Gamma_approx(dE_left, T, R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -165,7 +223,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # rate for V_right->i
         if dE_right < pos_energy_bound:
-            Gamma_ += [Gamma(dE_right, T, R_t_i[isle])]
+            Gamma_ += [Gamma_approx(dE_right, T, R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -176,14 +234,13 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # rate for i->V_right
             if dE_right < pos_energy_bound:
-                Gamma_ += [Gamma(dE_right, T, R_t_i[isle])]
+                Gamma_ += [Gamma_approx(dE_right, T, R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
     return Gamma_, RR, reaction_index_
 
 
-@profile
 def Get_Steady_State():
     global error
 
@@ -207,6 +264,7 @@ def Get_Steady_State():
         # starting conditions
         not_in_steady_state = True
         t = 0
+        steady_state_timer = 5 * Cond.default_dt  #steady state fixed time
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -260,16 +318,22 @@ def Get_Steady_State():
             max_diff_index = np.argmax(dist_new)
 
             # check if distance from steady state is larger than the last by more than the allowed error
+            dist_info = False
             if k > 5:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std)
-                if abs(dist_new) < 0.03:
-                    print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                          + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                    print("counter is " + str(zero_curr_steady_state_counter))
-                    print("timer is " + str(time.time() - t0))
-                    not_in_steady_state = False
+                if abs(dist_new) < 0.03 * np.sqrt(T / T0):
+                    if dist_info:
+                        print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
+                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                        # print("counter is " + str(zero_curr_steady_state_counter))
+                        print("timer is " + str(time.time() - t0))
+                        print(steady_state_timer, dt)
+
+                    steady_state_timer -= dt
+                    if steady_state_timer <= 0:
+                        not_in_steady_state = False
 
                 # convergence failsafe
                 if dist_new - dist > 0:
@@ -286,8 +350,9 @@ def Get_Steady_State():
                             not_in_steady_state = False
 
                 # update on non-convergence
-                elif k % 500 == 0:
+                elif k % 1000 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
+                    pass
 
             # update time
             dist = dist_new
@@ -307,43 +372,17 @@ else:
 cycles = len(Vleft)
 I_matrix = np.zeros((loops, cycles))
 
-plot = True
-if not plot:
-    for loop in range(loops):
-        I_vec = Get_Steady_State()
-        I_matrix[loop] = I_vec
+for loop in range(loops):
+    I_vec = Get_Steady_State()
+    I_matrix[loop] = I_vec
 
-    I_vec_avg = np.zeros(cycles)  # results vector
-    for run in I_matrix:
-        I_vec_avg += run / len(I_matrix)
+I_vec_avg = np.zeros(cycles)  # results vector
+for run in I_matrix:
+    I_vec_avg += run / len(I_matrix)
 
-    # w+ truncates file
-    with open("book.csv", "w+") as f:
-        file = csv.writer(f)
-        for row in range(len(Vleft)):
-            to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
-            file.writerow(to_write)
-else:
-    for loop in range(loops):
-        I_vec = Get_Steady_State()
-        I_matrix[loop] = I_vec
-
-    I_vec_avg = np.zeros(cycles)  # results vector
-    for run in I_matrix:
-        I_vec_avg += run / len(I_matrix)
-
-    # w+ truncates file
-    with open("book.csv", "w+") as f:
-        file = csv.writer(f)
-        for row in range(len(Vleft)):
-            to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
-            file.writerow(to_write)
-
-    I_V = plt.plot(Vleft / Volts, I_vec_avg / Amp)
-    plt.xlabel("Voltage")
-    plt.ylabel("Current")
-    if increase:
-        plt.title("increasing voltage")
-    else:
-        plt.title("decreasing voltage")
-    plt.show()
+# w+ truncates file
+with open("book.csv", "w+") as f:
+    file = csv.writer(f)
+    for row in range(len(Vleft)):
+        to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
+        file.writerow(to_write)
