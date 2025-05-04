@@ -33,8 +33,8 @@ Tau = Cond.Tau
 C_inv = Cond.C_inverse
 increase = True  # true if increasing else decreasing voltage during run
 taylor_limit = 0.0001
-pos_energy_bound = 1.3  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -1.4  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
+pos_energy_bound = -0.02  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -0.07  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
 
 # parameters
 e = Cond.e
@@ -43,7 +43,7 @@ Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
 T0 = 0.001 * e * e / (Cond.C * kB)
-T = 100 * T0
+T = 1 * T0
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
@@ -111,6 +111,7 @@ else:
 
 t0 = time.time()
 
+
 @profile()
 def approximate_gamma_integral(dE):
     global table_val
@@ -133,6 +134,7 @@ def approximate_gamma_integral(dE):
         return table_prob[idx - 1]
     else:
         return table_prob[idx]
+
 
 @profile()
 def Gamma_approx(dE, Temp, Rt):
@@ -270,7 +272,6 @@ def Get_Steady_State():
         zero_curr_steady_state_counter = 0
         not_decreasing = 0
 
-
         # starting conditions
         not_in_steady_state = True
         t = 0
@@ -333,7 +334,7 @@ def Get_Steady_State():
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std)
-                if abs(dist_new) < 0.03 * np.sqrt(T / T0):
+                if abs(dist_new) < 0.03 * np.sqrt(T / T0) : # or (abs(dist_new) < 1.2 and cycle == 0) for 100T0
                     if dist_info:
                         print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                               + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))

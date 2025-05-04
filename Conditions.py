@@ -5,7 +5,7 @@ import Functions
 row_num = 4
 array_size = row_num * row_num
 islands = list(range(array_size))
-distribute_R = True
+distribute_R = False
 distribute_C = False
 
 # define tunneling parameters
