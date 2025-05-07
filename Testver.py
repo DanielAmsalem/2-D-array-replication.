@@ -1,4 +1,10 @@
 import numpy as np
+import matplotlib
+
+import Conditions
+
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 import Functions as F
 import Conditions as Cond
 import copy
@@ -9,8 +15,8 @@ import os
 import sys
 import bisect
 
-#NORMAL ARRAY
-#os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
+# NORMAL ARRAY
+# os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
 loops = 2
@@ -26,10 +32,9 @@ Cg = np.array([Cond.Cg] * array_size)
 default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
-increase = True  # true if increasing else decreasing voltage during run
 taylor_limit = 0.0001
-pos_energy_bound = 0.08  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.19  # -0.07 for T=0.001; -0.19 for T=0.01;
+pos_energy_bound = 1.3  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -1.4  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
 
 # parameters
 e = Cond.e
@@ -38,19 +43,20 @@ Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
 T0 = 0.001 * e * e / (Cond.C * kB)
-T = 10 * T0
+T = 100 * T0
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
-error = 0
+expected_error = 0.01 * (Conditions.row_num-1) * np.sqrt(T / T0)
+error_count = 0
 
 # tabulating integral values
 resolution = 0.000001
 num_of_calc = (pos_energy_bound - neg_energy_bound) / resolution
 vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
-table_val = []  #list of dE values
-table_prob = []  #list of gamma(dE) values
+table_val = []  # list of dE values
+table_prob = []  # list of gamma(dE) values
 s_eff = np.sqrt(2 * Ec * T)
 
 
@@ -241,8 +247,8 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     return Gamma_, RR, reaction_index_
 
 
-def Get_Steady_State():
-    global error
+def Get_Steady_State(V_cycle):
+    global error_count
 
     # general Charge distribution vectors
     Qg, Q_avg, Q_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
@@ -250,11 +256,11 @@ def Get_Steady_State():
     I_avg, I_var = 0, 0
 
     # vector counting charge flow
-    I_vec = np.zeros(cycles)
+    I_vec_to_return = np.zeros(cycles)
 
     for cycle in range(cycles):
 
-        cycle_voltage = float(Vleft[cycle])
+        cycle_voltage = float(V_cycle[cycle])
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
 
         k = 0
@@ -264,7 +270,7 @@ def Get_Steady_State():
         # starting conditions
         not_in_steady_state = True
         t = 0
-        steady_state_timer = 5 * Cond.default_dt  #steady state fixed time
+        steady_state_timer = 5 * Cond.default_dt  # steady state fixed time
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -323,7 +329,7 @@ def Get_Steady_State():
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std)
-                if abs(dist_new) < 0.03 * np.sqrt(T / T0):
+                if abs(dist_new) < expected_error:
                     if dist_info:
                         print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                               + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
@@ -344,9 +350,9 @@ def Get_Steady_State():
                             print("dist is " + str(dist_new) + " there have been: " + str(
                                 not_decreasing) + " errors, k is "
                                   + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                            #print("counter is " + str(zero_curr_steady_state_counter))
-                            #print("timer is " + str(time.time() - t0))
-                            error += 1
+                            # print("counter is " + str(zero_curr_steady_state_counter))
+                            # print("timer is " + str(time.time() - t0))
+                            error_count += 1
                             not_in_steady_state = False
 
                 # update on non-convergence
@@ -358,31 +364,36 @@ def Get_Steady_State():
             dist = dist_new
             t += dt
 
-        I_vec[cycle] = I_avg
-    return I_vec
+        I_vec_to_return[cycle] = I_avg
+    return I_vec_to_return
 
 
 # implements increasing\decreasing choice
-if increase:
-    Vleft = np.linspace(Vright * Volts, (Vright + 4) * Volts, num=100)
-else:
-    Vleft = np.linspace((Vright + 4) * Volts, Vright * Volts, num=100)
+steps = 100
+V_diff = 2
+Vleft = np.linspace(Vright * Volts, (Vright + V_diff) * Volts, num=steps)
+V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
 
 # results matrix, ith column has the ith loop, jth row is the jth step of voltage
-cycles = len(Vleft)
+cycles = len(V_doubled)
 I_matrix = np.zeros((loops, cycles))
 
 for loop in range(loops):
-    I_vec = Get_Steady_State()
+    I_vec = Get_Steady_State(V_doubled)
     I_matrix[loop] = I_vec
 
 I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run / len(I_matrix)
 
+I_vec_var = I_vec_avg = np.zeros(cycles)  # errors vector
+for run_num in range(len(I_matrix)):
+    I_vec_var += abs(I_matrix[run_num] - I_vec_avg[run_num]) ** 2 / len(I_matrix)
+
+I_vec_std = np.sqrt(I_vec_var)
 # w+ truncates file
 with open("book.csv", "w+") as f:
     file = csv.writer(f)
-    for row in range(len(Vleft)):
-        to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
+    for row in range(len(V_doubled)):
+        to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp), float(I_vec_std[row] / Amp)]
         file.writerow(to_write)
