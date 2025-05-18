@@ -8,10 +8,11 @@ import Conditions as Cond
 import copy
 import time
 from mpmath import quad, mp, exp, sqrt
-import csv
 import os
 import sys
+import csv
 import bisect
+import gc
 
 # NORMAL ARRAY
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
@@ -57,6 +58,9 @@ vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_
 table_val = []  # list of dE values
 table_prob = []  # list of gamma(dE) values
 table_T = []  # list of temps
+table_row = []
+tablename = "table_triplets.npz"
+
 
 def high_impedance_p(x, mu, Temp):
     """
@@ -71,44 +75,42 @@ def high_impedance_p(x, mu, Temp):
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
-wrote = False
-
-if wrote:
-    with open('table.csv', newline='') as f:
-        reader = csv.reader(f)
-        for row in reader:
-            try:
-                table_val.append(float(row[0]))
-                table_prob.append(float(row[1]))
-                table_T.append(float(row[2]))
-            except IndexError:
-                continue
+if os.path.exists(tablename):
+    data = np.load(tablename)
+    table_val = data["val"]
+    table_prob = data["prob"]
+    table_T = data["temp"]
 
 else:
     rr = 0
-    with open("table.csv", "w+") as f:
-        file = csv.writer(f)
+    with open("table_triplets.bin", "wb") as f:
         for val in vals_to_calc:
             for temp in T:
                 def integrand_gauss(x):
                     if x == 0:
-                        return temp
+                        return T
                     result = high_impedance_p(x + val, Ec, temp) * x / (1 - exp(-x / temp))
                     return float(result)
-
 
                 mp.dps = 30
                 probability = quad(integrand_gauss, [-val - 0.1, -val + 0.1])
                 mp.dps = 15
 
-                table_val += [val]
-                table_prob += [probability]
-                table_T += [temp]
-
-                file.writerow([float(val), float(probability), float(temp)])
+                row = np.array([val, probability, temp], dtype=np.float32)
+                row.tofile(f)
 
                 rr += 1
+                if rr % 100 == 0:
+                    print("collected")
+                    gc.collect()
                 print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)))
+
+    data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
+    table_val = data[:, 0]
+    table_prob = data[:, 1]
+    table_T = data[:, 2]
+
+    np.savez(tablename, val=table_val, prob=table_prob, temp=table_T)
 
 t0 = time.time()
 
@@ -118,7 +120,7 @@ def approximate_gamma_integral(dE, Temperature):
     global table_prob
     global table_T
 
-    Fixed_T_set = [(v, p) for v, p, t in zip(table_val, table_prob, table_T) if t == Temperature]
+    Fixed_T_set = [(v, p) for v, p, t in zip(table_val, table_prob, table_T) if t == float(Temperature)]
     if not Fixed_T_set:
         raise ValueError("No fixed temperature set")
 
