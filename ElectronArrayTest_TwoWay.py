@@ -8,17 +8,16 @@ import Conditions as Cond
 import copy
 import time
 from mpmath import quad, mp, exp, sqrt
-from line_profiler_pycharm import profile
 import csv
 import os
 import sys
 import bisect
 
-#NORMAL ARRAY
-#os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
+# NORMAL ARRAY
+# os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
-loops = 400
+loops = 2
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -47,32 +46,32 @@ Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
-error = 0
+expected_error = 0.01 * (Cond.row_num - 1) * np.sqrt(T / T0)
+error_count = 0
 
 # tabulating integral values
 resolution = 0.000001
 num_of_calc = (pos_energy_bound - neg_energy_bound) / resolution
 vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
-table_val = []  #list of dE values
-table_prob = []  #list of gamma(dE) values
+table_val = []  # list of dE values
+table_prob = []  # list of gamma(dE) values
 s_eff = np.sqrt(2 * Ec * T)
 
 
-@profile
-def high_impedance_p(x, Ec, T):
+def high_impedance_p(x, mu, Temp):
     """
     P- function for high impedance.
     :param x: function input (energy) == E+dE.
-    :param Ec: Electrostatic energy of environment == mu.
-    :param T: Temperature.
+    :param mu: Electrostatic energy of environment == Ec.
+    :param Temp: Temperature.
     :return: P(x)
     """
-    sigma_squared = 2 * Ec * T
-    mu = -Ec
+    sigma_squared = 2 * mu * Temp
+    mu = -mu
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
-wrote = True
+wrote = False
 
 if wrote:
     with open('table.csv', newline='') as f:
@@ -99,6 +98,7 @@ else:
             mp.dps = 30
             probability = quad(integrand_gauss, [-val - 0.1, -val + 0.1])
             mp.dps = 15
+            print(probability)
 
             table_val += [val]
             table_prob += [probability]
@@ -111,7 +111,6 @@ else:
 t0 = time.time()
 
 
-@profile()
 def approximate_gamma_integral(dE):
     global table_val
     global table_prob
@@ -135,7 +134,6 @@ def approximate_gamma_integral(dE):
         return table_prob[idx]
 
 
-@profile()
 def Gamma_approx(dE, Temp, Rt):
     global Ec
     global e
@@ -152,7 +150,6 @@ def Gamma_approx(dE, Temp, Rt):
         raise ValueError
 
 
-@profile
 def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     r = 0
     x = np.random.random() * RR
@@ -180,7 +177,6 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     return n_list, ll, mm, rate
 
 
-@profile
 def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -250,9 +246,8 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     return Gamma_, RR, reaction_index_
 
 
-@profile
 def Get_Steady_State(V_cycle):
-    global error
+    global error_count
 
     # general Charge distribution vectors
     Qg, Q_avg, Q_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
@@ -333,7 +328,7 @@ def Get_Steady_State(V_cycle):
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std)
-                if abs(dist_new) < 0.03 * np.sqrt(T / T0):
+                if abs(dist_new) < expected_error:
                     if dist_info:
                         print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                               + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
@@ -356,7 +351,7 @@ def Get_Steady_State(V_cycle):
                                   + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
                             #print("counter is " + str(zero_curr_steady_state_counter))
                             #print("timer is " + str(time.time() - t0))
-                            error += 1
+                            error_count += 1
                             not_in_steady_state = False
 
                 # update on non-convergence
@@ -373,49 +368,44 @@ def Get_Steady_State(V_cycle):
 
 # implements increasing\decreasing choice
 steps = 100
-Vleft = np.linspace(Vright * Volts, (Vright + 4) * Volts, num=steps)
+V_diff = 3
+Vleft = np.linspace(Vright * Volts, (Vright + V_diff) * Volts, num=steps)
 V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
-
 
 # results matrix, ith column has the ith loop, jth row is the jth step of voltage
 cycles = len(V_doubled)
 I_matrix = np.zeros((loops, cycles))
 
+for loop in range(loops):
+    I_vec = Get_Steady_State(V_doubled)
+    I_matrix[loop] = I_vec
+
+I_vec_avg = np.zeros(cycles)  # results vector
+for run in I_matrix:
+    I_vec_avg += run / len(I_matrix)
+
+I_vec_var = I_vec_avg = np.zeros(cycles)  # errors vector
+for run_num in range(len(I_matrix)):
+    I_vec_var += np.abs(I_matrix[run_num] - I_vec_avg) ** 2 / len(I_matrix)
+
+I_vec_std = np.sqrt(I_vec_var)
+# w+ truncates file
+with open("book.csv", "w+") as f:
+    file = csv.writer(f)
+    for row in range(len(V_doubled)):
+        to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp), float(I_vec_std[row] / Amp)]
+        file.writerow(to_write)
+
 plot = True
 if not plot:
-    for loop in range(loops):
-        I_vec = Get_Steady_State(V_doubled)
-        I_matrix[loop] = I_vec
-
-    I_vec_avg = np.zeros(cycles)  # results vector
-    for run in I_matrix:
-        I_vec_avg += run / len(I_matrix)
-
-    # w+ truncates file
-    with open("book.csv", "w+") as f:
-        file = csv.writer(f)
-        for row in range(len(V_doubled)):
-            to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp)]
-            file.writerow(to_write)
+    pass
 else:
-    for loop in range(loops):
-        I_vec = Get_Steady_State(V_doubled)
-        I_matrix[loop] = I_vec
-
-    I_vec_avg = np.zeros(cycles)  # results vector
-    for run in I_matrix:
-        I_vec_avg += run / len(I_matrix)
-
-    # w+ truncates file
-    with open("book.csv", "w+") as f:
-        file = csv.writer(f)
-        for row in range(len(V_doubled)):
-            to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp)]
-            file.writerow(to_write)
-
     I_V_increase = plt.plot(Vleft / Volts, I_vec_avg[:steps] / Amp, label="increasing", color="blue")
     I_V_decrease = plt.plot(V_doubled[steps:] / Volts, I_vec_avg[steps:] / Amp, label="decreasing", color="red")
     plt.xlabel("Voltage")
     plt.ylabel("Current")
     plt.legend()
     plt.show()
+
+end_time = time.time()
+print(int(end_time - t0) / 60)

@@ -48,7 +48,7 @@ Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
-error = 0
+error_count = 0
 
 # tabulating integral values
 resolution = 0.000001
@@ -253,7 +253,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
 @profile
 def Get_Steady_State():
-    global error
+    global error_count
 
     # general Charge distribution vectors
     Qg, Q_avg, Q_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
