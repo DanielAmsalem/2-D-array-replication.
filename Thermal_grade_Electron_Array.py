@@ -18,7 +18,7 @@ import gc
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
-loops = 2
+loops = 400
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -44,6 +44,7 @@ Vright = 0
 T0 = 0.001 * e * e / (Cond.C * kB)
 T_std = T0 / 10
 T = np.linspace(T0, T0 - row_num * T_std, Cond.row_num)
+T = np.flip(T, axis=0)
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
@@ -75,6 +76,20 @@ def high_impedance_p(x, mu, Temp):
     return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
+def integrand_gauss(x, temperature, mu):
+    if x == 0:
+        return temperature
+    result = high_impedance_p(x + val, mu, temperature) * x / (1 - exp(-x / temperature))
+    return result
+
+
+def make_integrand(temp1, val1):
+    def f1(x):
+        return integrand_gauss(x, temp1, val1)
+
+    return f1
+
+
 if os.path.exists(tablename):
     data = np.load(tablename)
     table_val = data["val"]
@@ -83,28 +98,19 @@ if os.path.exists(tablename):
 
 else:
     rr = 0
+    mp.dps = 30
     with open("table_triplets.bin", "wb") as f:
         for val in vals_to_calc:
             for temp in T:
-                def integrand_gauss(x):
-                    if x == 0:
-                        return T
-                    result = high_impedance_p(x + val, Ec, temp) * x / (1 - exp(-x / temp))
-                    return float(result)
+                probability = quad(make_integrand(temp, val), [-val - 0.1, -val + 0.1])
 
-                mp.dps = 30
-                probability = quad(integrand_gauss, [-val - 0.1, -val + 0.1])
-                mp.dps = 15
-
-                row = np.array([val, probability, temp], dtype=np.float32)
+                row = np.array([val, float(probability.real), temp], dtype=np.float32)
                 row.tofile(f)
 
                 rr += 1
-                if rr % 100 == 0:
-                    print("collected")
-                    gc.collect()
-                print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)))
 
+                print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)))
+    mp.dps = 15
     data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
     table_val = data[:, 0]
     table_prob = data[:, 1]
@@ -120,13 +126,10 @@ def approximate_gamma_integral(dE, Temperature):
     global table_prob
     global table_T
 
-    Fixed_T_set = [(v, p) for v, p, t in zip(table_val, table_prob, table_T) if t == float(Temperature)]
-    if not Fixed_T_set:
-        raise ValueError("No fixed temperature set")
+    temp_idx = np.where(np.flip(T) == Temperature)[0][0]
 
-    Fixed_T_set.sort(key=lambda x: x[0])
-    sorted_vals = [v for v, _ in Fixed_T_set]
-    probs = [p for _, p in Fixed_T_set]
+    sorted_vals = table_val[temp_idx::len(T)]
+    probs = table_prob[temp_idx::len(T)]
 
     idx = bisect.bisect_left(sorted_vals, dE)
 
@@ -368,7 +371,7 @@ def Get_Steady_State(V_cycle):
                             error_count += 1
                             not_in_steady_state = False
 
-                # update on non-convergence
+                # update on convergence
                 elif k % 1000 == 0:
                     print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
 
@@ -414,8 +417,8 @@ plot = True
 if not plot:
     pass
 else:
-    I_V_increase = plt.plot(Vleft / Volts, I_vec_avg[:steps] / Amp, label="increasing", color="blue")
-    I_V_decrease = plt.plot(V_doubled[steps:] / Volts, I_vec_avg[steps:] / Amp, label="decreasing", color="red")
+    I_V_increase = plt.plot(Vleft / Volts, I_vec_avg[:steps] / Amp, label="increasing", color="red")
+    I_V_decrease = plt.plot(V_doubled[steps:] / Volts, I_vec_avg[steps:] / Amp, label="decreasing", color="blue")
     plt.xlabel("Voltage")
     plt.ylabel("Current")
     plt.legend()

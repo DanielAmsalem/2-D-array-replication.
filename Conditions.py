@@ -5,7 +5,7 @@ import Functions
 row_num = 4
 array_size = row_num * row_num
 islands = list(range(array_size))
-distribute_R = False
+distribute_R = True
 distribute_C = False
 
 # define tunneling parameters
@@ -22,9 +22,11 @@ near_right = islands[(row_num - 1)::row_num]
 near_left = islands[0::row_num]
 
 if distribute_R:
-    R_t_ij = np.random.exponential(1, (array_size, array_size)) * R
-    R_i = np.random.exponential(1, array_size) * R
+    R_t_ij = np.random.exponential(2, (array_size, array_size)) * R
+    R_i = np.random.exponential(2, array_size) * R
     R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
+    print("R_i " + str(np.var(np.array(R_t_i))/len(R_t_i)))
+    print("R_ij " + str(np.var(R_t_ij)/(len(R_t_ij))))
 else:
     R_t_ij = np.full((array_size, array_size), R)
     R_i = np.full(array_size, R)
