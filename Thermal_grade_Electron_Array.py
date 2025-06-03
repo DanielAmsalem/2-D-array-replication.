@@ -32,8 +32,8 @@ default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
 taylor_limit = 0.0001
-pos_energy_bound = -0.02  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.07  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
+pos_energy_bound = 0.08  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -0.19  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
 
 # parameters
 e = Cond.e
@@ -41,10 +41,14 @@ kB = Cond.kB
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
+# Temperature should always be written as np.linspace(T0, T0 - row_num * T_std, row_num)
+# for fixed temp take np.ones(row_num) * T
+# for some flipped gradient use np.flip(T, axis=0)
 T0 = 0.001 * e * e / (Cond.C * kB)
-T_std = T0 / 10
-T = np.linspace(T0, T0 - row_num * T_std, Cond.row_num)
+T_std = T0 / 20
+T = 10 * np.linspace(T0, T0 - row_num * T_std, row_num)
 T = np.flip(T, axis=0)
+#T = np.ones(row_num) * T0*10
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
@@ -61,6 +65,22 @@ table_prob = []  # list of gamma(dE) values
 table_T = []  # list of temps
 table_row = []
 tablename = "table_triplets.npz"
+
+with open(Cond.strin, "a") as f:
+    f.write("loops : " + str(loops) + "\n")
+    f.write("Var(R_t_ij) : " + str(np.var(R_t_ij) / (len(R_t_ij))) + "\n")
+    f.write("Var(R_t_i) : " + str(np.var(np.array(R_t_i)) / len(R_t_i)) + "\n")
+    f.write("Rg : " + str(Rg) + "\n")
+    f.write("Cg : " + str(Cg) + "\n")
+    f.write("default_dt : " + str(default_dt) + "\n")
+    f.write("T0 : " + str(T0) + "\n")
+    f.write("T_std : " + str(T_std) + "\n")
+    f.write("T : " + str(T) + "\n")
+    f.write("-------------------------------------" + "\n")
+    f.write("steady_state_rep : " + str(Steady_state_rep) + "\n")
+    f.write("expected_error : " + str(expected_error) + "\n")
+    f.write("error_count : " + str(error_count) + "\n")
+    f.write("resolution : " + str(resolution) + "\n")
 
 
 def high_impedance_p(x, mu, Temp):
@@ -126,7 +146,7 @@ def approximate_gamma_integral(dE, Temperature):
     global table_prob
     global table_T
 
-    temp_idx = np.where(np.flip(T) == Temperature)[0][0]
+    temp_idx = np.where(np.flip(T, axis=0) == Temperature)[0][0]
 
     sorted_vals = table_val[temp_idx::len(T)]
     probs = table_prob[temp_idx::len(T)]
@@ -350,7 +370,7 @@ def Get_Steady_State(V_cycle):
                         print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
                               + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
                         # print("counter is " + str(zero_curr_steady_state_counter))
-                        print("timer is " + str(time.time() - t0))
+                        # print("timer is " + str(time.time() - t0))
                         print(steady_state_timer, dt)
 
                     steady_state_timer -= dt
