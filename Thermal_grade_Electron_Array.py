@@ -32,8 +32,8 @@ default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
 taylor_limit = 0.0001
-pos_energy_bound = 0.08  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.19  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
+pos_energy_bound = -0.02  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -0.07  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
 
 # parameters
 e = Cond.e
@@ -45,10 +45,10 @@ Vright = 0
 # for fixed temp take np.ones(row_num) * T
 # for some flipped gradient use np.flip(T, axis=0)
 T0 = 0.001 * e * e / (Cond.C * kB)
-T_std = T0 / 20
-T = 10 * np.linspace(T0, T0 - row_num * T_std, row_num)
-T = np.flip(T, axis=0)
-#T = np.ones(row_num) * T0*10
+T_std = T0 / 10
+T = np.linspace(T0, T0 + row_num * T_std, row_num)
+#T = np.flip(T, axis=0)
+#T = np.ones(row_num)
 Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
@@ -83,33 +83,6 @@ with open(Cond.strin, "a") as f:
     f.write("resolution : " + str(resolution) + "\n")
 
 
-def high_impedance_p(x, mu, Temp):
-    """
-    P- function for high impedance.
-    :param x: function input (energy) == E+dE.
-    :param mu: Electrostatic energy of environment == Ec.
-    :param Temp: Temperature.
-    :return: P(x)
-    """
-    sigma_squared = 2 * mu * Temp
-    mu = -mu
-    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
-
-
-def integrand_gauss(x, temperature, mu):
-    if x == 0:
-        return temperature
-    result = high_impedance_p(x + val, mu, temperature) * x / (1 - exp(-x / temperature))
-    return result
-
-
-def make_integrand(temp1, val1):
-    def f1(x):
-        return integrand_gauss(x, temp1, val1)
-
-    return f1
-
-
 if os.path.exists(tablename):
     data = np.load(tablename)
     table_val = data["val"]
@@ -122,7 +95,7 @@ else:
     with open("table_triplets.bin", "wb") as f:
         for val in vals_to_calc:
             for temp in T:
-                probability = quad(make_integrand(temp, val), [-val - 0.1, -val + 0.1])
+                probability = quad(F.make_integrand(temp, val, Ec), [-(val+Ec) - 0.1, -(val+Ec) + 0.1])
 
                 row = np.array([val, float(probability.real), temp], dtype=np.float32)
                 row.tofile(f)
@@ -146,7 +119,7 @@ def approximate_gamma_integral(dE, Temperature):
     global table_prob
     global table_T
 
-    temp_idx = np.where(np.flip(T, axis=0) == Temperature)[0][0]
+    temp_idx = np.where(T == Temperature)[0][0]
 
     sorted_vals = table_val[temp_idx::len(T)]
     probs = table_prob[temp_idx::len(T)]

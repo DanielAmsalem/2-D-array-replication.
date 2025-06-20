@@ -390,7 +390,7 @@ for run_num in range(len(I_matrix)):
 
 I_vec_std = np.sqrt(I_vec_var)
 # w+ truncates file
-with open("book.csv", "w+") as f:
+with open("../book.csv", "w+") as f:
     file = csv.writer(f)
     for row in range(len(V_doubled)):
         to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp), float(I_vec_std[row] / Amp)]

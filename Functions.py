@@ -1,5 +1,5 @@
 import numpy as np
-from mpmath import quad, ninf, inf, mp
+from mpmath import quad, ninf, inf, mp, exp, sqrt
 
 # parameters
 kB = 1
@@ -202,3 +202,29 @@ def getWork(i, j, C_inv, curr_V):
     Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
                 (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
     return Work
+
+def high_impedance_p(x, mu, Temp):
+    """
+    P- function for high impedance.
+    :param x: function input (energy) == E+dE.
+    :param mu: Electrostatic energy of environment == Ec.
+    :param Temp: Temperature.
+    :return: P(x)
+    """
+    sigma_squared = 2 * mu * Temp
+    mu = -mu
+    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
+
+
+def integrand_gauss(x, temperature, E, Ec):
+    if x == 0:
+        return temperature
+    result = high_impedance_p(x + E, Ec, temperature) * x / (1 - exp(-x / temperature))
+    return result
+
+
+def make_integrand(temp1, val1, Ec):
+    def f1(x):
+        return integrand_gauss(x, temp1, val1, Ec)
+
+    return f1

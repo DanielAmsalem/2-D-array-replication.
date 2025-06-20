@@ -393,7 +393,7 @@ if not plot:
         I_vec_avg += run / len(I_matrix)
 
     # w+ truncates file
-    with open("book.csv", "w+") as f:
+    with open("../book.csv", "w+") as f:
         file = csv.writer(f)
         for row in range(len(Vleft)):
             to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
@@ -408,7 +408,7 @@ else:
         I_vec_avg += run / len(I_matrix)
 
     # w+ truncates file
-    with open("book.csv", "w+") as f:
+    with open("../book.csv", "w+") as f:
         file = csv.writer(f)
         for row in range(len(Vleft)):
             to_write = [float(Vleft[row] / Volts), float(I_vec_avg[row] / Amp)]
