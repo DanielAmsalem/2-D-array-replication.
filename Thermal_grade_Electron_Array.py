@@ -1,13 +1,15 @@
 import numpy as np
 import matplotlib
 
+import Conditions
+
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import Functions as F
 import Conditions as Cond
 import copy
 import time
-from mpmath import quad, mp, exp, sqrt
+from mpmath import quad, mp, exp, sqrt, inf
 import os
 import sys
 import csv
@@ -18,7 +20,7 @@ import gc
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
-loops = 400
+loops = 4
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = list(range(array_size))
@@ -32,8 +34,8 @@ default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
 taylor_limit = 0.0001
-pos_energy_bound = -0.02  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.07  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
+pos_energy_bound = 0.5  # -0.02 for T=0.001; 0.2 for T=0.01; 1.3 for T=0.1
+neg_energy_bound = -0.5  # -0.07 for T=0.001; -0.2 for T=0.01; -1.4 for T=0.1
 
 # parameters
 e = Cond.e
@@ -41,7 +43,7 @@ kB = Cond.kB
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
-# Temperature should always be written as np.linspace(T0, T0 - row_num * T_std, row_num)
+# Temperature should always be written as np.linspace(T0, T0 + row_num * T_std, row_num)
 # for fixed temp take np.ones(row_num) * T
 # for some flipped gradient use np.flip(T, axis=0)
 T0 = 0.001 * e * e / (Cond.C * kB)
@@ -49,7 +51,6 @@ T_std = T0 / 10
 T = np.linspace(T0, T0 + row_num * T_std, row_num)
 #T = np.flip(T, axis=0)
 #T = np.ones(row_num)
-Ec = e ** 2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
@@ -67,7 +68,8 @@ table_row = []
 tablename = "table_triplets.npz"
 
 with open(Cond.strin, "a") as f:
-    f.write("loops : " + str(loops) + "\n")
+    f.write("loop parameters : " + str(loops) + "\n")
+    f.write("---------------------------------------------" + "\n")
     f.write("Var(R_t_ij) : " + str(np.var(R_t_ij) / (len(R_t_ij))) + "\n")
     f.write("Var(R_t_i) : " + str(np.var(np.array(R_t_i)) / len(R_t_i)) + "\n")
     f.write("Rg : " + str(Rg) + "\n")
@@ -76,88 +78,46 @@ with open(Cond.strin, "a") as f:
     f.write("T0 : " + str(T0) + "\n")
     f.write("T_std : " + str(T_std) + "\n")
     f.write("T : " + str(T) + "\n")
-    f.write("-------------------------------------" + "\n")
+    f.write("---------------------------------------------" + "\n")
     f.write("steady_state_rep : " + str(Steady_state_rep) + "\n")
     f.write("expected_error : " + str(expected_error) + "\n")
     f.write("error_count : " + str(error_count) + "\n")
     f.write("resolution : " + str(resolution) + "\n")
 
-
-if os.path.exists(tablename):
-    data = np.load(tablename)
-    table_val = data["val"]
-    table_prob = data["prob"]
-    table_T = data["temp"]
-
-else:
-    rr = 0
-    mp.dps = 30
-    with open("table_triplets.bin", "wb") as f:
-        for val in vals_to_calc:
-            for temp in T:
-                probability = quad(F.make_integrand(temp, val, Ec), [-(val+Ec) - 0.1, -(val+Ec) + 0.1])
-
-                row = np.array([val, float(probability.real), temp], dtype=np.float32)
-                row.tofile(f)
-
-                rr += 1
-
-                print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)))
-    mp.dps = 15
-    data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
-    table_val = data[:, 0]
-    table_prob = data[:, 1]
-    table_T = data[:, 2]
-
-    np.savez(tablename, val=table_val, prob=table_prob, temp=table_T)
-
 t0 = time.time()
 
 
-def approximate_gamma_integral(dE, Temperature):
-    global table_val
-    global table_prob
-    global table_T
+def Gamma_approx(dE, Temp, Rt, mean, s):
+    # low bound starts at mean - 3s > T from thence is analytical (linear in mean)
+    # high bound starts at mean + 3s < -T from thence is 0
 
-    temp_idx = np.where(T == Temperature)[0][0]
-
-    sorted_vals = table_val[temp_idx::len(T)]
-    probs = table_prob[temp_idx::len(T)]
-
-    idx = bisect.bisect_left(sorted_vals, dE)
-
-    # Compare the two closest values: sorted_list[idx - 1] and sorted_list[idx]
-    if idx == 0:
-        if abs(dE - sorted_vals[0]) <= abs(dE - sorted_vals[1]):
-            return probs[0]
-        else:
-            return probs[1]
-    elif idx == len(sorted_vals):
-        if abs(dE - sorted_vals[-1]) <= abs(dE - sorted_vals[-2]):
-            return probs[-1]
-        else:
-            return probs[-2]
-    else:
-        if abs(sorted_vals[idx - 1] - dE) <= abs(sorted_vals[idx] - dE):
-            return probs[idx - 1]
-        else:
-            return probs[idx]
-
-
-def Gamma_approx(dE, Temp, Rt):
-    global Ec
-    global e
-    s = np.sqrt(2 * Ec * Temp)
-
-    # low bound starts at dE=-0.07 from thence is analytical
-    # high bound starts at dE=-0.02 from thence is 0
-
-    if dE < neg_energy_bound:
-        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e ** 2) / Rt
-    elif pos_energy_bound > dE > neg_energy_bound:
-        return approximate_gamma_integral(dE, Temperature=Temp) * e ** 2 / Rt
-    else:
+    if mean + 3 * s < -Temp:
+        # fermi yields zero
+        # this was the condition to not enter the loop.
         raise ValueError
+    elif mean - 3 * s > Temp:
+        #linear approx for the fermi function
+        o = (np.sqrt(np.pi * 2) * mean * s * e ** 2) / (Rt * np.sqrt(2*np.pi*s*s))
+        if o < 0:
+            print("a")
+            print(o)
+            print(mean)
+            print(-dE-mean)
+            print(dE)
+            print(s)
+            exit()
+        return o
+    else:
+        if np.abs(mean + dE) < e - 10:  # mean + dE = Ec
+            if dE < 0:
+                return -dE / ((1 - np.exp(dE / Temp)) * e * e * Rt)
+                print("line 136")
+            else:
+                return 0
+        mp.dps = 30
+        prob = np.float64(quad(F.make_integrand(Temp, dE, -dE-mean), [-1, 1]))
+        mp.dps = 15
+        return prob
 
 
 def execute_transition(Gamma_list, n_list, RR, reaction_index_):
@@ -187,8 +147,16 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_):
     return n_list, ll, mm, rate
 
 
-def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
+def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_, Vright_, Qground):
     # dE values for i->j transition
+    global e
+    q_squared_C = Qground.T @ Conditions.C_inverse @ Qground
+    boundary_charge_energy = Conditions.halfVxCix_2(cycle_voltage_, Vright_)
+    Ec = 0.5 * q_squared_C.item() + boundary_charge_energy
+
+    # low bound starts at mean - 3s > T from thence is analytical (linear in mean)
+    # high bound starts at mean + 3s < -T from thence is 0
+
     dEij = np.zeros((array_size, array_size))
 
     # island i to island j transition
@@ -204,9 +172,12 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
             dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
                               (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
 
-            # dEij must be negative for transition i->j
-            if dEij[i][j] < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dEij[i][j], T[i % row_num], R_t_ij[i][j])]
+            # dEij must be negative enough for transition i->j
+            # if the mean of the gaussian is more than 3 sd's into the zone where x/(1-exp(-x/T) gives zero
+            s = np.sqrt(2 * Ec * T[i % row_num])
+            mean = -(Ec + dEij[i][j])
+            if F.energy_negative_enough(mean, s, T[i % row_num]):
+                Gamma_ += [Gamma_approx(dEij[i][j], T[i % row_num], R_t_ij[i][j], mean, s)]
                 RR += Gamma_[-1]
                 reaction_index_ += [(i, j)]
 
@@ -214,10 +185,13 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     for isle in near_left:
         # for ith transition from electrode
         dE_left = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        mean = -(Ec + dE_left)
+        Isle_Temperature = T[isle % row_num]
 
         # rate for V_left->i
-        if dE_left < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_left, T[i % row_num], R_t_i[isle])]
+        s = np.sqrt(2 * Ec * Isle_Temperature)
+        if F.energy_negative_enough(mean, s, Isle_Temperature):
+            Gamma_ += [Gamma_approx(dE_left, Isle_Temperature, R_t_i[isle], mean, s)]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -226,8 +200,9 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
             dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_left
-            if dE_left < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_left, T[i % row_num], R_t_i[isle])]
+            s = np.sqrt(2 * Ec * Isle_Temperature)
+            if F.energy_negative_enough(mean, s, Isle_Temperature):
+                Gamma_ += [Gamma_approx(dE_left, Isle_Temperature, R_t_i[isle], mean, s)]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -235,10 +210,13 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     for isle in near_right:
         # for ith transition from electrode
         dE_right = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * Vright) * e / 2
+        mean = -(Ec + dE_right)
+        Isle_Temperature = T[isle % row_num]
 
         # rate for V_right->i
-        if dE_right < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_right, T[i % row_num], R_t_i[isle])]
+        s = np.sqrt(2 * Ec * Isle_Temperature)
+        if F.energy_negative_enough(mean, s, Isle_Temperature):
+            Gamma_ += [Gamma_approx(dE_right, Isle_Temperature, R_t_i[isle], mean, s)]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -248,8 +226,9 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
             dE_right = (2 * Vright - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_right
-            if dE_right < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_right, T[i % row_num], R_t_i[isle])]
+            s = np.sqrt(2 * Ec * Isle_Temperature)
+            if F.energy_negative_enough(mean, s, Isle_Temperature):
+                Gamma_ += [Gamma_approx(dE_right, Isle_Temperature, R_t_i[isle], mean, s)]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -293,10 +272,10 @@ def Get_Steady_State(V_cycle):
             reaction_index = []
             Gamma = []
 
-            Gamma, R, reaction_index = Get_Gamma(Gamma, R, reaction_index, n, V, cycle_voltage)
+            Gamma, R, reaction_index = Get_Gamma(Gamma, R, reaction_index, n, V, cycle_voltage, Vright, Qg)
 
             # transition occurred, limit for R is the typical ground drain current
-            if R > abs(cycle_voltage / (e * Cond.Rg)):
+            if R > abs(1 / (Cond.Cg * Cond.Rg)):
                 zero_curr_steady_state_counter = 0
                 # typical interaction time
                 dt = float(np.log(1 / np.random.random()) / R)
@@ -334,6 +313,10 @@ def Get_Steady_State(V_cycle):
 
             # check if distance from steady state is larger than the last by more than the allowed error
             dist_info = False
+            try:
+                print(dist)
+            except UnboundLocalError:
+                pass
             if k > 5:
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
@@ -378,7 +361,7 @@ def Get_Steady_State(V_cycle):
 
 # implements increasing\decreasing choice
 steps = 100
-V_diff = 3
+V_diff = 4
 Vleft = np.linspace(Vright * Volts, (Vright + V_diff) * Volts, num=steps)
 V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
 
@@ -406,6 +389,9 @@ with open("book.csv", "w+") as f:
         to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp), float(I_vec_std[row] / Amp)]
         file.writerow(to_write)
 
+end_time = time.time()
+print(int(end_time - t0) / 60)
+
 plot = True
 if not plot:
     pass
@@ -417,5 +403,30 @@ else:
     plt.legend()
     plt.show()
 
-end_time = time.time()
-print(int(end_time - t0) / 60)
+# if os.path.exists(tablename):
+#     data = np.load(tablename)
+#     table_val = data["val"]
+#     table_prob = data["prob"]
+#     table_T = data["temp"]
+#
+# else:
+#     rr = 0
+#     mp.dps = 30
+#     with open("table_triplets.bin", "wb") as f:
+#         for val in vals_to_calc:
+#             for temp in T:
+#                 probability = quad(F.make_integrand(temp, val, Ec=val), [-val - 0.1, -val + 0.1])
+#
+#                 row = np.array([val, float(probability.real), temp], dtype=np.float32)
+#                 row.tofile(f)
+#
+#                 rr += 1
+#
+#                 print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)))
+#     mp.dps = 15
+#     data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
+#     table_val = data[:, 0]
+#     table_prob = data[:, 1]
+#     table_T = data[:, 2]
+#
+#     np.savez(tablename, val=table_val, prob=table_prob, temp=table_T)

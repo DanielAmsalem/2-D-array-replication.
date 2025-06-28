@@ -67,6 +67,16 @@ def VxCix(Vl, Vr):
         _VxCix[u] = Cix[u] * Vr
     return np.array(_VxCix)
 
+def halfVxCix_2(Vl, Vr):
+    #returns boundry charge energy 0.5cV^2
+    #Vx here is the electrode Voltage
+    tot = 0
+    for u in near_left:
+        tot += 0.5 * Cix[u] * Vl * Vl
+    for u in near_right:
+        tot += 0.5 * Cix[u] * Vr * Vr
+    return tot
+
 
 # define tau matrix
 res = C_inverse + np.diagflat([1 / Cg] * array_size)
@@ -85,7 +95,7 @@ date_ = datetime.datetime.now()
 strin = "parameters_" + date_.strftime("%Y%m%d") + ".txt"
 
 with open(strin, "w") as f:
-    f.write("loop parameters" + "\n")
+    f.write("loop conditions" + "\n")
     f.write("---------------------------------------------" + "\n")
     f.write("row_num : " + str(row_num) + "\n")
     f.write("distribute_R : " + str(distribute_R) + "\n")
@@ -99,6 +109,9 @@ with open(strin, "w") as f:
     f.write("Cg : " + str(Cg) + "\n")
     f.write("R : " + str(R) + "\n")
     f.write("Rg : " + str(Rg) + "\n")
+    f.write("---------------------------------------------" + "\n")
+    f.write("\n")
+    f.write("\n")
 
 print("done")
 print(default_dt)
