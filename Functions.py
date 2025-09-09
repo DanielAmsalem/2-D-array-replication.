@@ -1,10 +1,11 @@
 import numpy as np
-from mpmath import quad, ninf, inf, mp
+from mpmath import quad, ninf, inf, mp, exp, sqrt
 
 # parameters
 kB = 1
 e = 1
 taylor_limit = 0.0001
+# for debugging Warnings may set np.seterr(all='raise')
 
 
 def flattenToColumn(a):
@@ -85,7 +86,7 @@ def gamma(dE, Temp, Rt):
         beta = 1 / (Temp * kB)
         a = dE * beta
     except OverflowError:  # T may be too small
-        return NameError
+        return ValueError
 
     exponent = np.exp(a)
     const = e * e * Rt
@@ -107,7 +108,9 @@ def update_statistics(value, avg, n_var, total_time, time_step):
     #         algorithm (as described in https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2973983/)"
     new_time = total_time + time_step
     dist_from_avg = value - avg
+
     local_std = dist_from_avg * time_step / new_time
+
     new_n_var = n_var + dist_from_avg * total_time * local_std
     new_avg = avg + local_std
     return new_avg, new_n_var
@@ -149,6 +152,7 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
 def Paper_developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
                    InvTauEigenVecInv, InvTau,
                    C_inverse, VxCix, Rg, Tau, Cg):
+    # Legacy version
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
     b = -C_inverse.dot(e * n + e * VxCix) / Rg
 

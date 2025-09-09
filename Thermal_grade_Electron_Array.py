@@ -41,6 +41,7 @@ kB = Cond.kB
 Volts = abs(e) / Cond.C  # normalized voltage unit
 Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
+# Temperature should always be written as np.linspace(T0, T0 + row_num * T_std, row_num)
 # Temperature should always be written as np.linspace(T0, T0 - row_num * T_std, row_num)
 # for fixed temp take np.ones(row_num) * T
 # for some flipped gradient use np.flip(T, axis=0)
@@ -67,7 +68,8 @@ table_row = []
 tablename = "table_triplets.npz"
 
 with open(Cond.strin, "a") as f:
-    f.write("loops : " + str(loops) + "\n")
+    f.write("loop parameters : " + str(loops) + "\n")
+    f.write("---------------------------------------------" + "\n")
     f.write("Var(R_t_ij) : " + str(np.var(R_t_ij) / (len(R_t_ij))) + "\n")
     f.write("Var(R_t_i) : " + str(np.var(np.array(R_t_i)) / len(R_t_i)) + "\n")
     f.write("Rg : " + str(Rg) + "\n")
@@ -76,7 +78,7 @@ with open(Cond.strin, "a") as f:
     f.write("T0 : " + str(T0) + "\n")
     f.write("T_std : " + str(T_std) + "\n")
     f.write("T : " + str(T) + "\n")
-    f.write("-------------------------------------" + "\n")
+    f.write("---------------------------------------------" + "\n")
     f.write("steady_state_rep : " + str(Steady_state_rep) + "\n")
     f.write("expected_error : " + str(expected_error) + "\n")
     f.write("error_count : " + str(error_count) + "\n")
@@ -244,7 +246,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_left, T[i % row_num], R_t_i[isle])]
+            Gamma_ += [Gamma_approx(dE_left, T[isle % row_num], R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -254,7 +256,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_left, T[i % row_num], R_t_i[isle])]
+                Gamma_ += [Gamma_approx(dE_left, T[isle % row_num], R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -265,7 +267,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # rate for V_right->i
         if dE_right < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_right, T[i % row_num], R_t_i[isle])]
+            Gamma_ += [Gamma_approx(dE_right, T[isle % row_num], R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -276,7 +278,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # rate for i->V_right
             if dE_right < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_right, T[i % row_num], R_t_i[isle])]
+                Gamma_ += [Gamma_approx(dE_right, T[isle % row_num], R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -323,7 +325,7 @@ def Get_Steady_State(V_cycle):
             Gamma, R, reaction_index = Get_Gamma(Gamma, R, reaction_index, n, V, cycle_voltage)
 
             # transition occurred, limit for R is the typical ground drain current
-            if R > abs(cycle_voltage / (e * Cond.Rg)):
+            if R > abs(1 / (Cond.Cg * Cond.Rg)):
                 zero_curr_steady_state_counter = 0
                 # typical interaction time
                 dt = float(np.log(1 / np.random.random()) / R)

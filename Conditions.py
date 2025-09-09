@@ -99,6 +99,9 @@ with open(strin, "w") as f:
     f.write("Cg : " + str(Cg) + "\n")
     f.write("R : " + str(R) + "\n")
     f.write("Rg : " + str(Rg) + "\n")
+    f.write("---------------------------------------------" + "\n")
+    f.write("\n")
+    f.write("\n")
 
 print("done")
 print(default_dt)
