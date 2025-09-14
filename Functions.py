@@ -4,7 +4,8 @@ from mpmath import quad, ninf, inf, mp, exp, sqrt
 # parameters
 kB = 1
 e = 1
-taylor_limit = 0.0001
+
+
 # for debugging Warnings may set np.seterr(all='raise')
 
 
@@ -76,30 +77,6 @@ def taylor(x, T):
         T * np.power(x, 2) / 12 -
         np.power(T, 3) * np.power(x, 4) / 720 +
         np.power(T, 5) * np.power(x, 6) / 30240)
-
-
-def gamma(dE, Temp, Rt):
-    """
-    dE is a strictly negative real number; dE<0
-    """
-    try:
-        beta = 1 / (Temp * kB)
-        a = dE * beta
-    except OverflowError:  # T may be too small
-        return ValueError
-
-    exponent = np.exp(a)
-    const = e * e * Rt
-
-    # for an a smaller than -0.0001 we do not expect non-regular behaviour
-    if a <= -taylor_limit:
-        return isNonNegative(float(-dE / (const * (1 - exponent))))
-    # for 0 > a > -0.0001, we expand by x/(1-e^x) = -1 + x/2 - x^2/12 + x^4/720 + O(x^6)
-    elif -taylor_limit < a < 0:
-        print("expand")
-        return isNonNegative(taylor(dE, beta) / const)
-    else:
-        raise ValueError
 
 
 def update_statistics(value, avg, n_var, total_time, time_step):
@@ -206,3 +183,53 @@ def getWork(i, j, C_inv, curr_V):
     Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
                 (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
     return Work
+
+
+def high_impedance_p(x, mu, Temp):
+    """
+    P- function for high impedance.
+    :param x: function input (energy) == E+dE.
+    :param mu: Electrostatic energy of environment == Ec.
+    :param Temp: Temperature.
+    :return: P(x)
+    """
+    sigma_squared = 2 * mu * Temp
+    mu = -mu
+    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
+
+
+def integrand_gauss(x, temperature, value, Ec):
+    if x == 0:
+        return temperature
+    result = high_impedance_p(x + value, Ec, temperature) * x / (1 - exp(-x / temperature))
+    return result
+
+
+def make_integrand(temp1, val1, Ec1):
+    def f1(x):
+        return integrand_gauss(x, temp1, val1, Ec=Ec1)
+
+    return f1
+
+
+def integrand(T, dE, Ec):
+    """
+        P- function for high impedance.
+        :param dE: Energy difference == dE.
+        :param Ec: Electrostatic energy of environment == Ec.
+        :param T: Temperature.
+        :return: P(E)*E*f_BE(-E)
+        """
+    def conv(E):
+        if np.abs(E) < 1e-8:
+            zero_limit_gauss = exp(-(dE + Ec) ** 2 / (4*Ec*T))
+            return zero_limit_gauss * sqrt(T/(4*np.pi*Ec))
+
+        gauss = exp(-(E + dE + Ec) ** 2 / (4*Ec*T))
+        gauss /= sqrt(np.pi * 4*Ec*T)
+
+        bose_mean = E / (1 - exp(-E / T))
+
+        return bose_mean*gauss
+
+    return conv
