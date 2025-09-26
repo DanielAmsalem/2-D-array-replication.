@@ -1,9 +1,11 @@
 import numpy as np
 from mpmath import quad, ninf, inf, mp, exp, sqrt
 
+import Conditions
+
 # parameters
-kB = 1
-e = 1
+kB = Conditions.kB
+e = Conditions.e
 
 
 # for debugging Warnings may set np.seterr(all='raise')
@@ -69,16 +71,6 @@ def isNonNegative(x):
         return x
 
 
-def taylor(x, T):
-    # 4th degree expansion of x/(1-e^(x*T))
-    return float(
-        T -
-        x / 2 +
-        T * np.power(x, 2) / 12 -
-        np.power(T, 3) * np.power(x, 4) / 720 +
-        np.power(T, 5) * np.power(x, 6) / 30240)
-
-
 def update_statistics(value, avg, n_var, total_time, time_step):
     # from https://github.com/kasirershaharbgu/random_2D_tunneling_arrays/blob/main/random_2d_array_simulation.py#L1957
     # "Updating the statistics of a measured value according to West's
@@ -94,6 +86,7 @@ def update_statistics(value, avg, n_var, total_time, time_step):
 
 
 def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
+    # e == 1
     I_right = 0
     I_down = 0
     for i in range(len(gamma_list)):
@@ -126,90 +119,40 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
     return I_right, I_down
 
 
-def Paper_developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
-                   InvTauEigenVecInv, InvTau,
-                   C_inverse, VxCix, Rg, Tau, Cg):
-    # Legacy version
+def developQ(Q, dt, n,VxCix):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
-    b = -C_inverse.dot(e * n + e * VxCix) / Rg
+    b = -Conditions.Tau_inv.dot(return_Qn_for_n(n, VxCix))
 
     # exponent for time step
-    exponent = np.exp(InvTauEigenVal * dt)
+    exponent = np.exp(Conditions.InvTauEigenValues * dt)
 
     # basis change
-    Q_in_eigenbasis, b = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
+    Q_in_eigenbasis, b = Conditions.InvTauEigenVectorsInv.dot(Q), Conditions.InvTauEigenVectorsInv.dot(b)
 
     # solution in time
-    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / InvTauEigenVal) * (exponent - 1)
+    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / Conditions.InvTauEigenValues) * (exponent - 1)
 
     # revert to old basis
-    return InvTauEigenVec.dot(Q_new_in_eigenbasis)
+    return Conditions.InvTauEigenVectors.dot(Q_new_in_eigenbasis)
 
 
-def return_Qn_for_n(n, VxCix, Cg, Rg, Tau):
+def return_Qn_for_n(n, VxCix):
     """
     returns Qn for given n vector of array (NxN)
     :param n: (1,N) numpy array
     :param VxCix: (1,N) numpy array
-    :param Cg: (1,N) numpy array
-    :param Rg: (1,N) numpy array
-    :param Tau: (N,N) numpy array
     :return:
     """
-    return Tau.dot((e * n + e * VxCix) / Cg) / Rg - e * n - e * VxCix
-    # return matrixQn.dot((e * n + e * VxCix))
-
-
-def developQ(Q, dt, InvTauEigenVec, InvTauEigenVal, n,
-             InvTauEigenVecInv, InvTau,
-             C_inverse, VxCix, Rg, Tau, Cg, matrixQn):
-    # gate charge relaxation, for dQ/dt=inv_tau*(Q + b), b = -Qn
-    b = -return_Qn_for_n(n, VxCix, Cg, Rg, Tau)
-
-    # exponent for time step
-    exponent = np.exp(InvTauEigenVal * dt)
-
-    # basis change
-    Q_in_eigenbasis, b_in_eigenbasis = InvTauEigenVecInv.dot(Q), InvTauEigenVecInv.dot(b)
-
-    # solution in time
-    Q_new_in_eigenbasis = exponent * (Q_in_eigenbasis + b_in_eigenbasis)
-
-    # revert to old basis
-    return InvTauEigenVec.dot(Q_new_in_eigenbasis) - b
+    # sum = Tau.dot(n_prime / Cg) / Rg
+    # #return sum - n_prime
+    n_prime = e * n + e * VxCix
+    return Conditions.matrixQnPart.dot(n_prime)
 
 
 def getWork(i, j, C_inv, curr_V):
     Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
                 (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
     return Work
-
-
-def high_impedance_p(x, mu, Temp):
-    """
-    P- function for high impedance.
-    :param x: function input (energy) == E+dE.
-    :param mu: Electrostatic energy of environment == Ec.
-    :param Temp: Temperature.
-    :return: P(x)
-    """
-    sigma_squared = 2 * mu * Temp
-    mu = -mu
-    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
-
-
-def integrand_gauss(x, temperature, value, Ec):
-    if x == 0:
-        return temperature
-    result = high_impedance_p(x + value, Ec, temperature) * x / (1 - exp(-x / temperature))
-    return result
-
-
-def make_integrand(temp1, val1, Ec1):
-    def f1(x):
-        return integrand_gauss(x, temp1, val1, Ec=Ec1)
-
-    return f1
 
 
 def integrand(T, dE, Ec):
@@ -220,16 +163,17 @@ def integrand(T, dE, Ec):
         :param T: Temperature.
         :return: P(E)*E*f_BE(-E)
         """
+
     def conv(E):
         if np.abs(E) < 1e-8:
-            zero_limit_gauss = exp(-(dE + Ec) ** 2 / (4*Ec*T))
-            return zero_limit_gauss * sqrt(T/(4*np.pi*Ec))
+            zero_limit_gauss = exp(-(dE + Ec) ** 2 / (4 * Ec * T))
+            return zero_limit_gauss * sqrt(T / (4 * np.pi * Ec))
 
-        gauss = exp(-(E + dE + Ec) ** 2 / (4*Ec*T))
-        gauss /= sqrt(np.pi * 4*Ec*T)
+        gauss = exp(-(E + dE + Ec) ** 2 / (4 * Ec * T))
+        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
 
         bose_mean = E / (1 - exp(-E / T))
 
-        return bose_mean*gauss
+        return bose_mean * gauss
 
     return conv
