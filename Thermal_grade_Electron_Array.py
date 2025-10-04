@@ -21,7 +21,7 @@ import gc
 
 # NORMAL ARRAY
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
-loop_count = 100
+loop_count = 400
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = Cond.islands
@@ -31,6 +31,8 @@ R_t_ij = Cond.R_t_ij
 R_t_i = Cond.R_t_i
 Rg = np.array([Cond.Rg] * array_size)
 Cg = np.array([Cond.Cg] * array_size)
+C_avg = np.mean(Cond.all_Cs)
+R_avg = np.mean(R_t_ij)
 default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
@@ -40,14 +42,14 @@ neg_energy_bound = -0.09  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
 # parameters
 e = Cond.e
 kB = Cond.kB
-Volts = abs(e) / Cond.C  # normalized voltage unit
-Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
+Volts = abs(e) / C_avg  # normalized voltage unit
+Amp = abs(e) / (C_avg * R_avg)  # normalized current unit
 Vright = 0
 
 # T should always be written as np.linspace(T0, T0 + row_num * T_std, row_num) prev to 12/09/25 used to be minus
 # for fixed temp take np.ones(row_num) * T
 # for some flipped gradient use np.flip(T, axis=0)
-T0 = 0.001 * e * e / (Cond.C * kB)
+T0 = 0.001 * e * e / (C_avg * kB)
 T_std = T0 / 20
 # T = np.linspace(T0, T0 + row_num * T_std, row_num)
 # T = np.flip(T, axis=0)
@@ -72,10 +74,11 @@ tablename = "table_triplets.npz"
 with open(Cond.strin, "a") as f:
     f.write("loop variables : " + str(loop_count) + "\n")
     f.write("---------------------------------------------" + "\n")
-    f.write("these are the raw variances\n")
-    f.write("Var(R_t_ij) : " + str(np.var(R_t_ij)) + "\n")
-    f.write("Var(R_t_i) : " + str(np.var(np.array(R_t_i))) + "\n")
-    f.write("Var(C) : " + str(np.var(Cond.all_Cs)) + "\n")
+    f.write("these are the raw variances and means\n")
+    f.write("<R> : " + str(R_avg) + ", std(Rt_ij) : " + str(np.std(R_t_ij)) + "\n")
+    f.write("<Rt_i> : " + str(np.mean(R_t_i)) + ", std(Rt_i) : " + str(np.std(np.array(R_t_i))) + "\n")
+    f.write("<C> : " + str(C_avg) + ", std(C) : " + str(np.std(Cond.all_Cs)) + "\n")
+    f.write("<Cix> : " + str(np.mean(Cond.side_Cs)) + ", std(Cix) : " + str(np.std(Cond.side_Cs)) + "\n")
     f.write("\n")
     f.write("Rg : " + str(Rg) + "\n")
     f.write("Cg : " + str(Cg) + "\n")
@@ -400,7 +403,7 @@ I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run / len(I_matrix)
 
-I_vec_var = I_vec_avg = np.zeros(cycles)  # errors vector
+I_vec_var = np.zeros(cycles)  # errors vector
 for run_num in range(len(I_matrix)):
     I_vec_var += np.abs(I_matrix[run_num] - I_vec_avg) ** 2 / len(I_matrix)
 
@@ -427,12 +430,12 @@ if plot:
     if not (Cond.distribute_C or Cond.distribute_R):
         plt.title("IV through ordered lattice\n" + Cond.strin)
     elif Cond.distribute_C and Cond.distribute_R:
-        plt.title(Cond.strin + "\n" + "<R> = " + str(Cond.R) + ", Rg = " + str(Cond.Rg / Cond.R) + "R, " +
-                  "<C> = " + str(Cond.C) + ", Cg = " + str(Cond.Cg / Cond.C) + "C")
+        plt.title(Cond.strin + "\n" + "<R> = " + str(R_avg) + ", Rg = " + str(Cond.Rg / R_avg) + "<R>, " +
+                  "<C> = " + str(C_avg) + ", Cg = " + str(Cond.Cg / C_avg) + "<C>")
     elif Cond.distribute_C and not Cond.distribute_R:
-        plt.title(Cond.strin + "\n" + "<C> = " + str(Cond.C) + ", Cg = " + str(Cond.Cg / Cond.C) + "C")
+        plt.title(Cond.strin + "\n" + "<C> = " + str(C_avg) + ", Cg = " + str(Cond.Cg / C_avg) + "<C>")
     elif Cond.distribute_R and not Cond.distribute_C:
-        plt.title(Cond.strin + "\n" + "<R> = " + str(Cond.R) + ", Rg = " + str(Cond.Rg / Cond.R) + "R")
+        plt.title(Cond.strin + "\n" + "<R> = " + str(R_avg) + ", Rg = " + str(Cond.Rg / R_avg) + "<R>")
     plt.legend()
-    plt.savefig(Cond.strin + ".png", dpi=900, bbox_inches='tight')
+    plt.savefig(Cond.strin + ".png", dpi=2100, bbox_inches='tight')
     plt.show()
