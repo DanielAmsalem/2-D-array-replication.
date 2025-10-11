@@ -21,7 +21,7 @@ import gc
 
 # NORMAL ARRAY
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
-loop_count = 400
+loop_count = 100
 row_num = Cond.row_num
 array_size = Cond.array_size
 islands = Cond.islands
@@ -33,11 +33,13 @@ Rg = np.array([Cond.Rg] * array_size)
 Cg = np.array([Cond.Cg] * array_size)
 C_avg = np.mean(Cond.all_Cs)
 R_avg = np.mean(R_t_ij)
+C_avg = Cond.C
+R_avg = Cond.R
 default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
-pos_energy_bound = -0.01  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.09  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
+pos_energy_bound = -0.01  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
+neg_energy_bound = -0.09  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
 
 # parameters
 e = Cond.e
@@ -77,7 +79,7 @@ with open(Cond.strin, "a") as f:
     f.write("these are the raw variances and means\n")
     f.write("<R> : " + str(R_avg) + ", std(Rt_ij) : " + str(np.std(R_t_ij)) + "\n")
     f.write("<Rt_i> : " + str(np.mean(R_t_i)) + ", std(Rt_i) : " + str(np.std(np.array(R_t_i))) + "\n")
-    f.write("<C> : " + str(C_avg) + ", std(C) : " + str(np.std(Cond.all_Cs)) + "\n")
+    f.write("<C> : " + str(np.mean(Cond.all_Cs)) + ", std(C) : " + str(np.std(Cond.all_Cs)) + "\n")
     f.write("<Cix> : " + str(np.mean(Cond.side_Cs)) + ", std(Cix) : " + str(np.std(Cond.side_Cs)) + "\n")
     f.write("\n")
     f.write("Rg : " + str(Rg) + "\n")
@@ -97,6 +99,24 @@ if os.path.exists(tablename):
     table_val = data["val"]
     table_prob = data["prob"]
     table_T = data["temp"]
+    mu = data["mu"]
+
+    T_in_file = np.unique(table_T)
+
+    # Compare with the current T, Ec
+    if F.contains_allclose(needles=np.array(T), haystack=T_in_file):
+        print("Existing table found for the current temperature list.")
+        print(f"First val: {table_val[0]}, Last val: {table_val[-1]}")
+        if np.isclose(Ec, mu):
+            print("mu = Ec = " + str(mu))
+        else:
+            print("mu = " + str(mu))
+            raise ValueError("mu doesn't match Ec")
+    else:
+        print("Existing table doesn't match T list")
+        print(T_in_file)
+        print(np.array(T))
+        raise ValueError
 
 else:
     rr = 0
@@ -106,7 +126,7 @@ else:
             for temp in T:
                 probability = quad(F.integrand(temp, val, Ec), [-1, 1])
 
-                row = np.array([val, float(probability.real), temp], dtype=np.float32)
+                row = np.array([val, float(probability.real), temp, Ec], dtype=np.float32)
                 row.tofile(f)
 
                 rr += 1
@@ -114,12 +134,14 @@ else:
                 print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)) + " -- " +
                       str(100 * rr / (len(vals_to_calc) * len(T))) + "%")
     mp.dps = 15
-    data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
+    data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 4)
+
     table_val = data[:, 0]
     table_prob = data[:, 1]
     table_T = data[:, 2]
+    mu = data[0, 3]
 
-    np.savez(tablename, val=table_val, prob=table_prob, temp=table_T)
+    np.savez(tablename, val=table_val, prob=table_prob, temp=table_T, mu=mu)
 
 t0 = time.time()
 
@@ -166,7 +188,7 @@ def Gamma_approx(dE, Temp, Rt):
     # high bound starts at dE=-0.01 and thence is 0
 
     if dE < neg_energy_bound:
-        return (-dE-Ec) * e**2 / Rt
+        return (-dE - Ec) * e ** 2 / Rt
 
     elif pos_energy_bound > dE > neg_energy_bound:
         return approximate_gamma_integral(dE, Temperature=Temp) * e ** 2 / Rt
@@ -218,7 +240,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
             dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
                               (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
 
-            # dEij must be negative for transition i->j
+            # dEij must be negative enough for transition i->j
             if dEij[i][j] < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dEij[i][j], T[0], R_t_ij[i][j])]
                 RR += Gamma_[-1]
@@ -351,32 +373,37 @@ def Get_Steady_State(V_cycle, loop_num):
 
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 5:
-                std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t)))/np.sqrt(len(Q_avg))
+
+                # convergence failsafe
+                if dist_new - dist > min(std, expected_error):
+                    not_decreasing += 1
+                    steady_state_timer = Cond.timeStep
+                    if not not_decreasing % 50000:
+                        print("error")
+                        print(k, dist_new, std)
+                        print("dist is " + str(dist_new) + " there have been: " + str(
+                            not_decreasing) + " errors, k is "
+                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                        # print("counter is " + str(zero_curr_steady_state_counter))
+                        # print("timer is " + str(time.time() - t0))
+                        error_count += 1
+                        not_in_steady_state = False
+
                 # steady state condition
-                # print(k, dist_new, std)
-                if abs(dist_new) < expected_error:
+                elif abs(dist_new) - expected_error < std < expected_error:
                     steady_state_timer -= dt
                     if steady_state_timer <= 0:
                         not_in_steady_state = False
 
-                # convergence failsafe
-                elif dist_new - dist > 0:
-                    not_decreasing += 1
+                # reset steady_state_timer
+                else:
                     steady_state_timer = Cond.timeStep
-                    if not not_decreasing % 100000:
-                        if abs(dist_new) > 0:
-                            print("error")
-                            print("dist is " + str(dist_new) + " there have been: " + str(
-                                not_decreasing) + " errors, k is "
-                                  + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                            # print("counter is " + str(zero_curr_steady_state_counter))
-                            # print("timer is " + str(time.time() - t0))
-                            error_count += 1
-                            not_in_steady_state = False
 
                 # update on convergence
                 if k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(round(std,2)) +
+                          " ; steady state timer is " + str(round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
 
             # update time
             dist = dist_new
@@ -420,6 +447,7 @@ mins = int((end_time - t0) / 60)
 print(mins)
 with open(Cond.strin, "a") as f:
     f.write("runtime : " + str(mins) + "m\n")
+    f.write("error count : " + str(error_count) + "\n")
 
 plot = True
 if plot:
@@ -430,12 +458,15 @@ if plot:
     if not (Cond.distribute_C or Cond.distribute_R):
         plt.title("IV through ordered lattice\n" + Cond.strin)
     elif Cond.distribute_C and Cond.distribute_R:
-        plt.title(Cond.strin + "\n" + "<R> = " + str(R_avg) + ", Rg = " + str(Cond.Rg / R_avg) + "<R>, " +
-                  "<C> = " + str(C_avg) + ", Cg = " + str(Cond.Cg / C_avg) + "<C>")
+        plt.title(
+            Cond.strin + "\n" + "<R> = " + str(round(R_avg, 2)) + ", Rg = " + str(round(Cond.Rg / R_avg, 2)) + "<R>, " +
+            "<C> = " + str(round(C_avg, 2)) + ", Cg = " + str(round(Cond.Cg / C_avg, 2)) + "<C>")
     elif Cond.distribute_C and not Cond.distribute_R:
-        plt.title(Cond.strin + "\n" + "<C> = " + str(C_avg) + ", Cg = " + str(Cond.Cg / C_avg) + "<C>")
+        plt.title(
+            Cond.strin + "\n" + "<C> = " + str(round(C_avg, 2)) + ", Cg = " + str(round(Cond.Cg / C_avg, 2)) + "<C>")
     elif Cond.distribute_R and not Cond.distribute_C:
-        plt.title(Cond.strin + "\n" + "<R> = " + str(R_avg) + ", Rg = " + str(Cond.Rg / R_avg) + "<R>")
+        plt.title(
+            Cond.strin + "\n" + "<R> = " + str(round(R_avg, 2)) + ", Rg = " + str(round(Cond.Rg / R_avg, 2)) + "<R>")
     plt.legend()
     plt.savefig(Cond.strin + ".png", dpi=2100, bbox_inches='tight')
     plt.show()

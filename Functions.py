@@ -22,7 +22,8 @@ def flattenToColumn(a):
 
 def neighbour_list(n, i):
     """
-    :param n: integer     :param i: integer
+    :param n: integer.
+    :param i: integer
     :return: positions of neighbours of ith position in nxn matrix
     position of denoted as [(0,...,n-1),(n...2n-1),..(n(n-1),...n^2-1)]
     """
@@ -43,7 +44,9 @@ def neighbour_list(n, i):
 
 def return_neighbours(n, I, J):
     """
-    :param n: integer  :param I: integer  :param J: integer
+    :param n: integer
+    :param I: integer
+    :param J: integer
     :return: positions of neighbours of (i,j) in nxn matrix
     """
     I, J = int(I), int(J)
@@ -119,7 +122,7 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
     return I_right, I_down
 
 
-def developQ(Q, dt, n,VxCix):
+def developQ(Q, dt, n, VxCix):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
     b = -Conditions.Tau_inv.dot(return_Qn_for_n(n, VxCix))
 
@@ -177,3 +180,11 @@ def integrand(T, dE, Ec):
         return bose_mean * gauss
 
     return conv
+
+
+def contains_allclose(needles, haystack, rtol=1e-8, atol=1e-10):
+    """Return True if every value in `needles` is close to some value in `haystack`."""
+    for t in needles:
+        if not np.any(np.isclose(t, haystack, rtol=rtol, atol=atol)):
+            return False
+    return True
