@@ -26,7 +26,7 @@ near_right = islands[(row_num - 1)::row_num]
 near_left = islands[0::row_num]
 
 if distribute_R:
-    stdR = 4.8 * R
+    stdR = 0.9 * R
     R_t_ij = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)),
                                     high=np.log2(R + stdR), size=(array_size, array_size))
     R_i = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)),
@@ -50,8 +50,8 @@ if distribute_C:
     else:
         min_val = -np.min(all_Cs) + 0.1
 
-    Ch, Cv = Ch + max(min_val, C), Cv + max(min_val, C)
-    # Ch, Cv = Ch + min_val + C, Cv + min_val + C
+    # Ch, Cv = Ch + max(min_val, C), Cv + max(min_val, C)
+    Ch, Cv = Ch + min_val + C, Cv + min_val + C
     all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
 
     Cl = np.random.normal(0, C * sig/3, size=(1, array_size))
@@ -62,8 +62,8 @@ if distribute_C:
         pass
     else:
         min_val = -np.min(side_Cs) + 0.1
-    Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
-    # Cl, Cr = Cl + min_val + C, Cr + min_val + C/2
+    # Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
+    Cl, Cr = Cl + min_val + C, Cr + min_val + C/2
     side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
 
     Cix = np.zeros(array_size)

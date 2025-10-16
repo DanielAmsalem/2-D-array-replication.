@@ -1,4 +1,12 @@
+from concurrent.futures import ProcessPoolExecutor, wait, as_completed
+from dataclasses import dataclass
+from functools import partial
+
 import numpy as np
+import matplotlib
+
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 import Functions as F
 import Conditions as Cond
 import copy
@@ -8,44 +16,49 @@ import os
 import sys
 import csv
 import bisect
+import math
 import gc
 
 # NORMAL ARRAY
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
-
-# Conditions
-loops = 400
+loop_count = 100
 row_num = Cond.row_num
 array_size = Cond.array_size
-islands = list(range(array_size))
+islands = Cond.islands
 near_left = Cond.near_left
 near_right = Cond.near_right
 R_t_ij = Cond.R_t_ij
 R_t_i = Cond.R_t_i
 Rg = np.array([Cond.Rg] * array_size)
 Cg = np.array([Cond.Cg] * array_size)
+C_avg = np.mean(Cond.all_Cs)
+R_avg = np.mean(R_t_ij)
+C_avg = Cond.C
+R_avg = Cond.R
 default_dt = Cond.default_dt
 Tau = Cond.Tau
 C_inv = Cond.C_inverse
-taylor_limit = 0.0001
-pos_energy_bound = -0.02  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
-neg_energy_bound = -0.07  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
+pos_energy_bound = -0.01  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
+neg_energy_bound = -0.09  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
+max_count = 50000
 
 # parameters
 e = Cond.e
 kB = Cond.kB
-Volts = abs(e) / Cond.C  # normalized voltage unit
-Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
+Volts = abs(e) / C_avg  # normalized voltage unit
+Amp = abs(e) / (C_avg * R_avg)  # normalized current unit
 Vright = 0
-# Temperature should always be written as np.linspace(T0, T0 - row_num * T_std, row_num)
+
+# T should always be written as np.linspace(T0, T0 + row_num * T_std, row_num) prev to 12/09/25 used to be minus
 # for fixed temp take np.ones(row_num) * T
 # for some flipped gradient use np.flip(T, axis=0)
-T0 = 0.001 * e * e / (Cond.C * kB)
+T0 = 0.001 * e * e / (C_avg * kB)
 T_std = T0 / 20
-T = 1 * np.linspace(T0, T0 - row_num * T_std, row_num)
-#T = np.flip(T, axis=0)
-#T = np.ones(row_num) * T0*10
-Ec = e ** 2 / (2 * np.mean(Cg))
+# T = np.linspace(T0, T0 + row_num * T_std, row_num)
+# T = np.flip(T, axis=0)
+# T = np.ones(row_num) * T0
+T = [T0]
+Ec = 1 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
@@ -59,58 +72,52 @@ vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_
 table_val = []  # list of dE values
 table_prob = []  # list of gamma(dE) values
 table_T = []  # list of temps
-table_row = []
 tablename = "table_triplets.npz"
 
 with open(Cond.strin, "a") as f:
-    f.write("loops : " + str(loops) + "\n")
-    f.write("Var(R_t_ij) : " + str(np.var(R_t_ij) / (len(R_t_ij))) + "\n")
-    f.write("Var(R_t_i) : " + str(np.var(np.array(R_t_i)) / len(R_t_i)) + "\n")
+    f.write("loop variables : " + str(loop_count) + "\n")
+    f.write("---------------------------------------------" + "\n")
+    f.write("these are the raw variances and means\n")
+    f.write("<R> : " + str(R_avg) + ", std(Rt_ij) : " + str(np.std(R_t_ij)) + "\n")
+    f.write("<Rt_i> : " + str(np.mean(R_t_i)) + ", std(Rt_i) : " + str(np.std(np.array(R_t_i))) + "\n")
+    f.write("<C> : " + str(np.mean(Cond.all_Cs)) + ", std(C) : " + str(np.std(Cond.all_Cs)) + "\n")
+    f.write("<Cix> : " + str(np.mean(Cond.side_Cs)) + ", std(Cix) : " + str(np.std(Cond.side_Cs)) + "\n")
+    f.write("\n")
     f.write("Rg : " + str(Rg) + "\n")
     f.write("Cg : " + str(Cg) + "\n")
     f.write("default_dt : " + str(default_dt) + "\n")
     f.write("T0 : " + str(T0) + "\n")
     f.write("T_std : " + str(T_std) + "\n")
     f.write("T : " + str(T) + "\n")
-    f.write("-------------------------------------" + "\n")
+    f.write("---------------------------------------------" + "\n")
     f.write("steady_state_rep : " + str(Steady_state_rep) + "\n")
     f.write("expected_error : " + str(expected_error) + "\n")
     f.write("error_count : " + str(error_count) + "\n")
     f.write("resolution : " + str(resolution) + "\n")
-
-
-def high_impedance_p(x, mu, Temp):
-    """
-    P- function for high impedance.
-    :param x: function input (energy) == E+dE.
-    :param mu: Electrostatic energy of environment == Ec.
-    :param Temp: Temperature.
-    :return: P(x)
-    """
-    sigma_squared = 2 * mu * Temp
-    mu = -mu
-    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
-
-
-def integrand_gauss(x, temperature, mu):
-    if x == 0:
-        return temperature
-    result = high_impedance_p(x + val, mu, temperature) * x / (1 - exp(-x / temperature))
-    return result
-
-
-def make_integrand(temp1, val1):
-    def f1(x):
-        return integrand_gauss(x, temp1, val1)
-
-    return f1
-
 
 if os.path.exists(tablename):
     data = np.load(tablename)
     table_val = data["val"]
     table_prob = data["prob"]
     table_T = data["temp"]
+    mu = data["mu"]
+
+    T_in_file = np.unique(table_T)
+
+    # Compare with the current T, Ec
+    if F.contains_allclose(needles=np.array(T), haystack=T_in_file):
+        print("Existing table found for the current temperature list.")
+        print(f"First val: {table_val[0]}, Last val: {table_val[-1]}")
+        if np.isclose(Ec, mu):
+            print("mu = Ec = " + str(mu))
+        else:
+            print("mu = " + str(mu))
+            raise ValueError("mu doesn't match Ec")
+    else:
+        print("Existing table doesn't match T list")
+        print(T_in_file)
+        print(np.array(T))
+        raise ValueError
 
 else:
     rr = 0
@@ -118,21 +125,24 @@ else:
     with open("table_triplets.bin", "wb") as f:
         for val in vals_to_calc:
             for temp in T:
-                probability = quad(make_integrand(temp, val), [-val - 0.1, -val + 0.1])
+                probability = quad(F.integrand(temp, val, Ec), [-1, 1])
 
-                row = np.array([val, float(probability.real), temp], dtype=np.float32)
+                row = np.array([val, float(probability.real), temp, Ec], dtype=np.float32)
                 row.tofile(f)
 
                 rr += 1
 
-                print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)))
+                print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)) + " -- " +
+                      str(100 * rr / (len(vals_to_calc) * len(T))) + "%")
     mp.dps = 15
-    data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
+    data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 4)
+
     table_val = data[:, 0]
     table_prob = data[:, 1]
     table_T = data[:, 2]
+    mu = data[0, 3]
 
-    np.savez(tablename, val=table_val, prob=table_prob, temp=table_T)
+    np.savez(tablename, val=table_val, prob=table_prob, temp=table_T, mu=mu)
 
 t0 = time.time()
 
@@ -142,10 +152,14 @@ def approximate_gamma_integral(dE, Temperature):
     global table_prob
     global table_T
 
-    temp_idx = np.where(np.flip(T, axis=0) == Temperature)[0][0]
+    # for flipped
+    # temp_idx = np.where(np.flip(T, axis=0) == Temperature)[0][0]
+    temp_idx = 0  # for constant
 
-    sorted_vals = table_val[temp_idx::len(T)]
-    probs = table_prob[temp_idx::len(T)]
+    #sorted_vals = table_val[temp_idx::len(T)]
+    #probs = table_prob[temp_idx::len(T)]
+    sorted_vals = table_val
+    probs = table_prob
 
     idx = bisect.bisect_left(sorted_vals, dE)
 
@@ -170,13 +184,13 @@ def approximate_gamma_integral(dE, Temperature):
 def Gamma_approx(dE, Temp, Rt):
     global Ec
     global e
-    s = np.sqrt(2 * Ec * Temp)
 
-    # low bound starts at dE=-0.07 from thence is analytical
-    # high bound starts at dE=-0.02 from thence is 0
+    # low bound starts at dE=-0.09 and thence is analytically the mean of a gaussian
+    # high bound starts at dE=-0.01 and thence is 0
 
     if dE < neg_energy_bound:
-        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e ** 2) / Rt
+        return (-dE - Ec) * e ** 2 / Rt
+
     elif pos_energy_bound > dE > neg_energy_bound:
         return approximate_gamma_integral(dE, Temperature=Temp) * e ** 2 / Rt
     else:
@@ -227,9 +241,9 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
             dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
                               (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
 
-            # dEij must be negative for transition i->j
+            # dEij must be negative enough for transition i->j
             if dEij[i][j] < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dEij[i][j], T[i % row_num], R_t_ij[i][j])]
+                Gamma_ += [Gamma_approx(dEij[i][j], T[0], R_t_ij[i][j])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(i, j)]
 
@@ -240,7 +254,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_left, T[i % row_num], R_t_i[isle])]
+            Gamma_ += [Gamma_approx(dE_left, T[0], R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -250,7 +264,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_left, T[i % row_num], R_t_i[isle])]
+                Gamma_ += [Gamma_approx(dE_left, T[0], R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -261,7 +275,7 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # rate for V_right->i
         if dE_right < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_right, T[i % row_num], R_t_i[isle])]
+            Gamma_ += [Gamma_approx(dE_right, T[0], R_t_i[isle])]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -272,14 +286,14 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
             # rate for i->V_right
             if dE_right < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_right, T[i % row_num], R_t_i[isle])]
+                Gamma_ += [Gamma_approx(dE_right, T[0], R_t_i[isle])]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
     return Gamma_, RR, reaction_index_
 
 
-def Get_Steady_State(V_cycle):
+def Get_Steady_State(V_cycle, loop_num):
     global error_count
 
     # general Charge distribution vectors
@@ -293,7 +307,13 @@ def Get_Steady_State(V_cycle):
     for cycle in range(cycles):
 
         cycle_voltage = float(V_cycle[cycle])
-        print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
+        print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop_num))
+        if cycle_voltage == 0:
+            time_now = time.time()
+            time_running = int(time_now - t0) / 60
+            time_left = (loop_count - loop_num - 1) * time_running / (loop_num + 1)
+            print("time running : " + str(time_running))
+            print("time left : " + str(time_left))
 
         k = 0
         zero_curr_steady_state_counter = 0
@@ -302,7 +322,7 @@ def Get_Steady_State(V_cycle):
         # starting conditions
         not_in_steady_state = True
         t = 0
-        steady_state_timer = 5 * Cond.default_dt  #steady state fixed time
+        steady_state_timer = Cond.timeStep  # steady state fixed time
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -319,8 +339,10 @@ def Get_Steady_State(V_cycle):
             Gamma, R, reaction_index = Get_Gamma(Gamma, R, reaction_index, n, V, cycle_voltage)
 
             # transition occurred, limit for R is the typical ground drain current
-            if R > abs(cycle_voltage / (e * Cond.Rg)):
+            if R > cycle_voltage / Cond.Rg:
+                # reset zero curr steady state detection
                 zero_curr_steady_state_counter = 0
+
                 # typical interaction time
                 dt = float(np.log(1 / np.random.random()) / R)
                 if dt < 0:
@@ -340,10 +362,7 @@ def Get_Steady_State(V_cycle):
             I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
-            Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
-                            n, Cond.InvTauEigenVectorsInv,
-                            Cond.Tau_inv, C_inv, VxCix,
-                            Rg, Tau, Cg, Cond.matrixQnPart)
+            Qg = F.developQ(Qg, dt, n, VxCix)
 
             # update statistics
             I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
@@ -351,45 +370,36 @@ def Get_Steady_State(V_cycle):
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
             # calculate distance from steady state:
-            steady_Q = F.return_Qn_for_n(n_avg, VxCix, Cg, Rg, Tau)
+            steady_Q = F.return_Qn_for_n(n_avg, VxCix)
             dist_new = np.max(np.abs(steady_Q - Q_avg))
             max_diff_index = np.argmax(dist_new)
 
             # check if distance from steady state is larger than the last by more than the allowed error
-            dist_info = False
             if k > 5:
-                std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
-                # steady state condition
-                # print(k, dist_new, std)
-                if abs(dist_new) < expected_error:
-                    if dist_info:
-                        print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                        # print("counter is " + str(zero_curr_steady_state_counter))
-                        # print("timer is " + str(time.time() - t0))
-                        print(steady_state_timer, dt)
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t)))/np.sqrt(len(Q_avg))
 
+                if dist_new - dist > min(std, expected_error):
+                    not_decreasing += 1
+                    steady_state_timer = Cond.timeStep
+                    if not not_decreasing % max_count:
+                        error_count += 1
+                        not_in_steady_state = False
+
+                # steady state conditions
+                elif abs(dist_new) - expected_error < std < expected_error or abs(dist_new) < expected_error:
                     steady_state_timer -= dt
                     if steady_state_timer <= 0:
                         not_in_steady_state = False
 
-                # convergence failsafe
-                if dist_new - dist > 0:
-                    not_decreasing += 1
-                    if not not_decreasing % 100000:
-                        if abs(dist_new) > 0:
-                            print("error")
-                            print("dist is " + str(dist_new) + " there have been: " + str(
-                                not_decreasing) + " errors, k is "
-                                  + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                            #print("counter is " + str(zero_curr_steady_state_counter))
-                            #print("timer is " + str(time.time() - t0))
-                            error_count += 1
-                            not_in_steady_state = False
+                # reset steady_state_timer
+                else:
+                    steady_state_timer = Cond.timeStep
 
                 # update on convergence
-                elif k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
+                if k % 10000 == 0:
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(round(std,3)) +
+                          " ; steady state timer is " + str(round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
+                    print("at " + str(cycle_voltage / Volts) + " loop:" + str(loop_num))
 
             # update time
             dist = dist_new
@@ -401,33 +411,36 @@ def Get_Steady_State(V_cycle):
 
 # implements increasing\decreasing choice
 steps = 100
-V_diff = 3
+V_diff = 4
 Vleft = np.linspace(Vright * Volts, (Vright + V_diff) * Volts, num=steps)
 V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
 
 # results matrix, ith column has the ith loop, jth row is the jth step of voltage
 cycles = len(V_doubled)
-I_matrix = np.zeros((loops, cycles))
+I_matrix = np.zeros((loop_count, cycles))
 
-for loop in range(loops):
-    I_vec = Get_Steady_State(V_doubled)
-    I_matrix[loop] = I_vec
+for loop in range(loop_count):
+    I_matrix[loop] = Get_Steady_State(V_doubled, loop)
 
 I_vec_avg = np.zeros(cycles)  # results vector
 for run in I_matrix:
     I_vec_avg += run / len(I_matrix)
 
-I_vec_var = I_vec_avg = np.zeros(cycles)  # errors vector
+I_vec_var = np.zeros(cycles)  # errors vector
 for run_num in range(len(I_matrix)):
     I_vec_var += np.abs(I_matrix[run_num] - I_vec_avg) ** 2 / len(I_matrix)
 
 I_vec_std = np.sqrt(I_vec_var)
 # w+ truncates file
-with open("book.csv", "w+") as f:
+with open("book" + Cond.strin + ".csv", "w+") as f:
     file = csv.writer(f)
     for row in range(len(V_doubled)):
         to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp), float(I_vec_std[row] / Amp)]
         file.writerow(to_write)
 
 end_time = time.time()
-print(int(end_time - t0) / 60)
+mins = int((end_time - t0) / 60)
+print(mins)
+with open(Cond.strin, "a") as f:
+    f.write("runtime : " + str(mins) + "m\n")
+    f.write("error count : " + str(error_count) + "\n")

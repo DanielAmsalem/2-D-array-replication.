@@ -40,6 +40,7 @@ Tau = Cond.Tau
 C_inv = Cond.C_inverse
 pos_energy_bound = -0.01  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
 neg_energy_bound = -0.09  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
+max_count = 50000
 
 # parameters
 e = Cond.e
@@ -339,7 +340,9 @@ def Get_Steady_State(V_cycle, loop_num):
 
             # transition occurred, limit for R is the typical ground drain current
             if R > cycle_voltage / Cond.Rg:
+                # reset zero curr steady state detection
                 zero_curr_steady_state_counter = 0
+
                 # typical interaction time
                 dt = float(np.log(1 / np.random.random()) / R)
                 if dt < 0:
@@ -375,11 +378,10 @@ def Get_Steady_State(V_cycle, loop_num):
             if k > 5:
                 std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t)))/np.sqrt(len(Q_avg))
 
-                # convergence failsafe
                 if dist_new - dist > min(std, expected_error):
                     not_decreasing += 1
                     steady_state_timer = Cond.timeStep
-                    if not not_decreasing % 50000:
+                    if not not_decreasing % max_count:
                         print("error")
                         print(k, dist_new, std)
                         print("dist is " + str(dist_new) + " there have been: " + str(
@@ -390,8 +392,8 @@ def Get_Steady_State(V_cycle, loop_num):
                         error_count += 1
                         not_in_steady_state = False
 
-                # steady state condition
-                elif abs(dist_new) - expected_error < std < expected_error:
+                # steady state conditions
+                elif abs(dist_new) - expected_error < std < expected_error or abs(dist_new) < expected_error:
                     steady_state_timer -= dt
                     if steady_state_timer <= 0:
                         not_in_steady_state = False
@@ -402,7 +404,7 @@ def Get_Steady_State(V_cycle, loop_num):
 
                 # update on convergence
                 if k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(round(std,2)) +
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(round(std,3)) +
                           " ; steady state timer is " + str(round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
 
             # update time
