@@ -1,11 +1,8 @@
 import numpy as np
-from mpmath import quad, ninf, inf, mp, exp, sqrt
-
-import Conditions
+from mpmath import exp, sqrt
 
 # parameters
-kB = Conditions.kB
-e = Conditions.e
+from models import ExperimentInitialState
 
 
 # for debugging Warnings may set np.seterr(all='raise')
@@ -63,7 +60,7 @@ def return_neighbours(n, I, J):
     return neighbours
 
 
-def getVoltage(n, Qg, C_inverse, VxCix):
+def getVoltage(n, Qg, C_inverse, VxCix, e):
     return np.dot(C_inverse, e * n + e * VxCix - Qg)
 
 
@@ -122,24 +119,29 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
     return I_right, I_down
 
 
-def developQ(Q, dt, n, VxCix):
+def developQ(Q, dt, n, VxCix, init_state: ExperimentInitialState):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
-    b = -Conditions.Tau_inv.dot(return_Qn_for_n(n, VxCix))
+    b = -init_state.Tau_inv.dot(return_Qn_for_n(n, VxCix, init_state))
 
     # exponent for time step
-    exponent = np.exp(Conditions.InvTauEigenValues * dt)
+    exponent = np.exp(init_state.InvTauEigenValues * dt)
 
     # basis change
-    Q_in_eigenbasis, b = Conditions.InvTauEigenVectorsInv.dot(Q), Conditions.InvTauEigenVectorsInv.dot(b)
+    Q_in_eigenbasis, b = (
+        init_state.InvTauEigenVectorsInv.dot(Q),
+        init_state.InvTauEigenVectorsInv.dot(b),
+    )
 
     # solution in time
-    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / Conditions.InvTauEigenValues) * (exponent - 1)
+    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (
+            b / init_state.InvTauEigenValues
+    ) * (exponent - 1)
 
     # revert to old basis
-    return Conditions.InvTauEigenVectors.dot(Q_new_in_eigenbasis)
+    return init_state.InvTauEigenVectors.dot(Q_new_in_eigenbasis)
 
 
-def return_Qn_for_n(n, VxCix):
+def return_Qn_for_n(n, VxCix, init_state: ExperimentInitialState):
     """
     returns Qn for given n vector of array (NxN)
     :param n: (1,N) numpy array
@@ -148,31 +150,39 @@ def return_Qn_for_n(n, VxCix):
     """
     # sum = Tau.dot(n_prime / Cg) / Rg
     # #return sum - n_prime
-    n_prime = e * n + e * VxCix
-    return Conditions.matrixQnPart.dot(n_prime)
+    n_prime = init_state.e * n + init_state.e * VxCix
+    return init_state.matrixQnPart.dot(n_prime)
 
 
-def getWork(i, j, C_inv, curr_V):
-    Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] -
-                (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
+def getWork(i, j, C_inv, curr_V, e):
+    Work = (
+            e
+            * (
+                    2 * curr_V[j]
+                    + e * C_inv[j][i]
+                    - e * C_inv[j][j]
+                    - (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])
+            )
+            / 2
+    )
     return Work
 
 
 def integrand(T, dE, Ec):
     """
-        P- function for high impedance.
-        :param dE: Energy difference == dE.
-        :param Ec: Electrostatic energy of environment == Ec.
-        :param T: Temperature.
-        :return: P(E)*E*f_BE(-E)
-        """
+    P- function for high impedance.
+    :param dE: Energy difference == dE.
+    :param Ec: Electrostatic energy of environment == Ec.
+    :param T: Temperature.
+    :return: P(E)*E*f_BE(-E)
+    """
 
     def conv(E):
         if np.abs(E) < 1e-8:
-            zero_limit_gauss = exp(-(dE + Ec) ** 2 / (4 * Ec * T))
+            zero_limit_gauss = exp(-((dE + Ec) ** 2) / (4 * Ec * T))
             return zero_limit_gauss * sqrt(T / (4 * np.pi * Ec))
 
-        gauss = exp(-(E + dE + Ec) ** 2 / (4 * Ec * T))
+        gauss = exp(-((E + dE + Ec) ** 2) / (4 * Ec * T))
         gauss = gauss / sqrt(np.pi * 4 * Ec * T)
 
         bose_mean = E / (1 - exp(-E / T))
@@ -188,3 +198,12 @@ def contains_allclose(needles, haystack, rtol=1e-8, atol=1e-10):
         if not np.any(np.isclose(t, haystack, rtol=rtol, atol=atol)):
             return False
     return True
+
+
+def VxCix(Vl, Vr, array_size, near_left, near_right, Cix):
+    _VxCix = np.zeros(array_size)
+    for u in near_left:
+        _VxCix[u] = Cix[u] * Vl
+    for u in near_right:
+        _VxCix[u] = Cix[u] * Vr
+    return np.array(_VxCix)

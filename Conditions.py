@@ -22,20 +22,28 @@ Cg_list = [Cg] * array_size
 Rg_list = [Rg] * array_size
 tg = Cg * Rg
 
-near_right = islands[(row_num - 1)::row_num]
+near_right = islands[(row_num - 1) :: row_num]
 near_left = islands[0::row_num]
 
 if distribute_R:
     stdR = 0.9 * R
-    R_t_ij = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)),
-                                    high=np.log2(R + stdR), size=(array_size, array_size))
-    R_i = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)),
-                                 high=np.log2(R + stdR), size=array_size)
-    R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
+    R_t_ij = 2 ** np.random.uniform(
+        low=np.log2(max(R - stdR, 0.01)),
+        high=np.log2(R + stdR),
+        size=(array_size, array_size),
+    )
+    R_i = 2 ** np.random.uniform(
+        low=np.log2(max(R - stdR, 0.01)), high=np.log2(R + stdR), size=array_size
+    )
+    R_t_i = [
+        val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)
+    ]
 else:
     R_t_ij = np.full((array_size, array_size), R)
     R_i = np.full(array_size, R)
-    R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
+    R_t_i = [
+        val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)
+    ]
 
 # Capacitance Cond
 Cix = np.zeros(array_size)
@@ -54,8 +62,8 @@ if distribute_C:
     Ch, Cv = Ch + min_val + C, Cv + min_val + C
     all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
 
-    Cl = np.random.normal(0, C * sig/3, size=(1, array_size))
-    Cr = np.random.normal(0, C * sig/3, size=(1, array_size))
+    Cl = np.random.normal(0, C * sig / 3, size=(1, array_size))
+    Cr = np.random.normal(0, C * sig / 3, size=(1, array_size))
 
     side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
     if np.all(side_Cs >= 0):
@@ -63,7 +71,7 @@ if distribute_C:
     else:
         min_val = -np.min(side_Cs) + 0.1
     # Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
-    Cl, Cr = Cl + min_val + C, Cr + min_val + C/2
+    Cl, Cr = Cl + min_val + C, Cr + min_val + C / 2
     side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
 
     Cix = np.zeros(array_size)
@@ -85,7 +93,7 @@ else:
     for i in near_left:
         Cix[i] = np.random.normal(C, 0)
     for i in near_right:
-        Cix[i] = np.random.normal(C/2, 0)
+        Cix[i] = np.random.normal(C / 2, 0)
 
 diagonal = Ch[:, :-1] + Ch[:, 1:] + Cv[:-1, :] + Cv[1:, :]
 second_diagonal = np.copy(Ch[:, 1:])
@@ -93,8 +101,13 @@ second_diagonal[:, -1] = 0
 second_diagonal = second_diagonal.flatten()
 second_diagonal = second_diagonal[:-1]
 n_diagonal = np.copy(Cv[1:-1, :])
-C_mat = np.diagflat(diagonal) - np.diagflat(second_diagonal, k=1) - np.diagflat(second_diagonal, k=-1) - \
-        np.diagflat(n_diagonal, k=row_num) - np.diagflat(n_diagonal, k=-row_num)
+C_mat = (
+    np.diagflat(diagonal)
+    - np.diagflat(second_diagonal, k=1)
+    - np.diagflat(second_diagonal, k=-1)
+    - np.diagflat(n_diagonal, k=row_num)
+    - np.diagflat(n_diagonal, k=-row_num)
+)
 C_inverse = np.linalg.inv(C_mat)  # define inverse
 
 

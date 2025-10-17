@@ -8,13 +8,15 @@ def high_impedance_p(x, mu, Temp):
     """
     sigma_squared = 2 * mu * Temp
     mu = -mu
-    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
+    return exp(-((x - mu) ** 2) / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
 def integrand_gauss(x, temperature, value, Ec):
     if x == 0:
         return temperature
-    result = high_impedance_p(x + value, Ec, temperature) * x / (1 - exp(-x / temperature))
+    result = (
+        high_impedance_p(x + value, Ec, temperature) * x / (1 - exp(-x / temperature))
+    )
     return result
 
 

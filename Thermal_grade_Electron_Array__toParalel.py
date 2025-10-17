@@ -20,6 +20,7 @@ import bisect
 # NORMAL ARRAY
 # os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
+
 @dataclass
 class Tables:
     # Conditions
@@ -66,11 +67,27 @@ class Tables:
     table_T: list
 
 
-def parameterize(pos_energy_bound, neg_energy_bound, loop_count, R_t_ij, R_t_i, Rg, Cg, default_dt, T0, T_std, T,
-                 Steady_state_rep, expected_error, Ec):
+def parameterize(
+    pos_energy_bound,
+    neg_energy_bound,
+    loop_count,
+    R_t_ij,
+    R_t_i,
+    Rg,
+    Cg,
+    default_dt,
+    T0,
+    T_std,
+    T,
+    Steady_state_rep,
+    expected_error,
+    Ec,
+):
     resolution = 0.000001
     num_of_calc = (pos_energy_bound - neg_energy_bound) / resolution
-    vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
+    vals_to_calc = np.linspace(
+        pos_energy_bound, neg_energy_bound, num=round(num_of_calc)
+    )
 
     tablename = "table_triplets.npz"
 
@@ -104,13 +121,22 @@ def parameterize(pos_energy_bound, neg_energy_bound, loop_count, R_t_ij, R_t_i, 
                 for temp in T:
                     probability = quad(F.integrand(temp, val, Ec), [-1, 1])
 
-                    row = np.array([val, float(probability.real), temp], dtype=np.float32)
+                    row = np.array(
+                        [val, float(probability.real), temp], dtype=np.float32
+                    )
                     row.tofile(f)
 
                     rr += 1
 
-                    print("done " + str(rr) + "out of" + str(len(vals_to_calc) * len(T)) + " -- " +
-                          str(100 * rr / (len(vals_to_calc) * len(T))) + "%")
+                    print(
+                        "done "
+                        + str(rr)
+                        + "out of"
+                        + str(len(vals_to_calc) * len(T))
+                        + " -- "
+                        + str(100 * rr / (len(vals_to_calc) * len(T)))
+                        + "%"
+                    )
         mp.dps = 15
         data = np.fromfile("table_triplets.bin", dtype=np.float32).reshape(-1, 3)
         table_val = data[:, 0]
@@ -122,13 +148,18 @@ def parameterize(pos_energy_bound, neg_energy_bound, loop_count, R_t_ij, R_t_i, 
     return time.time()
 
 
-def approximate_gamma_integral(dE, Temperature, table_val, table_prob, ):
+def approximate_gamma_integral(
+    dE,
+    Temperature,
+    table_val,
+    table_prob,
+):
     # for flipped
     # temp_idx = np.where(np.flip(T, axis=0) == Temperature)[0][0]
     temp_idx = 0  # for constant
 
-    #sorted_vals = table_val[temp_idx::len(T)]
-    #probs = table_prob[temp_idx::len(T)]
+    # sorted_vals = table_val[temp_idx::len(T)]
+    # probs = table_prob[temp_idx::len(T)]
     sorted_vals = table_val
     probs = table_prob
 
@@ -152,16 +183,18 @@ def approximate_gamma_integral(dE, Temperature, table_val, table_prob, ):
             return probs[idx]
 
 
-def Gamma_approx(dE, Temp, Rt, neg_energy_bound, pos_energy_bound, Ec, e, table_val, table_prob):
+def Gamma_approx(
+    dE, Temp, Rt, neg_energy_bound, pos_energy_bound, Ec, e, table_val, table_prob
+):
     s = np.sqrt(2 * Ec * Temp)
 
     # low bound starts at dE=-0.07 from thence is analytical
     # high bound starts at dE=-0.02 from thence is 0
 
     if dE < neg_energy_bound:
-        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e ** 2) / Rt
+        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e**2) / Rt
     elif pos_energy_bound > dE > neg_energy_bound:
-        return approximate_gamma_integral(dE, Temp, table_val, table_prob) * e ** 2 / Rt
+        return approximate_gamma_integral(dE, Temp, table_val, table_prob) * e**2 / Rt
     else:
         raise ValueError
 
@@ -193,9 +226,29 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_, e):
     return n_list, ll, mm, rate
 
 
-def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_,
-              array_size, islands, C_inv, pos_energy_bound, neg_energy_bound, T, R_t_ij,
-              near_left, near_right, R_t_i, Vright, e, Ec, table_val, table_prob):
+def Get_Gamma(
+    Gamma_,
+    RR,
+    reaction_index_,
+    n_list,
+    curr_V,
+    cycle_voltage_,
+    array_size,
+    islands,
+    C_inv,
+    pos_energy_bound,
+    neg_energy_bound,
+    T,
+    R_t_ij,
+    near_left,
+    near_right,
+    R_t_i,
+    Vright,
+    e,
+    Ec,
+    table_val,
+    table_prob,
+):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
 
@@ -209,36 +262,81 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_,
         neighbour_list = F.neighbour_list(Cond.row_num, i)
         for j in neighbour_list:
             # calculate energy difference due to transition
-            dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
-                              (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
+            dEij[i][j] = (
+                e
+                * (
+                    2 * curr_V[j]
+                    - e * C_inv[j][i]
+                    + e * C_inv[j][j]
+                    - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
+                )
+                / 2
+            )
 
             # dEij must be negative for transition i->j
             if dEij[i][j] < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dEij[i][j], T[0], R_t_ij[i][j], neg_energy_bound, pos_energy_bound,
-                                        Ec=Ec, e=e, table_val=table_val, table_prob=table_prob)]
+                Gamma_ += [
+                    Gamma_approx(
+                        dEij[i][j],
+                        T[0],
+                        R_t_ij[i][j],
+                        neg_energy_bound,
+                        pos_energy_bound,
+                        Ec=Ec,
+                        e=e,
+                        table_val=table_val,
+                        table_prob=table_prob,
+                    )
+                ]
                 RR += Gamma_[-1]
                 reaction_index_ += [(i, j)]
 
     # left electrode to island transition:
     for isle in near_left:
         # for ith transition from electrode
-        dE_left = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        dE_left = (
+            (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        )
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_left, T[0], R_t_i[isle], neg_energy_bound, pos_energy_bound,
-                                    Ec=Ec, e=e, table_val=table_val, table_prob=table_prob)]
+            Gamma_ += [
+                Gamma_approx(
+                    dE_left,
+                    T[0],
+                    R_t_i[isle],
+                    neg_energy_bound,
+                    pos_energy_bound,
+                    Ec=Ec,
+                    e=e,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                )
+            ]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
-            dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
+            dE_left = (
+                (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
+            )
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_left, T[0], R_t_i[isle], neg_energy_bound, pos_energy_bound,
-                                        Ec=Ec, e=e, table_val=table_val, table_prob=table_prob)]
+                Gamma_ += [
+                    Gamma_approx(
+                        dE_left,
+                        T[0],
+                        R_t_i[isle],
+                        neg_energy_bound,
+                        pos_energy_bound,
+                        Ec=Ec,
+                        e=e,
+                        table_val=table_val,
+                        table_prob=table_prob,
+                    )
+                ]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
@@ -249,8 +347,19 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_,
 
         # rate for V_right->i
         if dE_right < pos_energy_bound:
-            Gamma_ += [Gamma_approx(dE_right, T[0], R_t_i[isle], neg_energy_bound, pos_energy_bound,
-                                    Ec=Ec, e=e, table_val=table_val, table_prob=table_prob)]
+            Gamma_ += [
+                Gamma_approx(
+                    dE_right,
+                    T[0],
+                    R_t_i[isle],
+                    neg_energy_bound,
+                    pos_energy_bound,
+                    Ec=Ec,
+                    e=e,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                )
+            ]
             RR += Gamma_[-1]
             reaction_index_ += [(isle, "from")]
 
@@ -261,17 +370,52 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_,
 
             # rate for i->V_right
             if dE_right < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_right, T[0], R_t_i[isle], neg_energy_bound, pos_energy_bound,
-                                        Ec=Ec, e=e, table_val=table_val, table_prob=table_prob)]
+                Gamma_ += [
+                    Gamma_approx(
+                        dE_right,
+                        T[0],
+                        R_t_i[isle],
+                        neg_energy_bound,
+                        pos_energy_bound,
+                        Ec=Ec,
+                        e=e,
+                        table_val=table_val,
+                        table_prob=table_prob,
+                    )
+                ]
                 RR += Gamma_[-1]
                 reaction_index_ += [(isle, "to")]
 
     return Gamma_, RR, reaction_index_
 
 
-def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C_inv, default_dt, Steady_state_rep,
-                     near_left, near_right, expected_error, timeStep, error_count, e, islands, pos_energy_bound,
-                     neg_energy_bound, T, R_t_ij, R_t_i, Ec, table_val, table_prob):
+def Get_Steady_State(
+    V_cycle,
+    loop_num,
+    cycles,
+    t0,
+    array_size,
+    Volts,
+    Vright,
+    C_inv,
+    default_dt,
+    Steady_state_rep,
+    near_left,
+    near_right,
+    expected_error,
+    timeStep,
+    error_count,
+    e,
+    islands,
+    pos_energy_bound,
+    neg_energy_bound,
+    T,
+    R_t_ij,
+    R_t_i,
+    Ec,
+    table_val,
+    table_prob,
+):
     # general Charge distribution vectors
     Qg, Q_avg, Q_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
     n, n_avg, n_var = np.zeros(array_size), np.zeros(array_size), np.zeros(array_size)
@@ -281,7 +425,6 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
     I_vec = np.zeros(cycles)
 
     for cycle in range(cycles):
-
         cycle_voltage = float(V_cycle[cycle])
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop_num))
         if cycle_voltage == 0:
@@ -308,9 +451,29 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
             reaction_index = []
             Gamma = []
 
-            Gamma, R, reaction_index = Get_Gamma(Gamma, R, reaction_index, n, V, cycle_voltage, array_size, islands,
-                                                 C_inv, pos_energy_bound, neg_energy_bound, T, R_t_ij, near_left,
-                                                 near_right, R_t_i, Vright, e, Ec, table_val, table_prob)
+            Gamma, R, reaction_index = Get_Gamma(
+                Gamma,
+                R,
+                reaction_index,
+                n,
+                V,
+                cycle_voltage,
+                array_size,
+                islands,
+                C_inv,
+                pos_energy_bound,
+                neg_energy_bound,
+                T,
+                R_t_ij,
+                near_left,
+                near_right,
+                R_t_i,
+                Vright,
+                e,
+                Ec,
+                table_val,
+                table_prob,
+            )
 
             # transition occurred, limit for R is the typical ground drain current
             if e * R > 1 / Cond.tg:
@@ -321,17 +484,24 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
                     raise ValueError
 
                 # picking a specific transition
-                n, l, m, chosen_rate = execute_transition(Gamma, n, R, reaction_index, e)
+                n, l, m, chosen_rate = execute_transition(
+                    Gamma, n, R, reaction_index, e
+                )
 
             else:  # rates too low, Tau leap instead
                 dt = default_dt
                 zero_curr_steady_state_counter += 1
-                if zero_curr_steady_state_counter % Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
+                if (
+                    zero_curr_steady_state_counter % Steady_state_rep == 1
+                    and zero_curr_steady_state_counter > 2
+                ):
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
             # calculate I
-            I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
+            I_right, I_down = F.Get_current_from_gamma(
+                Gamma, reaction_index, near_right, near_left
+            )
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, n, VxCix)
@@ -354,8 +524,18 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
                 # print(k, dist_new, std)
                 if abs(dist_new) < expected_error:
                     if dist_info:
-                        print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                        print(
+                            "dist is "
+                            + str(dist_new)
+                            + " there have been: "
+                            + str(not_decreasing)
+                            + " errors, k is "
+                            + str(k)
+                            + " std is "
+                            + str(std)
+                            + " n "
+                            + str(np.sum(n))
+                        )
                         # print("counter is " + str(zero_curr_steady_state_counter))
                         # print("timer is " + str(time.time() - t0))
                         print(steady_state_timer, dt)
@@ -371,9 +551,18 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
                     if not not_decreasing % 100000:
                         if abs(dist_new) > 0:
                             print("error")
-                            print("dist is " + str(dist_new) + " there have been: " + str(
-                                not_decreasing) + " errors, k is "
-                                  + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                            print(
+                                "dist is "
+                                + str(dist_new)
+                                + " there have been: "
+                                + str(not_decreasing)
+                                + " errors, k is "
+                                + str(k)
+                                + " std is "
+                                + str(std)
+                                + " n "
+                                + str(np.sum(n))
+                            )
                             # print("counter is " + str(zero_curr_steady_state_counter))
                             # print("timer is " + str(time.time() - t0))
                             error_count += 1
@@ -381,7 +570,14 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
 
                 # update on convergence
                 if k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
+                    print(
+                        "dist is "
+                        + str(dist_new)
+                        + " error num is "
+                        + str(not_decreasing)
+                        + " std is "
+                        + str(std)
+                    )
 
             # update time
             dist = dist_new
@@ -391,9 +587,34 @@ def Get_Steady_State(V_cycle, loop_num, cycles, t0, array_size, Volts, Vright, C
     return I_vec
 
 
-def main(t0, Vright, Volts, loop_count, steps, V_diff, Amp, array_size, C_inv, default_dt, Steady_state_rep, near_left,
-         near_right, expected_error, timeStep, error_count, e, islands, pos_energy_bound, neg_energy_bound, T, R_t_ij,
-         R_t_i, Ec, table_val, table_prob):
+def main(
+    t0,
+    Vright,
+    Volts,
+    loop_count,
+    steps,
+    V_diff,
+    Amp,
+    array_size,
+    C_inv,
+    default_dt,
+    Steady_state_rep,
+    near_left,
+    near_right,
+    expected_error,
+    timeStep,
+    error_count,
+    e,
+    islands,
+    pos_energy_bound,
+    neg_energy_bound,
+    T,
+    R_t_ij,
+    R_t_i,
+    Ec,
+    table_val,
+    table_prob,
+):
     # implements increasing\decreasing choice
     Vleft = np.linspace(Vright * Volts, (Vright + V_diff) * Volts, num=steps)
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
@@ -405,10 +626,34 @@ def main(t0, Vright, Volts, loop_count, steps, V_diff, Amp, array_size, C_inv, d
     futures = {}
     with ProcessPoolExecutor() as executor:
         for loop in range(loop_count):
-            futures[loop] = executor.submit(Get_Steady_State, V_doubled, loop, cycles, t0, array_size, Volts, Vright,
-                                            C_inv, default_dt, Steady_state_rep, near_left, near_right, expected_error,
-                                            timeStep, error_count, e, islands, pos_energy_bound, neg_energy_bound, T,
-                                            R_t_ij, R_t_i, Ec, table_val, table_prob)
+            futures[loop] = executor.submit(
+                Get_Steady_State,
+                V_doubled,
+                loop,
+                cycles,
+                t0,
+                array_size,
+                Volts,
+                Vright,
+                C_inv,
+                default_dt,
+                Steady_state_rep,
+                near_left,
+                near_right,
+                expected_error,
+                timeStep,
+                error_count,
+                e,
+                islands,
+                pos_energy_bound,
+                neg_energy_bound,
+                T,
+                R_t_ij,
+                R_t_i,
+                Ec,
+                table_val,
+                table_prob,
+            )
 
         wait(futures.values())
 
@@ -428,7 +673,11 @@ def main(t0, Vright, Volts, loop_count, steps, V_diff, Amp, array_size, C_inv, d
     with open("book.csv", "w+") as f:
         file = csv.writer(f)
         for row in range(len(V_doubled)):
-            to_write = [float(V_doubled[row] / Volts), float(I_vec_avg[row] / Amp), float(I_vec_std[row] / Amp)]
+            to_write = [
+                float(V_doubled[row] / Volts),
+                float(I_vec_avg[row] / Amp),
+                float(I_vec_std[row] / Amp),
+            ]
             file.writerow(to_write)
 
     end_time = time.time()
@@ -439,29 +688,63 @@ def main(t0, Vright, Volts, loop_count, steps, V_diff, Amp, array_size, C_inv, d
 
     plot = True
     if plot:
-        I_V_increase = plt.plot(Vleft / Volts, I_vec_avg[:steps] / Amp, label="increasing", color="red")
-        I_V_decrease = plt.plot(V_doubled[steps:] / Volts, I_vec_avg[steps:] / Amp, label="decreasing", color="blue")
+        I_V_increase = plt.plot(
+            Vleft / Volts, I_vec_avg[:steps] / Amp, label="increasing", color="red"
+        )
+        I_V_decrease = plt.plot(
+            V_doubled[steps:] / Volts,
+            I_vec_avg[steps:] / Amp,
+            label="decreasing",
+            color="blue",
+        )
         plt.xlabel("Voltage")
         plt.ylabel("Current")
         if not (Cond.distribute_C or Cond.distribute_R):
-            plt.title("IV through ordered lattice\n" +
-                      Cond.strin)
+            plt.title("IV through ordered lattice\n" + Cond.strin)
         elif Cond.distribute_C and Cond.distribute_R:
-            plt.title("IV through disordered lattice\n" + Cond.strin + "\n" +
-                      "<R> = " + str(Cond.R) + ", Rg = " + str(Cond.Rg / Cond.R) + "R, " +
-                      "<C> = " + str(Cond.C) + ", Cg = " + str(Cond.Cg / Cond.C) + "C")
+            plt.title(
+                "IV through disordered lattice\n"
+                + Cond.strin
+                + "\n"
+                + "<R> = "
+                + str(Cond.R)
+                + ", Rg = "
+                + str(Cond.Rg / Cond.R)
+                + "R, "
+                + "<C> = "
+                + str(Cond.C)
+                + ", Cg = "
+                + str(Cond.Cg / Cond.C)
+                + "C"
+            )
         elif Cond.distribute_C and not Cond.distribute_R:
-            plt.title("IV through disordered lattice\n" + Cond.strin + "\n" +
-                      "<C> = " + str(Cond.C) + ", Cg = " + str(Cond.Cg / Cond.C) + "C")
+            plt.title(
+                "IV through disordered lattice\n"
+                + Cond.strin
+                + "\n"
+                + "<C> = "
+                + str(Cond.C)
+                + ", Cg = "
+                + str(Cond.Cg / Cond.C)
+                + "C"
+            )
         elif Cond.distribute_R and not Cond.distribute_C:
-            plt.title("IV through disordered lattice\n" + Cond.strin + "\n" +
-                      "<R> = " + str(Cond.R) + ", Rg = " + str(Cond.Rg / Cond.R) + "R")
+            plt.title(
+                "IV through disordered lattice\n"
+                + Cond.strin
+                + "\n"
+                + "<R> = "
+                + str(Cond.R)
+                + ", Rg = "
+                + str(Cond.Rg / Cond.R)
+                + "R"
+            )
         plt.legend()
-        plt.savefig(Cond.strin + ".jpg", dpi='figure')
+        plt.savefig(Cond.strin + ".jpg", dpi="figure")
         plt.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     tables = Tables(
         loop_count=100,
         row_num=Cond.row_num,
@@ -479,7 +762,6 @@ if __name__ == '__main__':
         C_inv=Cond.C_inverse,
         pos_energy_bound=-0.02,  # -0.02 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1
         neg_energy_bound=-0.07,  # -0.07 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1
-
         # Parameteres
         e=Cond.e,
         kB=Cond.kB,
@@ -487,7 +769,6 @@ if __name__ == '__main__':
         Amp=abs(Cond.e) / (Cond.C * Cond.R),
         Vright=0,
         Ec=1 / (2 * np.mean(Cond.Cg_list)),
-
         # T should always be written as np.linspace(T0, T0 + row_num * T_std, row_num) prev to 12/09/25 used to be minus
         # for fixed temp take np.ones(row_num) * T
         # for some flipped gradient use np.flip(T, axis=0)
@@ -496,7 +777,6 @@ if __name__ == '__main__':
         # T = np.linspace(T0, T0 + row_num * T_std, row_num)
         # T = np.flip(T, axis=0)
         # T = np.ones(row_num) * T0
-
         Steady_state_rep=100,
         expected_error=0.01 * (Cond.row_num - 1) * np.sqrt(max([Cond.T0]) / Cond.T0),
         error_count=0,
@@ -504,13 +784,49 @@ if __name__ == '__main__':
         V_diff=4,
         table_val=[],
         table_prob=[],
-        table_T=[]
+        table_T=[],
     )
-    t_start = parameterize(tables.pos_energy_bound, tables.neg_energy_bound, tables.loop_count, tables.R_t_ij,
-                           tables.R_t_i, tables.Rg, tables.Cg, tables.default_dt, Cond.T0, tables.T_std, tables.T,
-                           tables.Steady_state_rep, tables.expected_error, tables.Ec)
-    main(t_start, tables.Vright, tables.Volts, tables.loop_count, tables.steps, tables.V_diff, tables.Amp,
-         tables.array_size, tables.C_inv, tables.default_dt, tables.Steady_state_rep, tables.near_left,
-         tables.near_right, tables.expected_error, tables.timeStep, tables.error_count, tables.e, tables.islands,
-         tables.pos_energy_bound, tables.neg_energy_bound, tables.T, tables.R_t_ij, tables.R_t_i, tables.Ec,
-         tables.table_val, tables.table_prob)
+    t_start = parameterize(
+        tables.pos_energy_bound,
+        tables.neg_energy_bound,
+        tables.loop_count,
+        tables.R_t_ij,
+        tables.R_t_i,
+        tables.Rg,
+        tables.Cg,
+        tables.default_dt,
+        Cond.T0,
+        tables.T_std,
+        tables.T,
+        tables.Steady_state_rep,
+        tables.expected_error,
+        tables.Ec,
+    )
+    main(
+        t_start,
+        tables.Vright,
+        tables.Volts,
+        tables.loop_count,
+        tables.steps,
+        tables.V_diff,
+        tables.Amp,
+        tables.array_size,
+        tables.C_inv,
+        tables.default_dt,
+        tables.Steady_state_rep,
+        tables.near_left,
+        tables.near_right,
+        tables.expected_error,
+        tables.timeStep,
+        tables.error_count,
+        tables.e,
+        tables.islands,
+        tables.pos_energy_bound,
+        tables.neg_energy_bound,
+        tables.T,
+        tables.R_t_ij,
+        tables.R_t_i,
+        tables.Ec,
+        tables.table_val,
+        tables.table_prob,
+    )

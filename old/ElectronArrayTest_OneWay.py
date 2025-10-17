@@ -14,8 +14,8 @@ import os
 import sys
 import bisect
 
-#NORMAL ARRAY
-#os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
+# NORMAL ARRAY
+# os.system("nohup bash -c '" + sys.executable + " train.py --size 192 >result.txt" + "' &")
 
 # Conditions
 loops = 400
@@ -44,7 +44,7 @@ Amp = abs(e) / (Cond.C * Cond.R)  # normalized current unit
 Vright = 0
 T0 = 0.001 * e * e / (Cond.C * kB)
 T = 1 * T0
-Ec = e ** 2 / (2 * np.mean(Cg))
+Ec = e**2 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
 Steady_state_rep = 100
@@ -54,8 +54,8 @@ error_count = 0
 resolution = 0.000001
 num_of_calc = (pos_energy_bound - neg_energy_bound) / resolution
 vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
-table_val = []  #list of dE values
-table_prob = []  #list of gamma(dE) values
+table_val = []  # list of dE values
+table_prob = []  # list of gamma(dE) values
 s_eff = np.sqrt(2 * Ec * T)
 
 
@@ -70,13 +70,13 @@ def high_impedance_p(x, Ec, T):
     """
     sigma_squared = 2 * Ec * T
     mu = -Ec
-    return exp(-(x - mu) ** 2 / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
+    return exp(-((x - mu) ** 2) / (2 * sigma_squared)) / sqrt(2 * np.pi * sigma_squared)
 
 
 wrote = True
 
 if wrote:
-    with open('table.csv', newline='') as f:
+    with open("table.csv", newline="") as f:
         reader = csv.reader(f)
         for row in reader:
             try:
@@ -90,12 +90,12 @@ else:
     with open("table.csv", "w+") as f:
         file = csv.writer(f)
         for val in vals_to_calc:
+
             def integrand_gauss(x):
                 if x == 0:
                     return T
                 result = high_impedance_p(x + val, Ec, T) * x / (1 - exp(-x / T))
                 return float(result)
-
 
             mp.dps = 30
             probability = quad(integrand_gauss, [-val - 0.1, -val + 0.1])
@@ -146,9 +146,9 @@ def Gamma_approx(dE, Temp, Rt):
     # high bound starts at dE=-0.02 from thence is 0
 
     if dE < neg_energy_bound:
-        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e ** 2) / Rt
+        return (-np.sqrt(np.pi / 2) * (Ec + dE) * s * e**2) / Rt
     elif pos_energy_bound > dE > neg_energy_bound:
-        return approximate_gamma_integral(dE) * e ** 2 / Rt
+        return approximate_gamma_integral(dE) * e**2 / Rt
     else:
         raise ValueError
 
@@ -196,8 +196,16 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
         neighbour_list = F.neighbour_list(Cond.row_num, i)
         for j in neighbour_list:
             # calculate energy difference due to transition
-            dEij[i][j] = e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
-                              (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2
+            dEij[i][j] = (
+                e
+                * (
+                    2 * curr_V[j]
+                    - e * C_inv[j][i]
+                    + e * C_inv[j][j]
+                    - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
+                )
+                / 2
+            )
 
             # dEij must be negative for transition i->j
             if dEij[i][j] < pos_energy_bound:
@@ -208,7 +216,9 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
     # left electrode to island transition:
     for isle in near_left:
         # for ith transition from electrode
-        dE_left = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        dE_left = (
+            (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        )
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
@@ -218,7 +228,9 @@ def Get_Gamma(Gamma_, RR, reaction_index_, n_list, curr_V, cycle_voltage_):
 
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
-            dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
+            dE_left = (
+                (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
+            )
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
@@ -264,7 +276,6 @@ def Get_Steady_State():
     I_vec = np.zeros(cycles)
 
     for cycle in range(cycles):
-
         cycle_voltage = float(Vleft[cycle])
         print("start " + str(cycle_voltage / Volts) + " loop:" + str(loop))
 
@@ -275,7 +286,7 @@ def Get_Steady_State():
         # starting conditions
         not_in_steady_state = True
         t = 0
-        steady_state_timer = 5 * Cond.default_dt  #steady state fixed time
+        steady_state_timer = 5 * Cond.default_dt  # steady state fixed time
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -289,7 +300,9 @@ def Get_Steady_State():
             reaction_index = []
             Gamma = []
 
-            Gamma, R, reaction_index = Get_Gamma(Gamma, R, reaction_index, n, V, cycle_voltage)
+            Gamma, R, reaction_index = Get_Gamma(
+                Gamma, R, reaction_index, n, V, cycle_voltage
+            )
 
             # transition occurred, limit for R is the typical ground drain current
             if R > abs(cycle_voltage / (e * Cond.Rg)):
@@ -305,18 +318,34 @@ def Get_Steady_State():
             else:  # rates too low, Tau leap instead
                 dt = default_dt
                 zero_curr_steady_state_counter += 1
-                if zero_curr_steady_state_counter % Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
+                if (
+                    zero_curr_steady_state_counter % Steady_state_rep == 1
+                    and zero_curr_steady_state_counter > 2
+                ):
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
             # calculate I
-            I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
+            I_right, I_down = F.Get_current_from_gamma(
+                Gamma, reaction_index, near_right, near_left
+            )
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
-            Qg = F.developQ(Qg, dt, Cond.InvTauEigenVectors, Cond.InvTauEigenValues,
-                            n, Cond.InvTauEigenVectorsInv,
-                            Cond.Tau_inv, C_inv, VxCix,
-                            Rg, Tau, Cg, Cond.matrixQnPart)
+            Qg = F.developQ(
+                Qg,
+                dt,
+                Cond.InvTauEigenVectors,
+                Cond.InvTauEigenValues,
+                n,
+                Cond.InvTauEigenVectorsInv,
+                Cond.Tau_inv,
+                C_inv,
+                VxCix,
+                Rg,
+                Tau,
+                Cg,
+                Cond.matrixQnPart,
+            )
 
             # update statistics
             I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
@@ -334,10 +363,22 @@ def Get_Steady_State():
                 std = np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))
                 # steady state condition
                 # print(k, dist_new, std)
-                if abs(dist_new) < 0.03 * np.sqrt(T / T0) : # or (abs(dist_new) < 1.2 and cycle == 0) for 100T0
+                if abs(dist_new) < 0.03 * np.sqrt(
+                    T / T0
+                ):  # or (abs(dist_new) < 1.2 and cycle == 0) for 100T0
                     if dist_info:
-                        print("dist is " + str(dist_new) + " there have been: " + str(not_decreasing) + " errors, k is "
-                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                        print(
+                            "dist is "
+                            + str(dist_new)
+                            + " there have been: "
+                            + str(not_decreasing)
+                            + " errors, k is "
+                            + str(k)
+                            + " std is "
+                            + str(std)
+                            + " n "
+                            + str(np.sum(n))
+                        )
                         # print("counter is " + str(zero_curr_steady_state_counter))
                         print("timer is " + str(time.time() - t0))
                         print(steady_state_timer, dt)
@@ -352,17 +393,33 @@ def Get_Steady_State():
                     if not not_decreasing % 100000:
                         if abs(dist_new) > 0:
                             print("error")
-                            print("dist is " + str(dist_new) + " there have been: " + str(
-                                not_decreasing) + " errors, k is "
-                                  + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
-                            #print("counter is " + str(zero_curr_steady_state_counter))
-                            #print("timer is " + str(time.time() - t0))
+                            print(
+                                "dist is "
+                                + str(dist_new)
+                                + " there have been: "
+                                + str(not_decreasing)
+                                + " errors, k is "
+                                + str(k)
+                                + " std is "
+                                + str(std)
+                                + " n "
+                                + str(np.sum(n))
+                            )
+                            # print("counter is " + str(zero_curr_steady_state_counter))
+                            # print("timer is " + str(time.time() - t0))
                             error += 1
                             not_in_steady_state = False
 
                 # update on non-convergence
                 elif k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(std))
+                    print(
+                        "dist is "
+                        + str(dist_new)
+                        + " error num is "
+                        + str(not_decreasing)
+                        + " std is "
+                        + str(std)
+                    )
 
             # update time
             dist = dist_new
