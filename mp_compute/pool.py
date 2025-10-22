@@ -58,6 +58,15 @@ def main():
         results = list(executor.map(loaded_state_function, range(init.loop_count)))
         print(results)
 
+    # result = Get_Steady_State(
+    #     loop_index=0,
+    #     init=init,
+    #     V_cycle=V_doubled,
+    #     cycles=cycles,
+    #     table_val=table_val,
+    #     table_prob=table_prob
+    # )
+
 
 if __name__ == "__main__":
     main()

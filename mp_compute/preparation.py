@@ -13,8 +13,8 @@ def compute_distributed_R_matrices(
         stdR: float,
         R: float,
         array_size: int,
-        near_left: npt.NDArray,
-        near_right: npt.NDArray,
+        near_left: list,
+        near_right: list,
 ) -> tuple[npt.NDArray, npt.NDArray]:
     R_t_ij = 2 ** np.random.uniform(
         low=np.log2(max(R - stdR, 0.01)),
@@ -156,7 +156,7 @@ def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
 
     row_num = 10
     array_size = row_num ** 2
-    islands = np.arange(array_size)
+    islands = list(range(array_size))
     near_left = islands[(row_num - 1):: row_num]
     near_right = islands[0::row_num]
 
@@ -192,8 +192,6 @@ def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
         near_left=near_left,
         near_right=near_right,
         Vright=0,
-        pos_energy_bound=-0.01,  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
-        neg_energy_bound=-0.09,  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
         max_count=50000,
         distribute_R=distribute_R,
         distribute_C=distribute_C,
@@ -202,7 +200,9 @@ def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
         T=(T := [T0]),
         Rg=np.array([mean_Rg] * array_size),
         Cg=(Cg := np.array([mean_Cg] * array_size)),
-        Ec=1 / (2 * mean_Cg),
+        Ec=(Ec := 1 / (2 * mean_Cg)),
+        pos_energy_bound=-0.01,  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
+        neg_energy_bound=-Ec,  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
         resolution=0.000001,
         Steady_state_rep=100,
         expected_error=0.01 * (row_num - 1) * np.sqrt(max(T) / T0),

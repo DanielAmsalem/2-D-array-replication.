@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy.typing as npt
 
 
-@dataclass
+@dataclass(frozen=True)
 class ExperimentInitialState:
     # Tunneling Parameters
     e: int
@@ -22,9 +22,9 @@ class ExperimentInitialState:
 
     loop_count: int
 
-    islands: npt.NDArray
-    near_left: npt.NDArray
-    near_right: npt.NDArray
+    islands: list[int]
+    near_left: list[int]
+    near_right: list[int]
 
     distribute_R: bool
     distribute_C: bool
