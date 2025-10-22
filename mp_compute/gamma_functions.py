@@ -38,30 +38,30 @@ def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_gradi
 
 
 def Gamma_approx(
-        dE,
-        T_at_junction,
-        Rt,
-        Ec,
-        e,
-        neg_energy_bound,
-        pos_energy_bound,
-        table_val,
-        table_prob,
-        T_gradient,
+    dE,
+    T_at_junction,
+    Rt,
+    Ec,
+    e,
+    neg_energy_bound,
+    pos_energy_bound,
+    table_val,
+    table_prob,
+    T_gradient,
 ):
     # low bound starts at dE=-0.09 and thence is analytically the mean of a gaussian
     # high bound starts at dE=-0.01 and thence is 0
 
     if dE < neg_energy_bound:
-        return (-dE - Ec) * e ** 2 / Rt
+        return (-dE - Ec) * e**2 / Rt
 
     elif pos_energy_bound > dE > neg_energy_bound:
         return (
-                approximate_gamma_integral(
-                    dE, T_at_junction, table_val, table_prob, T_gradient
-                )
-                * e ** 2
-                / Rt
+            approximate_gamma_integral(
+                dE, T_at_junction, table_val, table_prob, T_gradient
+            )
+            * e**2
+            / Rt
         )
     else:
         raise ValueError
@@ -95,28 +95,28 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_, e):
 
 
 def Get_Gamma(
-        Gamma_,
-        RR,
-        e,
-        reaction_index_,
-        n_list,
-        curr_V,
-        cycle_voltage_,
-        array_size,
-        islands,
-        row_num,
-        C_inv,
-        pos_energy_bound,
-        neg_energy_bound,
-        T_gradient,
-        R_t_ij,
-        R_t_i,
-        near_left,
-        near_right,
-        Vright,
-        Ec,
-        table_val,
-        table_prob,
+    Gamma_,
+    RR,
+    e,
+    reaction_index_,
+    n_list,
+    curr_V,
+    cycle_voltage_,
+    array_size,
+    islands,
+    row_num,
+    C_inv,
+    pos_energy_bound,
+    neg_energy_bound,
+    T_gradient,
+    R_t_ij,
+    R_t_i,
+    near_left,
+    near_right,
+    Vright,
+    Ec,
+    table_val,
+    table_prob,
 ):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -132,14 +132,14 @@ def Get_Gamma(
         for j in neighbour_list:
             # calculate energy difference due to transition
             dEij[i][j] = (
-                    e
-                    * (
-                            2 * curr_V[j]
-                            - e * C_inv[j][i]
-                            + e * C_inv[j][j]
-                            - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
-                    )
-                    / 2
+                e
+                * (
+                    2 * curr_V[j]
+                    - e * C_inv[j][i]
+                    + e * C_inv[j][j]
+                    - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
+                )
+                / 2
             )
 
             # dEij must be negative enough for transition i->j
@@ -165,7 +165,7 @@ def Get_Gamma(
     for isle in near_left:
         # for ith transition from electrode
         dE_left = (
-                (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+            (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
         )
 
         # rate for V_left->i
@@ -190,7 +190,7 @@ def Get_Gamma(
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
             dE_left = (
-                    (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
+                (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
             )
 
             # rate for i->V_left
@@ -264,12 +264,12 @@ def Get_Gamma(
 
 
 def Get_Steady_State(
-        loop_index: int,
-        init: ExperimentInitialState,
-        V_cycle: npt.NDArray,
-        cycles: int,
-        table_val,
-        table_prob,
+    loop_index: int,
+    init: ExperimentInitialState,
+    V_cycle: npt.NDArray,
+    cycles: int,
+    table_val,
+    table_prob,
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -364,8 +364,8 @@ def Get_Steady_State(
                 dt = init.default_dt
                 zero_curr_steady_state_counter += 1
                 if (
-                        zero_curr_steady_state_counter % init.Steady_state_rep == 1
-                        and zero_curr_steady_state_counter > 2
+                    zero_curr_steady_state_counter % init.Steady_state_rep == 1
+                    and zero_curr_steady_state_counter > 2
                 ):
                     not_in_steady_state = False
 
@@ -402,8 +402,8 @@ def Get_Steady_State(
 
                 # steady state conditions
                 elif (
-                        abs(dist_new) - init.expected_error < std < init.expected_error
-                        or abs(dist_new) < init.expected_error
+                    abs(dist_new) - init.expected_error < std < init.expected_error
+                    or abs(dist_new) < init.expected_error
                 ):
                     steady_state_timer -= dt
                     if steady_state_timer <= 0:

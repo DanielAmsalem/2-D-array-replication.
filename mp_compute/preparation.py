@@ -5,56 +5,225 @@ import numpy as np
 import numpy.typing as npt
 from mpmath import quad, mp
 
-import Conditions as Cond
 import Functions as F
 from models import ExperimentInitialState
 
 
+def compute_distributed_R_matrices(
+        stdR: float,
+        R: float,
+        array_size: int,
+        near_left: npt.NDArray,
+        near_right: npt.NDArray,
+) -> tuple[npt.NDArray, npt.NDArray]:
+    R_t_ij = 2 ** np.random.uniform(
+        low=np.log2(max(R - stdR, 0.01)),
+        high=np.log2(R + stdR),
+        size=(array_size, array_size),
+    )
+    R_i = 2 ** np.random.uniform(
+        low=np.log2(max(R - stdR, 0.01)), high=np.log2(R + stdR), size=array_size
+    )
+    R_t_i = [
+        val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)
+    ]
+
+    return R_t_i, R_t_ij
+
+
+def compute_fixed_R_matrices(
+        R: float,
+        array_size: int,
+        near_left: npt.NDArray,
+        near_right: npt.NDArray,
+) -> tuple[npt.NDArray, npt.NDArray]:
+    R_t_ij = np.full((array_size, array_size), R)
+    R_i = np.full(array_size, R)
+    R_t_i = [
+        val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)
+    ]
+
+    return R_t_i, R_t_ij
+
+
+def compute_C_inverse(Ch: npt.NDArray, Cv: npt.NDArray, row_num: int) -> npt.NDArray:
+    diagonal = Ch[:, :-1] + Ch[:, 1:] + Cv[:-1, :] + Cv[1:, :]
+    second_diagonal = np.copy(Ch[:, 1:])
+    second_diagonal[:, -1] = 0
+    second_diagonal = second_diagonal.flatten()
+    second_diagonal = second_diagonal[:-1]
+    n_diagonal = np.copy(Cv[1:-1, :])
+    C_mat = (
+            np.diagflat(diagonal)
+            - np.diagflat(second_diagonal, k=1)
+            - np.diagflat(second_diagonal, k=-1)
+            - np.diagflat(n_diagonal, k=row_num)
+            - np.diagflat(n_diagonal, k=-row_num)
+    )
+    return np.linalg.inv(C_mat)  # define inverse
+
+
+def compute_distributed_C_matrices(
+        C: float,
+        sig: float,
+        row_num: int,
+        array_size: int,
+        near_left: npt.NDArray,
+        near_right: npt.NDArray,
+) -> tuple[npt.NDArray, npt.NDArray]:
+    Ch = np.random.normal(0, sig, size=(row_num, row_num + 1))
+    Cv = np.random.normal(0, sig, size=(row_num + 1, row_num))
+
+    all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
+    if np.all(all_Cs >= 0):
+        pass
+    else:
+        min_val = -np.min(all_Cs) + 0.1
+
+    # Ch, Cv = Ch + max(min_val, C), Cv + max(min_val, C)
+    Ch, Cv = Ch + min_val + C, Cv + min_val + C
+    all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
+
+    Cl = np.random.normal(0, sig / 3, size=(1, array_size))
+    Cr = np.random.normal(0, sig / 3, size=(1, array_size))
+
+    side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
+
+    if np.all(side_Cs >= 0):
+        pass
+    else:
+        min_val = -np.min(side_Cs) + 0.1
+
+    # Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
+    Cl, Cr = Cl + min_val + C, Cr + min_val + C / 2
+    side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
+
+    Cix = np.zeros(array_size)
+    for i in near_left:
+        Cix[i] = Cl[0][i]
+    for i in near_right:
+        Cix[i] = Cr[0][i]
+
+    for c in np.concatenate([side_Cs.ravel(), all_Cs.ravel()]):
+        if c < 0:
+            print(c)
+            raise ValueError("Negative")
+
+    return Cix, compute_C_inverse(Ch, Cv, row_num)
+
+
+def compute_fixed_C_matrices(
+        C: float,
+        row_num: int,
+        array_size: int,
+        near_left: npt.NDArray,
+        near_right: npt.NDArray,
+) -> tuple[npt.NDArray, npt.NDArray]:
+    Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
+    Cv = np.random.normal(C, 0, size=(row_num + 1, row_num))
+
+    Cix = np.zeros(array_size)
+    for i in near_left:
+        Cix[i] = np.random.normal(C, 0)
+    for i in near_right:
+        Cix[i] = np.random.normal(C / 2, 0)
+
+    return Cix, compute_C_inverse(Ch, Cv, row_num)
+
+
+def define_tau_matrix(
+        C_inverse: npt.NDArray,
+        mean_Cg: float,
+        mean_Rg: float,
+        array_size: int,
+) -> npt.NDArray:
+    res = C_inverse + np.diagflat([1 / mean_Cg] * array_size)
+    a = np.array([mean_Rg] * array_size)  # flattening to coloumn
+    reshaped = a.reshape((a.size, 1))
+    return -res / np.repeat(reshaped, res.shape[1], axis=1)
+
+
 def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
+    distribute_R = True
+    distribute_C = True
+
+    C: float = 1
+    R: float = 10
+    mean_Cg = 10 * C
+    mean_Rg = 100 * R
+    stdR = 0.9 * R
+    sig = 0.5 * C
+
+    row_num = 10
+    array_size = row_num ** 2
+    islands = np.arange(array_size)
+    near_left = islands[(row_num - 1):: row_num]
+    near_right = islands[0::row_num]
+
+    if distribute_R:
+        R_t_i, R_t_ij = compute_distributed_R_matrices(
+            stdR, R, array_size, near_left, near_right
+        )
+    else:
+        R_t_i, R_t_ij = compute_fixed_R_matrices(R, array_size, near_left, near_right)
+
+    if distribute_C:
+        Cix, C_inverse = compute_distributed_C_matrices(
+            C, sig, row_num, array_size, near_left, near_right
+        )
+    else:
+        Cix, C_inverse = compute_fixed_C_matrices(
+            C, row_num, array_size, near_left, near_right
+        )
+
+    Tau_inv = define_tau_matrix(C_inverse, mean_Cg, mean_Rg, array_size)
+    InvTauEigenValues, InvTauEigenVectors = np.linalg.eig(Tau_inv)
+    InvTauEigenVectorsInv = np.linalg.inv(InvTauEigenVectors)
+    default_dt = -0.1 / np.min(InvTauEigenValues)  # time in which Qg don't change much
+    timeStep = -2 / np.max(InvTauEigenValues)
+    Tau = np.linalg.inv(Tau_inv)
+
     return ExperimentInitialState(
-        e=Cond.e,
-        kB=Cond.kB,
-        Tau_inv=Cond.Tau_inv,
-        InvTauEigenValues=Cond.InvTauEigenValues,
-        InvTauEigenVectorsInv=Cond.InvTauEigenVectorsInv,
-        InvTauEigenVectors=Cond.InvTauEigenVectors,
-        matrixQnPart=Cond.matrixQnPart,
-        Cix=Cond.Cix,
-        array_size=Cond.array_size,
-        row_num=Cond.row_num,
-        islands=Cond.islands,
-        near_left=Cond.near_left,
-        near_right=Cond.near_right,
-        loop_count=loop_count,
-        R_t_ij=Cond.R_t_ij,
-        R_t_i=Cond.R_t_i,
-        CondRg=Cond.Rg,
-        Rg=np.array([Cond.Rg] * Cond.array_size),
-        Cg=(Cg := np.array([Cond.Cg] * Cond.array_size)),
-        C_avg=Cond.C,
-        R_avg=Cond.R,
-        default_dt=Cond.default_dt,
-        Tau=Cond.Tau,
-        C_inv=Cond.C_inverse,
-        Volts=abs(Cond.e) / Cond.C,  # normalized voltage unit
-        Amp=abs(Cond.e) / (Cond.C * Cond.R),  # normalized current unit
+        e=(e := 1),
+        kB=(kB := 1),
+        row_num=row_num,
+        array_size=array_size,
+        islands=islands,
+        near_left=near_left,
+        near_right=near_right,
         Vright=0,
         pos_energy_bound=-0.01,  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
         neg_energy_bound=-0.09,  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
         max_count=50000,
-        distribute_R=True,
-        distribute_C=True,
-        # T should always be written as np.linspace(T0, T0 + row_num * T_std, row_num) prev to 12/09/25 used to be minus
-        # for fixed temp take np.ones(row_num) * T
-        # for some flipped gradient use np.flip(T, axis=0)
-        T0=(T0 := 0.001 * Cond.e * Cond.e / (Cond.C * Cond.kB)),
+        distribute_R=distribute_R,
+        distribute_C=distribute_C,
+        T0=(T0 := 0.001 * e * e / (C * kB)),
         T_std=T0 / 20,
         T=(T := [T0]),
-        Ec=1 / (2 * np.mean(Cg)),
+        Rg=np.array([mean_Rg] * array_size),
+        Cg=(Cg := np.array([mean_Cg] * array_size)),
+        Ec=1 / (2 * mean_Cg),
         resolution=0.000001,
         Steady_state_rep=100,
-        expected_error=0.01 * (Cond.row_num - 1) * np.sqrt(max(T) / T0),
-        timeStep=Cond.timeStep,
+        expected_error=0.01 * (row_num - 1) * np.sqrt(max(T) / T0),
+        Volts=abs(e) / C,  # normalized voltage unit
+        Amp=abs(e) / (C * R),  # normalized current unit
+        CondRg=mean_Rg,
+        C_avg=C,
+        R_avg=R,
+        loop_count=loop_count,
+        R_t_ij=R_t_ij,
+        R_t_i=R_t_i,
+        Cix=Cix,
+        C_inv=C_inverse,
+        Tau_inv=Tau_inv,
+        InvTauEigenVectors=InvTauEigenVectors,
+        InvTauEigenValues=InvTauEigenValues,
+        InvTauEigenVectorsInv=InvTauEigenVectorsInv,
+        default_dt=default_dt,
+        timeStep=timeStep,
+        Tau=Tau,
+        matrixQnPart=Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0]),
     )
 
 
@@ -63,8 +232,8 @@ def prepare_table_triplets(init_state: ExperimentInitialState) -> npt.NDArray:
     mp.dps = 30
 
     num_of_calc = (
-        init_state.pos_energy_bound - init_state.neg_energy_bound
-    ) / init_state.resolution
+                          init_state.pos_energy_bound - init_state.neg_energy_bound
+                  ) / init_state.resolution
     vals_to_calc = np.linspace(
         init_state.pos_energy_bound, init_state.neg_energy_bound, num=round(num_of_calc)
     )
@@ -100,7 +269,7 @@ def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
 
 
 def validate_table_triplets_file(
-    triplets_file: Path, init_state: ExperimentInitialState
+        triplets_file: Path, init_state: ExperimentInitialState
 ) -> bool:
     if not triplets_file.exists():
         warnings.warn(

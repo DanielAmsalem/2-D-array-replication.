@@ -24,7 +24,7 @@ def main():
         report_file=EXPORT_PATH / "tmp",
     )
 
-    init = prepare_initial_state(loop_count=100)
+    init = prepare_initial_state(loop_count=2)
 
     if not validate_table_triplets_file(files.prepare_table_triplets_file, init):
         table_triplets = prepare_table_triplets(init)
