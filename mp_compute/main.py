@@ -1,5 +1,6 @@
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from os import cpu_count
 from pathlib import Path
 from typing import Optional
 
