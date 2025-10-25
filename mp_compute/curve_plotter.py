@@ -3,13 +3,13 @@ import csv
 import numpy as np
 from matplotlib import pyplot as plt
 
-from models import ExperimentInitialState, ExportFiles
+from models import ExperimentInitialState, Export
 from mp_compute.gamma_functions import Get_Steady_State
 
 
 def iv_curve_plotter(
     init: ExperimentInitialState,
-    files: ExportFiles,
+    files: Export,
     steps: int,
     V_diff: int,
 ) -> None:

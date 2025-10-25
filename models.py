@@ -60,7 +60,8 @@ class ExperimentInitialState:
 
 
 @dataclass
-class ExportFiles:
+class Export:
+    plot_results: bool
     prepare_table_triplets_file: Path
     results_file: Path
     report_file: Path
