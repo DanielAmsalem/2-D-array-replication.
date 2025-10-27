@@ -26,7 +26,7 @@ near_right = islands[(row_num - 1)::row_num]
 near_left = islands[0::row_num]
 
 if distribute_R:
-    stdR = 0.9 * R
+    stdR = 4.8 * R
     R_t_ij = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)),
                                     high=np.log2(R + stdR), size=(array_size, array_size))
     R_i = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)),
@@ -104,7 +104,7 @@ def VxCix(Vl, Vr):
         _VxCix[u] = Cix[u] * Vl
     for u in near_right:
         _VxCix[u] = Cix[u] * Vr
-    return np.array(_VxCix)
+    return _VxCix
 
 
 # define tau matrix

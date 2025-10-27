@@ -61,7 +61,7 @@ T = [T0]
 Ec = 1 / (2 * np.mean(Cg))
 
 # Gillespie parameter, KS statistic value for significance
-Steady_state_rep = 100
+Steady_state_rep = 1000
 expected_error = 0.01 * (Cond.row_num - 1) * np.sqrt(max(T) / T0)
 error_count = 0
 
@@ -323,6 +323,7 @@ def Get_Steady_State(V_cycle, loop_num):
         not_in_steady_state = True
         t = 0
         steady_state_timer = Cond.timeStep  # steady state fixed time
+        ss = Steady_state_rep
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -358,14 +359,16 @@ def Get_Steady_State(V_cycle, loop_num):
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
-            # calculate I
-            I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
+            # calculate I if in steady state
+            if ss < 0:
+                I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, n, VxCix)
 
-            # update statistics
-            I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
+            # update statistics (also I if in ss)
+            if ss < 0:
+                I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
             Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
@@ -375,31 +378,45 @@ def Get_Steady_State(V_cycle, loop_num):
             max_diff_index = np.argmax(dist_new)
 
             # check if distance from steady state is larger than the last by more than the allowed error
-            if k > 5:
-                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t)))/np.sqrt(len(Q_avg))
+            if k > 1000:
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))) / np.sqrt(len(Q_avg))
 
-                if dist_new - dist > min(std, expected_error):
+                # if already in steady state:
+                if ss < 0:
+                    steady_state_timer -= dt
+                    if steady_state_timer <= 0:
+                        not_in_steady_state = False
+
+                # check convergence
+                elif dist_new - dist > min(std, expected_error):
                     not_decreasing += 1
                     steady_state_timer = Cond.timeStep
+                    ss = Steady_state_rep
                     if not not_decreasing % max_count:
+                        print("error")
+                        print(k, dist_new, std)
+                        print("dist is " + str(dist_new) + " there have been: " + str(
+                            not_decreasing) + " errors, k is "
+                              + str(k) + " std is " + str(std) + " n " + str(np.sum(n)))
+                        # print("counter is " + str(zero_curr_steady_state_counter))
+                        # print("timer is " + str(time.time() - t0))
                         error_count += 1
                         not_in_steady_state = False
 
                 # steady state conditions
                 elif abs(dist_new) - expected_error < std < expected_error or abs(dist_new) < expected_error:
-                    steady_state_timer -= dt
-                    if steady_state_timer <= 0:
-                        not_in_steady_state = False
+                    ss -= 1
 
-                # reset steady_state_timer
+                # reset steady_state_rep
                 else:
-                    steady_state_timer = Cond.timeStep
+                    ss = Steady_state_rep
 
                 # update on convergence
-                if k % 10000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(round(std,3)) +
-                          " ; steady state timer is " + str(round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
-                    print("at " + str(cycle_voltage / Volts) + " loop:" + str(loop_num))
+                if k % 1000 == 0:
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(
+                        round(std, 3)) +
+                          " ; steady state timer is " + str(
+                        round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
 
             # update time
             dist = dist_new

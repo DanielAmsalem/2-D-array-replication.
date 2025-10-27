@@ -323,12 +323,13 @@ def Get_Steady_State(V_cycle, loop_num):
         not_in_steady_state = True
         t = 0
         steady_state_timer = Cond.timeStep  # steady state fixed time
+        ss = Steady_state_rep
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
             k += 1
 
-            VxCix = copy.copy(Cond.VxCix(cycle_voltage, Vright))
+            VxCix = Cond.VxCix(cycle_voltage, Vright)
             V = F.getVoltage(n, Qg, C_inv, VxCix)  # find V_i for ith island
 
             # define overall reaction rate R, rate vector, and a useful index
@@ -358,14 +359,16 @@ def Get_Steady_State(V_cycle, loop_num):
                     print("counter is " + str(zero_curr_steady_state_counter))
                     not_in_steady_state = False
 
-            # calculate I
-            I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
+            # calculate I if in steady state
+            if ss < 0:
+                I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, near_right, near_left)
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, n, VxCix)
 
-            # update statistics
-            I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
+            # update statistics (also I if in ss)
+            if ss < 0:
+                I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
             Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
@@ -375,12 +378,20 @@ def Get_Steady_State(V_cycle, loop_num):
             max_diff_index = np.argmax(dist_new)
 
             # check if distance from steady state is larger than the last by more than the allowed error
-            if k > 5:
-                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t)))/np.sqrt(len(Q_avg))
+            if k > 100:
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))) / np.sqrt(len(Q_avg))
 
-                if dist_new - dist > min(std, expected_error):
+                # if already in steady state:
+                if ss < 0:
+                    steady_state_timer -= dt
+                    if steady_state_timer <= 0:
+                        not_in_steady_state = False
+
+                # check convergence
+                elif dist_new - dist > min(std, expected_error):
                     not_decreasing += 1
                     steady_state_timer = Cond.timeStep
+                    ss = Steady_state_rep
                     if not not_decreasing % max_count:
                         print("error")
                         print(k, dist_new, std)
@@ -394,18 +405,18 @@ def Get_Steady_State(V_cycle, loop_num):
 
                 # steady state conditions
                 elif abs(dist_new) - expected_error < std < expected_error or abs(dist_new) < expected_error:
-                    steady_state_timer -= dt
-                    if steady_state_timer <= 0:
-                        not_in_steady_state = False
+                    ss -= 1
 
-                # reset steady_state_timer
+                # reset steady_state_rep
                 else:
-                    steady_state_timer = Cond.timeStep
+                    ss = Steady_state_rep
 
                 # update on convergence
                 if k % 1000 == 0:
-                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(round(std,3)) +
-                          " ; steady state timer is " + str(round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
+                    print("dist is " + str(dist_new) + " error num is " + str(not_decreasing) + " std is " + str(
+                        round(std, 3)) +
+                          " ; steady state timer is " + str(
+                        round(100 * (Cond.timeStep - steady_state_timer) / Cond.timeStep, 1)) + "%")
 
             # update time
             dist = dist_new
