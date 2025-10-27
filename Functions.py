@@ -5,9 +5,6 @@ from mpmath import exp, sqrt
 from models import ExperimentInitialState
 
 
-# for debugging Warnings may set np.seterr(all='raise')
-
-
 def flattenToColumn(a):
     """
     Returns the given array, reshaped into a column array.

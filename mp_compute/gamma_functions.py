@@ -39,16 +39,16 @@ def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_gradi
 
 
 def Gamma_approx(
-    dE,
-    T_at_junction,
-    Rt,
-    Ec,
-    e,
-    neg_energy_bound,
-    pos_energy_bound,
-    table_val,
-    table_prob,
-    T_gradient,
+        dE,
+        T_at_junction,
+        Rt,
+        Ec,
+        e,
+        neg_energy_bound,
+        pos_energy_bound,
+        table_val,
+        table_prob,
+        T_gradient,
 ):
     # low bound starts at dE=-0.09 and thence is analytically the mean of a gaussian
     # high bound starts at dE=-0.01 and thence is 0
@@ -56,7 +56,7 @@ def Gamma_approx(
         raise ValueError
 
     if dE < neg_energy_bound:
-        val = (-dE - Ec) * e**2 / Rt
+        val = (-dE - Ec) * e ** 2 / Rt
         if val < 0:
             print(val)
             raise ValueError
@@ -66,7 +66,7 @@ def Gamma_approx(
         approx = approximate_gamma_integral(
             dE, T_at_junction, table_val, table_prob, T_gradient
         )
-        val = approx * e**2 / Rt
+        val = approx * e ** 2 / Rt
         return val
     else:
         raise ValueError
@@ -100,28 +100,28 @@ def execute_transition(Gamma_list, n_list, RR, reaction_index_, e):
 
 
 def Get_Gamma(
-    Gamma_,
-    RR,
-    e,
-    reaction_index_,
-    n_list,
-    curr_V,
-    cycle_voltage_,
-    array_size,
-    islands,
-    row_num,
-    C_inv,
-    pos_energy_bound,
-    neg_energy_bound,
-    T_gradient,
-    R_t_ij,
-    R_t_i,
-    near_left,
-    near_right,
-    Vright,
-    Ec,
-    table_val,
-    table_prob,
+        Gamma_,
+        RR,
+        e,
+        reaction_index_,
+        n_list,
+        curr_V,
+        cycle_voltage_,
+        array_size,
+        islands,
+        row_num,
+        C_inv,
+        pos_energy_bound,
+        neg_energy_bound,
+        T_gradient,
+        R_t_ij,
+        R_t_i,
+        near_left,
+        near_right,
+        Vright,
+        Ec,
+        table_val,
+        table_prob,
 ):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -137,14 +137,14 @@ def Get_Gamma(
         for j in neighbour_list:
             # calculate energy difference due to transition
             dEij[i][j] = (
-                e
-                * (
-                    2 * curr_V[j]
-                    - e * C_inv[j][i]
-                    + e * C_inv[j][j]
-                    - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
-                )
-                / 2
+                    e
+                    * (
+                            2 * curr_V[j]
+                            - e * C_inv[j][i]
+                            + e * C_inv[j][j]
+                            - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
+                    )
+                    / 2
             )
 
             # dEij must be negative enough for transition i->j
@@ -170,7 +170,7 @@ def Get_Gamma(
     for isle in near_left:
         # for ith transition from electrode
         dE_left = (
-            (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+                (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
         )
 
         # rate for V_left->i
@@ -195,7 +195,7 @@ def Get_Gamma(
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
             dE_left = (
-                (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
+                    (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
             )
 
             # rate for i->V_left
@@ -269,25 +269,19 @@ def Get_Gamma(
 
 
 def Get_Steady_State(
-    loop_index: int,
-    init: ExperimentInitialState,
-    V_cycle: npt.NDArray,
-    cycles: int,
-    table_val,
-    table_prob,
+        loop_index: int,
+        init: ExperimentInitialState,
+        V_cycle: npt.NDArray,
+        cycles: int,
+        table_val,
+        table_prob,
+        expected_error: float,
+        T: npt.NDArray
 ):
     error_count = 0
     # general Charge distribution vectors
-    Qg, Q_avg, Q_var = (
-        np.zeros(init.array_size),
-        np.zeros(init.array_size),
-        np.zeros(init.array_size),
-    )
-    n, n_avg, n_var = (
-        np.zeros(init.array_size),
-        np.zeros(init.array_size),
-        np.zeros(init.array_size),
-    )
+    Qg, Q_avg, Q_var = (np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size),)
+    n, n_avg, n_var = (np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size),)
     I_avg, I_var = 0, 0
 
     # vector counting charge flow
@@ -303,7 +297,7 @@ def Get_Steady_State(
         not_in_steady_state = True
         t = 0
         steady_state_timer = init.timeStep  # steady state fixed time
-        steady_state_reps = init.Steady_state_rep * 10
+        steady_state_reps = init.Steady_state_rep * 5
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
@@ -315,11 +309,9 @@ def Get_Steady_State(
                 init.array_size,
                 init.near_left,
                 init.near_right,
-                init.Cix,
-            )
-            V = F.getVoltage(
-                n, Qg, init.C_inv, VxCix, init.e
-            )  # find V_i for ith island
+                init.Cix, )
+
+            V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)  # find V_i for ith island
 
             if k == 1:
                 print(f"{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
@@ -343,7 +335,7 @@ def Get_Steady_State(
                 C_inv=init.C_inv,
                 pos_energy_bound=init.pos_energy_bound,
                 neg_energy_bound=init.neg_energy_bound,
-                T_gradient=init.T,
+                T_gradient=T,
                 R_t_ij=init.R_t_ij,
                 R_t_i=init.R_t_i,
                 near_left=init.near_left,
@@ -353,10 +345,6 @@ def Get_Steady_State(
                 table_val=table_val,
                 table_prob=table_prob,
             )
-
-            for i, val in enumerate(Gamma):
-                if val <= 0:
-                    raise ValueError(f"{reaction_index[i]=} was negative")
 
             # transition occurred, limit for R is the typical ground drain current
             if R > cycle_voltage / init.CondRg:
@@ -377,8 +365,8 @@ def Get_Steady_State(
                 dt = init.default_dt
                 zero_curr_steady_state_counter += 1
                 if (
-                    zero_curr_steady_state_counter % init.Steady_state_rep == 1
-                    and zero_curr_steady_state_counter > 2
+                        zero_curr_steady_state_counter % init.Steady_state_rep == 1
+                        and zero_curr_steady_state_counter > 2
                 ):
                     not_in_steady_state = False
 
@@ -388,9 +376,9 @@ def Get_Steady_State(
             # update statistics
             if steady_state_reps <= 0:
                 I_right, I_down = F.Get_current_from_gamma(
-                    Gamma, reaction_index, init.near_right, init.near_left
-                )
+                    Gamma, reaction_index, init.near_right, init.near_left)
                 I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
+
             Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
@@ -405,17 +393,17 @@ def Get_Steady_State(
                     len(Q_avg)
                 )
 
-                if dist_new - dist > min(std, init.expected_error):
+                if dist_new - dist > min(std, expected_error):
                     not_decreasing += 1
-                    steady_state_reps = init.Steady_state_rep * 10
+                    steady_state_reps = init.Steady_state_rep * 5
                     if not not_decreasing % init.max_count:
                         error_count += 1
                         not_in_steady_state = False
 
                 # steady state conditions
                 elif (
-                    abs(dist_new) - init.expected_error < std < init.expected_error
-                    or abs(dist_new) < init.expected_error
+                        abs(dist_new) - expected_error < std < expected_error
+                        or abs(dist_new) < expected_error
                 ):
                     steady_state_reps -= 1
                     if steady_state_reps <= 0:
@@ -426,7 +414,7 @@ def Get_Steady_State(
                 # reset steady_state_timer
                 else:
                     steady_state_timer = init.timeStep
-                    steady_state_reps = init.Steady_state_rep * 10
+                    steady_state_reps = init.Steady_state_rep * 5
 
             # update time
             dist = dist_new

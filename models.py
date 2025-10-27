@@ -50,13 +50,10 @@ class ExperimentInitialState:
     max_count: int
 
     T0: float
-    T_std: float
-    T: list[float]
     Ec: float
     resolution: float
 
     Steady_state_rep: int
-    expected_error: float
 
 
 @dataclass
@@ -64,7 +61,6 @@ class Export:
     plot_results: bool
     prepare_table_triplets_file: Path
     results_file: Path
-    report_file: Path
 
 
 @dataclass

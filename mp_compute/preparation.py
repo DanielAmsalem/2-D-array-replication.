@@ -10,11 +10,11 @@ from models import ExperimentInitialState
 
 
 def compute_distributed_R_matrices(
-    stdR: float,
-    R: float,
-    array_size: int,
-    near_left: list,
-    near_right: list,
+        stdR: float,
+        R: float,
+        array_size: int,
+        near_left: list,
+        near_right: list,
 ) -> tuple[npt.NDArray, npt.NDArray]:
     R_t_ij = 2 ** np.random.uniform(
         low=np.log2(max(R - stdR, 0.01)),
@@ -32,10 +32,10 @@ def compute_distributed_R_matrices(
 
 
 def compute_fixed_R_matrices(
-    R: float,
-    array_size: int,
-    near_left: npt.NDArray,
-    near_right: npt.NDArray,
+        R: float,
+        array_size: int,
+        near_left: list[int],
+        near_right: list[int],
 ) -> tuple[npt.NDArray, npt.NDArray]:
     R_t_ij = np.full((array_size, array_size), R)
     R_i = np.full(array_size, R)
@@ -54,22 +54,22 @@ def compute_C_inverse(Ch: npt.NDArray, Cv: npt.NDArray, row_num: int) -> npt.NDA
     second_diagonal = second_diagonal[:-1]
     n_diagonal = np.copy(Cv[1:-1, :])
     C_mat = (
-        np.diagflat(diagonal)
-        - np.diagflat(second_diagonal, k=1)
-        - np.diagflat(second_diagonal, k=-1)
-        - np.diagflat(n_diagonal, k=row_num)
-        - np.diagflat(n_diagonal, k=-row_num)
+            np.diagflat(diagonal)
+            - np.diagflat(second_diagonal, k=1)
+            - np.diagflat(second_diagonal, k=-1)
+            - np.diagflat(n_diagonal, k=row_num)
+            - np.diagflat(n_diagonal, k=-row_num)
     )
     return np.linalg.inv(C_mat)  # define inverse
 
 
 def compute_distributed_C_matrices(
-    C: float,
-    sig: float,
-    row_num: int,
-    array_size: int,
-    near_left: npt.NDArray,
-    near_right: npt.NDArray,
+        C: float,
+        sig: float,
+        row_num: int,
+        array_size: int,
+        near_left: list[int],
+        near_right: list[int],
 ) -> tuple[npt.NDArray, npt.NDArray]:
     Ch = np.random.normal(0, sig, size=(row_num, row_num + 1))
     Cv = np.random.normal(0, sig, size=(row_num + 1, row_num))
@@ -113,11 +113,11 @@ def compute_distributed_C_matrices(
 
 
 def compute_fixed_C_matrices(
-    C: float,
-    row_num: int,
-    array_size: int,
-    near_left: npt.NDArray,
-    near_right: npt.NDArray,
+        C: float,
+        row_num: int,
+        array_size: int,
+        near_left: npt.NDArray,
+        near_right: npt.NDArray,
 ) -> tuple[npt.NDArray, npt.NDArray]:
     Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
     Cv = np.random.normal(C, 0, size=(row_num + 1, row_num))
@@ -132,18 +132,18 @@ def compute_fixed_C_matrices(
 
 
 def define_tau_matrix(
-    C_inverse: npt.NDArray,
-    mean_Cg: float,
-    mean_Rg: float,
-    array_size: int,
+        C_inverse: npt.NDArray,
+        mean_Cg: float,
+        mean_Rg: float,
+        array_size: int,
 ) -> npt.NDArray:
     res = C_inverse + np.diagflat([1 / mean_Cg] * array_size)
-    a = np.array([mean_Rg] * array_size)  # flattening to coloumn
+    a = np.array([mean_Rg] * array_size)  # flattening to column
     reshaped = a.reshape((a.size, 1))
     return -res / np.repeat(reshaped, res.shape[1], axis=1)
 
 
-def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
+def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInitialState:
     distribute_R = True
     distribute_C = True
 
@@ -155,9 +155,9 @@ def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
     sig = 0.5 * C
 
     row_num = 10
-    array_size = row_num**2
+    array_size = row_num ** 2
     islands = list(range(array_size))
-    near_right = islands[(row_num - 1) :: row_num]
+    near_right = islands[(row_num - 1):: row_num]
     near_left = islands[0::row_num]
 
     if distribute_R:
@@ -195,9 +195,7 @@ def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
         max_count=50000,
         distribute_R=distribute_R,
         distribute_C=distribute_C,
-        T0=(T0 := 0.001 * e * e / (C * kB)),
-        T_std=T0 / 20,
-        T=(T := [T0]),
+        T0=unitless_T0 * e * e / (C * kB),
         Rg=np.array([mean_Rg] * array_size),
         Cg=np.array([mean_Cg] * array_size),
         Ec=(Ec := 1 / (2 * mean_Cg)),
@@ -205,7 +203,6 @@ def prepare_initial_state(loop_count: int) -> ExperimentInitialState:
         neg_energy_bound=-0.09,  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
         resolution=0.000001,
         Steady_state_rep=100,
-        expected_error=0.01 * (row_num - 1) * np.sqrt(max(T) / T0),
         Volts=abs(e) / C,  # normalized voltage unit
         Amp=abs(e) / (C * R),  # normalized current unit
         CondRg=mean_Rg,
@@ -232,8 +229,8 @@ def prepare_table_triplets(init_state: ExperimentInitialState) -> npt.NDArray:
     mp.dps = 30
 
     num_of_calc = (
-        init_state.pos_energy_bound - init_state.neg_energy_bound
-    ) / init_state.resolution
+                          init_state.pos_energy_bound - init_state.neg_energy_bound
+                  ) / init_state.resolution
     vals_to_calc = np.linspace(
         init_state.pos_energy_bound, init_state.neg_energy_bound, num=round(num_of_calc)
     )
@@ -269,7 +266,8 @@ def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
 
 
 def validate_table_triplets_file(
-    triplets_file: Path, init_state: ExperimentInitialState
+        triplets_file: Path, init_state: ExperimentInitialState,
+        T
 ) -> bool:
     if not triplets_file.exists():
         warnings.warn(
@@ -285,7 +283,7 @@ def validate_table_triplets_file(
     T_in_file = np.unique(table_T)
 
     # Compare with the current T, Ec
-    if F.contains_allclose(needles=np.array(init_state.T), haystack=T_in_file):
+    if F.contains_allclose(needles=T, haystack=T_in_file):
         print("Existing table found for the current temperature list.")
         print(f"First val: {table_val[0]}, Last val: {table_val[-1]}")
         if np.isclose(init_state.Ec, mu):
@@ -294,9 +292,9 @@ def validate_table_triplets_file(
         else:
             print("mu = " + str(mu))
             print("Ec = " + str(init_state.Ec))
-            ValueError("mu doesn't match Ec")
+            # ValueError("mu doesn't match Ec")
     else:
         print("Existing table doesn't match T list")
         print(T_in_file)
-        print(np.array(init_state.T))
-        raise ValueError
+        print(T)
+        # raise ValueError
