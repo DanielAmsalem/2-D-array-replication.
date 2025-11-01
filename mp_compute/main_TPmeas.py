@@ -25,7 +25,7 @@ EXPORT_PATH = Path(__file__).parent.parent / "export"
 
 
 def main(export: Export) -> None:
-    loop_count = 2
+    loop_count = 3
     T0_unitless = 0.001
     T0_std = T0_unitless / 20
     init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless)
