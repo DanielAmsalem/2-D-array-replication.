@@ -256,7 +256,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) ->
             )
 
     mp.dps = 15
-    return np.ndarray(rows, dtype=np.float32).reshape(-1, 4)
+    return np.array(rows, dtype=np.float32).reshape(-1, 4)
 
 
 def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
