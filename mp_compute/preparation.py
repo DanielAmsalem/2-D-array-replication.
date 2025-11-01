@@ -224,7 +224,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
     )
 
 
-def prepare_table_triplets(init_state: ExperimentInitialState) -> npt.NDArray:
+def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) -> npt.NDArray:
     rr = 0
     mp.dps = 30
 
@@ -236,8 +236,11 @@ def prepare_table_triplets(init_state: ExperimentInitialState) -> npt.NDArray:
     )
     rows = []
 
+    T_list_to_compute = np.array(expected_list) * init_state.T0
+    print(T_list_to_compute)
+
     for val in vals_to_calc:
-        for temp in init_state.T:
+        for temp in T_list_to_compute:
             probability = quad(F.integrand(temp, val, init_state.Ec), [-1, 1])
             rows.append(
                 np.array(
@@ -247,7 +250,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState) -> npt.NDArray:
             )
             rr += 1
 
-            total_to_calc = len(vals_to_calc) * len(init_state.T)
+            total_to_calc = len(vals_to_calc) * len(T_list_to_compute)
             print(
                 f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%"
             )

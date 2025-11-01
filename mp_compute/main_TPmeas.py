@@ -26,13 +26,16 @@ EXPORT_PATH = Path(__file__).parent.parent / "export"
 
 def main(export: Export) -> None:
     loop_count = 2
-    init = prepare_initial_state(loop_count=loop_count, unitless_T0=0.001)
+    T0_unitless = 0.001
+    T0_std = T0_unitless / 20
+    init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless)
 
     date_ = datetime.datetime.now()
     run_name = date_.strftime("%Y_%m_%d_%H_%M_%S")
 
     if not validate_table_triplets_file(export.prepare_table_triplets_file, init, np.array([init.T0])):
-        table_triplets = prepare_table_triplets(init)
+        expected_list = [T0_unitless + i * T0_std for i in range(init.row_num)]
+        table_triplets = prepare_table_triplets(init, expected_list)
         output_table_triplets(table_triplets, export.prepare_table_triplets_file)
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
