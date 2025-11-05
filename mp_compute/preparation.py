@@ -198,9 +198,9 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
         T0=unitless_T0 * e * e / (C * kB),
         Rg=np.array([mean_Rg] * array_size),
         Cg=np.array([mean_Cg] * array_size),
-        Ec=(Ec := 1 / (2 * mean_Cg)),
-        pos_energy_bound=-0.01,  # -0.01 for T=0.001; 0.08 for T=0.01; 1.3 for T=0.1 at cg = 10
-        neg_energy_bound=-0.09,  # -0.09 for T=0.001; -0.19 for T=0.01; -1.4 for T=0.1 at cg = 10
+        Ec=1 / (2 * mean_Cg),
+        pos_energy_bound=0.14,  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
+        neg_energy_bound=-0.24,  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
         resolution=0.000001,
         Steady_state_rep=100,
         Volts=abs(e) / C,  # normalized voltage unit
@@ -237,6 +237,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) ->
     rows = []
 
     T_list_to_compute = np.array(expected_list) * init_state.T0
+    print(f"computing for energies {init_state.pos_energy_bound} > dE > {init_state.neg_energy_bound}")
     print(T_list_to_compute)
 
     for val in vals_to_calc:

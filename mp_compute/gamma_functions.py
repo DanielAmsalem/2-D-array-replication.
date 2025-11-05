@@ -11,12 +11,11 @@ from models import ExperimentInitialState, SteadyStateResult
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_gradient):
     # for flipped
     temp_idx = np.where(np.flip(T_gradient, axis=0) == T_at_junction)[0][0]
-    temp_idx = 0  # for constant
 
-    # sorted_vals = table_val[temp_idx::len(T_gradient)]
-    # probs = table_prob[temp_idx::len(T_gradient)]
-    sorted_vals = table_val
-    probs = table_prob
+    sorted_vals = table_val[temp_idx::len(T_gradient)]
+    probs = table_prob[temp_idx::len(T_gradient)]
+    #sorted_vals = table_val
+    #probs = table_prob
 
     idx = bisect.bisect_left(sorted_vals, dE)
 
@@ -55,8 +54,15 @@ def Gamma_approx(
     if Rt < 0:
         raise ValueError
 
+    val = (-dE - Ec) * e ** 2 / Rt
+
+    if T_at_junction == 0:
+        if dE < -Ec:
+            return val
+        else:
+            return 0
+
     if dE < neg_energy_bound:
-        val = (-dE - Ec) * e ** 2 / Rt
         if val < 0:
             print(val)
             raise ValueError
@@ -152,7 +158,7 @@ def Get_Gamma(
                 Gamma_ += [
                     Gamma_approx(
                         dEij[i][j],
-                        T_gradient[0],
+                        T_gradient[i % row_num],
                         R_t_ij[i][j],
                         Ec,
                         e,
@@ -178,7 +184,7 @@ def Get_Gamma(
             Gamma_ += [
                 Gamma_approx(
                     dE_left,
-                    T_gradient[0],
+                    T_gradient[isle % row_num],
                     R_t_i[isle],
                     Ec,
                     e,
@@ -203,7 +209,7 @@ def Get_Gamma(
                 Gamma_ += [
                     Gamma_approx(
                         dE_left,
-                        T_gradient[0],
+                        T_gradient[i % row_num],
                         R_t_i[isle],
                         Ec,
                         e,
@@ -227,7 +233,7 @@ def Get_Gamma(
             Gamma_ += [
                 Gamma_approx(
                     dE_right,
-                    T_gradient[0],
+                    T_gradient[isle % row_num],
                     R_t_i[isle],
                     Ec,
                     e,
@@ -251,7 +257,7 @@ def Get_Gamma(
                 Gamma_ += [
                     Gamma_approx(
                         dE_right,
-                        T_gradient[0],
+                        T_gradient[isle % row_num],
                         R_t_i[isle],
                         Ec,
                         e,

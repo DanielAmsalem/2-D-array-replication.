@@ -204,3 +204,9 @@ def VxCix(Vl, Vr, array_size, near_left, near_right, Cix):
     for u in near_right:
         _VxCix[u] = Cix[u] * Vr
     return np.array(_VxCix)
+
+
+def orjson_default(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError
