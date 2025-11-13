@@ -301,4 +301,4 @@ def validate_table_triplets_file(
         print("Existing table doesn't match T list")
         print(T_in_file)
         print(T)
-        # raise ValueError
+        raise ValueError

@@ -3,7 +3,6 @@ from functools import partial
 from pathlib import Path
 import datetime
 
-import Functions
 import curve_plotter
 
 import matplotlib
@@ -13,15 +12,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from models import Export, SteadyStateResult
-from mp_compute.gamma_functions import Get_Steady_State
-from mp_compute.preparation import (
+from gamma_functions import Get_Steady_State
+from preparation import (
     prepare_initial_state,
     validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
 )
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 import orjson
 
 EXPORT_PATH = Path(__file__).parent.parent / "export"

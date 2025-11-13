@@ -2,8 +2,7 @@ import csv
 
 import numpy as np
 
-from models import ExperimentInitialState, Export
-from mp_compute.gamma_functions import Get_Steady_State
+from models import ExperimentInitialState
 
 
 def iv_curve_computer(

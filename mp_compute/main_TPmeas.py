@@ -12,8 +12,8 @@ import numpy as np
 import bisect
 
 from models import Export, SteadyStateResult
-from mp_compute.gamma_functions import Get_Steady_State
-from mp_compute.preparation import (
+from gamma_functions import Get_Steady_State
+from preparation import (
     prepare_initial_state,
     validate_table_triplets_file,
     prepare_table_triplets,
