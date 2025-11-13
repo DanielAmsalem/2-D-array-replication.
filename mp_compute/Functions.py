@@ -213,3 +213,17 @@ def orjson_default(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     raise TypeError
+
+def unique_significant_floats(list_of_lists, rtol=1e-5, atol=1e-8):
+    # Flatten to one array
+    arr = np.array(list_of_lists).ravel()
+
+    # Sort so close values are adjacent
+    arr = np.sort(arr)
+
+    # Keep only values that differ by more than the tolerance
+    unique = [arr[0]]
+    for x in arr[1:]:
+        if not np.isclose(x, unique[-1], rtol=rtol, atol=atol):
+            unique.append(x)
+    return np.array(unique).tolist()

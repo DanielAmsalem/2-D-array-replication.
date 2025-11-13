@@ -228,9 +228,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) ->
     rr = 0
     mp.dps = 30
 
-    num_of_calc = (
-                          init_state.pos_energy_bound - init_state.neg_energy_bound
-                  ) / init_state.resolution
+    num_of_calc = (init_state.pos_energy_bound - init_state.neg_energy_bound) / init_state.resolution
     vals_to_calc = np.linspace(
         init_state.pos_energy_bound, init_state.neg_energy_bound, num=round(num_of_calc)
     )
@@ -296,7 +294,7 @@ def validate_table_triplets_file(
         else:
             print("mu = " + str(mu))
             print("Ec = " + str(init_state.Ec))
-            # ValueError("mu doesn't match Ec")
+            ValueError("mu doesn't match Ec")
     else:
         print("Existing table doesn't match T list")
         print(T_in_file)
