@@ -30,6 +30,7 @@ def main(export: Export) -> None:
     loop_count = 100
     T0_unitless = 0.001
     T_std = 1
+    flip = False
     init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless)
 
     date_ = datetime.datetime.now()
@@ -71,7 +72,7 @@ def main(export: Export) -> None:
             cycles=cycles,
             table_val=table_val,
             table_prob=table_prob,
-            flip=False,
+            flip=flip,
             T=(T := [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]),
             table_T=T,
             expected_error=0.01 * (init.row_num - 1)
@@ -101,7 +102,11 @@ def main(export: Export) -> None:
             color="blue",
         )
         plt.xlabel("Voltage")
-        plt.ylabel("Current")
+        plt.ylabel("Current L->R")
+        if flip:
+            plt.title(f"Even {T_std}*T0 gradient, Tl > Tr")
+        else:
+            plt.title(f"Even {T_std}*T0 gradient, Tl < Tr")
         plt.show()
 
 
