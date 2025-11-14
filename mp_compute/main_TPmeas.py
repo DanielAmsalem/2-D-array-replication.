@@ -50,17 +50,19 @@ def main(export: Export) -> None:
 
     full_expected_list = F.unique_significant_floats(full_expected_list, rtol=1e-5, atol=1e-8)
 
-
     if not validate_table_triplets_file(export.prepare_table_triplets_file, init, np.array(full_expected_list)):
         full_expected_list_over_T0 = [x/init.T0 for x in full_expected_list]
         table_triplets = prepare_table_triplets(init, full_expected_list_over_T0)
         output_table_triplets(table_triplets, export.prepare_table_triplets_file)
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
+        table_T = table_triplets[:len(full_expected_list), 2]
     else:
         table_triplets = np.load(export.prepare_table_triplets_file.as_posix())
         table_val = table_triplets["val"]
         table_prob = table_triplets["prob"]
+        table_T = table_triplets["temp"]
+        table_T = table_T[:len(full_expected_list)] #take only
 
     V_diff = 4
     steps = 100
@@ -81,6 +83,7 @@ def main(export: Export) -> None:
             cycles=cycles,
             table_val=table_val,
             table_prob=table_prob,
+            table_T=table_T,
             T=[init.T0],
             expected_error=0.01 * (init.row_num - 1)
         )
@@ -124,6 +127,7 @@ def main(export: Export) -> None:
                 cycles=cycles,
                 table_val=table_val,
                 table_prob=table_prob,
+                table_T=table_T,
                 T=(T := np.linspace(init.T0, init.T0 + init.row_num * T_std, init.row_num)),
                 expected_error=0.01 * (init.row_num - 1) * np.sqrt(max(T) / init.T0)
             )
@@ -139,7 +143,7 @@ def main(export: Export) -> None:
                                                                Vleft=Vleft,
                                                                repetition=repetition)
 
-        V0_vec += [np.searchsorted(I_vec_avg, 0)]
+        V0_vec += [float(np.searchsorted(I_vec_avg, 0))]
         dT_vec += [T_std]
 
         if I_vec_avg[index_2] < 0:

@@ -237,6 +237,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) ->
     T_list_to_compute = np.array(expected_list) * init_state.T0
     print(f"computing for energies {init_state.pos_energy_bound} > dE > {init_state.neg_energy_bound}")
     print(T_list_to_compute)
+    total_to_calc = len(vals_to_calc) * len(T_list_to_compute)
 
     for val in vals_to_calc:
         for temp in T_list_to_compute:
@@ -249,10 +250,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) ->
             )
             rr += 1
 
-            total_to_calc = len(vals_to_calc) * len(T_list_to_compute)
-            print(
-                f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%"
-            )
+            print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%")
 
     mp.dps = 15
     return np.array(rows, dtype=np.float32).reshape(-1, 4)

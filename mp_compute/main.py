@@ -3,9 +3,8 @@ from functools import partial
 from pathlib import Path
 import datetime
 
-import curve_plotter
-
 import matplotlib
+
 matplotlib.use("TkAgg")
 
 import matplotlib.pyplot as plt
@@ -19,6 +18,7 @@ from preparation import (
     prepare_table_triplets,
     output_table_triplets,
 )
+import curve_plotter
 
 from dataclasses import asdict
 import orjson
