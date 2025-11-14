@@ -41,10 +41,10 @@ def main(export: Export) -> None:
     serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
     outfile.write_text(serialized_init_data)
 
+    T_list_to_compute = [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]
     if not validate_table_triplets_file(export.prepare_table_triplets_file, init,
-                                        np.array([init.T0 + i * init.T0 * T_std for i in range(init.row_num)])):
-        expected_list = [1 + i * T_std for i in range(init.row_num)]
-        table_triplets = prepare_table_triplets(init, expected_list)
+                                        np.array(T_list_to_compute)):
+        table_triplets = prepare_table_triplets(init, T_list_to_compute)
         output_table_triplets(table_triplets, export.prepare_table_triplets_file)
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
