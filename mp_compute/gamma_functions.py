@@ -9,13 +9,11 @@ from models import ExperimentInitialState, SteadyStateResult
 
 
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table):
-    # for flipped
-    temp_idx = np.where(np.flip(T_table, axis=0) == T_at_junction)[0][0]
+
+    temp_idx = np.where(np.array(T_table) == T_at_junction)[0][0]
 
     sorted_vals = table_val[temp_idx::len(T_table)]
     probs = table_prob[temp_idx::len(T_table)]
-    #sorted_vals = table_val
-    #probs = table_prob
 
     idx = bisect.bisect_left(sorted_vals, dE)
 

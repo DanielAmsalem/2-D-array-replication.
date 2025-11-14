@@ -62,7 +62,7 @@ def main(export: Export) -> None:
         table_val = table_triplets["val"]
         table_prob = table_triplets["prob"]
         table_T = table_triplets["temp"]
-        table_T = table_T[:len(full_expected_list)] #take only
+        table_T = table_T[:len(full_expected_list)] # take only first recurrence of T list
 
     V_diff = 4
     steps = 100

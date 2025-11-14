@@ -41,7 +41,8 @@ def main(export: Export) -> None:
     serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
     outfile.write_text(serialized_init_data)
 
-    if not validate_table_triplets_file(export.prepare_table_triplets_file, init, np.array([init.T0 + i * init.T0 * T_std for i in range(init.row_num)])):
+    if not validate_table_triplets_file(export.prepare_table_triplets_file, init,
+                                        np.array([init.T0 + i * init.T0 * T_std for i in range(init.row_num)])):
         expected_list = [1 + i * T_std for i in range(init.row_num)]
         table_triplets = prepare_table_triplets(init, expected_list)
         output_table_triplets(table_triplets, export.prepare_table_triplets_file)
@@ -71,7 +72,9 @@ def main(export: Export) -> None:
             table_val=table_val,
             table_prob=table_prob,
             # list(reversed([init.T0 + i * init.T0 * T_std for i in range(init.row_num)])) for reversed gradient
-            T=[init.T0 + i * init.T0 * T_std for i in range(init.row_num)],
+            # if reversing T, need to unreverse for table_T
+            T=(T := [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]),
+            table_T=T,
             expected_error=0.01 * (init.row_num - 1)
         )
 
