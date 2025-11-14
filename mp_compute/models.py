@@ -54,6 +54,12 @@ class ExperimentInitialState:
     resolution: float
 
     Steady_state_rep: int
+    sig: float
+    stdR: float
+    mean_allCs: float
+    mean_sideCs: float
+    std_allCs: float
+    std_sideCs: float
 
 
 @dataclass

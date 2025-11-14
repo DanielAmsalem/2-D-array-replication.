@@ -70,7 +70,7 @@ def compute_distributed_C_matrices(
         array_size: int,
         near_left: list[int],
         near_right: list[int],
-) -> tuple[npt.NDArray, npt.NDArray]:
+):
     Ch = np.random.normal(0, sig, size=(row_num, row_num + 1))
     Cv = np.random.normal(0, sig, size=(row_num + 1, row_num))
 
@@ -109,7 +109,7 @@ def compute_distributed_C_matrices(
             print(c)
             raise ValueError("Negative")
 
-    return Cix, compute_C_inverse(Ch, Cv, row_num)
+    return Cix, compute_C_inverse(Ch, Cv, row_num), np.mean(all_Cs), np.mean(side_Cs), np.std(all_Cs), np.std(side_Cs)
 
 
 def compute_fixed_C_matrices(
@@ -168,13 +168,15 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
         R_t_i, R_t_ij = compute_fixed_R_matrices(R, array_size, near_left, near_right)
 
     if distribute_C:
-        Cix, C_inverse = compute_distributed_C_matrices(
+        Cix, C_inverse, mean_allCs, mean_sideCs, std_allCs, std_sideCs = compute_distributed_C_matrices(
             C, sig, row_num, array_size, near_left, near_right
         )
     else:
         Cix, C_inverse = compute_fixed_C_matrices(
             C, row_num, array_size, near_left, near_right
         )
+        mean_allCs, mean_sideCs = C, C
+        std_allCs, std_sideCs = 0, 0
 
     Tau_inv = define_tau_matrix(C_inverse, mean_Cg, mean_Rg, array_size)
     InvTauEigenValues, InvTauEigenVectors = np.linalg.eig(Tau_inv)
@@ -221,6 +223,12 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
         timeStep=timeStep,
         Tau=Tau,
         matrixQnPart=Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0]),
+        sig=sig,
+        stdR=stdR,
+        mean_allCs=mean_allCs,
+        mean_sideCs=mean_sideCs,
+        std_allCs=std_allCs,
+        std_sideCs=std_sideCs
     )
 
 
