@@ -8,9 +8,12 @@ import Functions as F
 from models import ExperimentInitialState, SteadyStateResult
 
 
-def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table):
+def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table, flip):
 
-    temp_idx = np.where(np.array(T_table) == T_at_junction)[0][0]
+    if flip:
+        temp_idx = np.where(np.flip(T_table) == T_at_junction)[0][0]
+    else:
+        temp_idx = np.where(np.array(T_table) == T_at_junction)[0][0]
 
     sorted_vals = table_val[temp_idx::len(T_table)]
     probs = table_prob[temp_idx::len(T_table)]
@@ -46,6 +49,7 @@ def Gamma_approx(
         table_val,
         table_prob,
         T_table,
+        flip
 ):
     # low bound starts at dE=-0.09 and thence is analytically the mean of a gaussian
     # high bound starts at dE=-0.01 and thence is 0
@@ -68,7 +72,7 @@ def Gamma_approx(
 
     elif pos_energy_bound > dE > neg_energy_bound:
         approx = approximate_gamma_integral(
-            dE, T_at_junction, table_val, table_prob, T_table
+            dE, T_at_junction, table_val, table_prob, T_table, flip
         )
         val = approx * e ** 2 / Rt
         return val
@@ -127,6 +131,7 @@ def Get_Gamma(
         table_val,
         table_prob,
         T_table,
+        flip
 ):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -166,6 +171,7 @@ def Get_Gamma(
                         table_val,
                         table_prob,
                         T_table,
+                        flip
                     )
                 ]
                 RR += Gamma_[-1]
@@ -192,6 +198,7 @@ def Get_Gamma(
                     table_val,
                     table_prob,
                     T_table,
+                    flip
                 )
             ]
             RR += Gamma_[-1]
@@ -217,6 +224,7 @@ def Get_Gamma(
                         table_val,
                         table_prob,
                         T_table,
+                        flip
                     )
                 ]
                 RR += Gamma_[-1]
@@ -241,6 +249,7 @@ def Get_Gamma(
                     table_val,
                     table_prob,
                     T_table,
+                    flip
                 )
             ]
             RR += Gamma_[-1]
@@ -265,6 +274,7 @@ def Get_Gamma(
                         table_val,
                         table_prob,
                         T_table,
+                        flip
                     )
                 ]
                 RR += Gamma_[-1]
@@ -280,6 +290,7 @@ def Get_Steady_State(
         cycles: int,
         table_val,
         table_prob,
+        flip,
         table_T,
         expected_error: float,
         T: npt.NDArray
@@ -350,7 +361,8 @@ def Get_Steady_State(
                 Ec=init.Ec,
                 table_val=table_val,
                 table_prob=table_prob,
-                T_table=table_T
+                T_table=table_T,
+                flip=flip
             )
 
             # transition occurred, limit for R is the typical ground drain current
