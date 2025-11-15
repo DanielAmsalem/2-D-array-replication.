@@ -9,7 +9,6 @@ from models import ExperimentInitialState, SteadyStateResult
 
 
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table, flip):
-
     if flip:
         temp_idx = np.where(np.flip(T_table) == T_at_junction)[0][0]
     else:
@@ -388,6 +387,11 @@ def Get_Steady_State(
                         and zero_curr_steady_state_counter > 2
                 ):
                     not_in_steady_state = False
+
+            # check if any n is negative
+            # if F.has_neg(n):
+            #     print(n, l, m, chosen_rate)
+            #     raise ValueError
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, n, VxCix, init)

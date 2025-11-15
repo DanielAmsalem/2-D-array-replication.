@@ -95,7 +95,7 @@ def compute_distributed_C_matrices(
         min_val = -np.min(side_Cs) + 0.1
 
     # Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
-    Cl, Cr = Cl + min_val + C, Cr + min_val + C / 2
+    Cl, Cr = Cl + min_val + C, Cr + min_val + C
     side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
 
     Cix = np.zeros(array_size)

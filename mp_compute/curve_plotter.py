@@ -73,7 +73,7 @@ def report_param(init: ExperimentInitialState,
         f.write("---------------------------------------------" + "\n")
         f.write("these are the raw variances and means\n")
         f.write("<R> : " + str(init.R_avg) + ", std(Rt_ij) : " + str(np.std(init.R_t_ij)) + "\n")
-        f.write("<Rt_i> : "+ str(np.mean(init.R_t_i)) + ", std(Rt_i) : " + str(np.std(np.array(init.R_t_i))) + "\n")
+        f.write("<Rt_i> : " + str(np.mean(init.R_t_i)) + ", std(Rt_i) : " + str(np.std(np.array(init.R_t_i))) + "\n")
         f.write("<C> : " + str(init.mean_allCs) + ", std(C) : " + str(init.std_allCs) + "\n")
         f.write("<Cix> : " + str(init.mean_sideCs) + ", std(Cix) : " + str(init.std_sideCs)+ "\n")
         f.write("\n")

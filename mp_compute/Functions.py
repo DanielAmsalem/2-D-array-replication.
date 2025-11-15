@@ -227,3 +227,8 @@ def unique_significant_floats(list_of_lists, rtol=1e-5, atol=1e-8):
         if not np.isclose(x, unique[-1], rtol=rtol, atol=atol):
             unique.append(x)
     return np.array(unique).tolist()
+
+def has_neg(n):
+    if len(n[n<0]) > 0:
+        return True
+    return False

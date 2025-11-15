@@ -28,7 +28,7 @@ EXPORT_PATH = Path(__file__).parent.parent / "export"
 t0 = time.time()
 
 def main(export: Export) -> None:
-    loop_count = 3
+    loop_count = 100
     T0_unitless = 0.001
     T_std = 1
     flip = False
