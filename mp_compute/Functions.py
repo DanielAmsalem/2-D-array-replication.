@@ -2,7 +2,7 @@ import numpy as np
 from mpmath import exp, sqrt
 
 # parameters
-from models import ExperimentInitialState
+from define_objects import ExperimentInitialState
 
 
 def flattenToColumn(a):

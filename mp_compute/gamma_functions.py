@@ -5,14 +5,24 @@ import numpy as np
 import numpy.typing as npt
 
 import Functions as F
-from models import ExperimentInitialState, SteadyStateResult
+from define_objects import ExperimentInitialState, SteadyStateResult
 
 
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table, flip):
+    tol = 1e-6
+
     if flip:
-        temp_idx = np.where(np.flip(T_table) == T_at_junction)[0][0]
+        matches = np.where(np.abs(np.flip(T_table) - T_at_junction) < tol)[0]
+        if len(matches) != 1:
+            raise ValueError("No single matching T found within tolerance\n T_table is " + str(np.array(T_table)) +
+                             "\n T_at_junction is " + str(np.array(T_at_junction)))
+        temp_idx = matches[0]
     else:
-        temp_idx = np.where(np.array(T_table) == T_at_junction)[0][0]
+        matches = np.where(np.abs(np.array(T_table) - T_at_junction) < tol)[0]
+        if len(matches) != 1:
+            raise ValueError("No single matching T found within tolerance\n T_table is " + str(np.array(T_table)) +
+                             "\n T_at_junction is " + str(np.array(T_at_junction)))
+        temp_idx = matches[0]
 
     sorted_vals = table_val[temp_idx::len(T_table)]
     probs = table_prob[temp_idx::len(T_table)]
@@ -295,6 +305,7 @@ def Get_Steady_State(
         T: npt.NDArray,
         pos_energy_bound: float,
         neg_energy_bound: float,
+        repetition: int
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -332,7 +343,7 @@ def Get_Steady_State(
             V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)  # find V_i for ith island
 
             if k == 1:
-                print(f"{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
+                print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
 
             # define overall reaction rate R, rate vector, and a useful index
             R = 0

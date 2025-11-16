@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from models import Export, SteadyStateResult
+from define_objects import IMPORT_EXPORT, SteadyStateResult
 from preparation import (
     prepare_initial_state,
     validate_table_triplets_file,
@@ -21,7 +21,7 @@ t0 = time.time()
 filename = os.path.basename(__file__)
 
 
-def main(export: Export) -> None:
+def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
     T0_unitless = 0.001
     T_std_list = [i for i in range(3, 20)]
@@ -54,9 +54,9 @@ def main(export: Export) -> None:
 if __name__ == "__main__":
     iter_name = re.search(r"Tstd(\d+)", filename).group(1)  # filename should be "compute_table_Tstd%J_20" 3=<%J<=19
     main(
-        Export(
+        IMPORT_EXPORT(
             plot_results=True,
             prepare_table_triplets_file=EXPORT_PATH / f"table_triplets_Tstd{iter_name}_20.npz",
-            results_file=EXPORT_PATH / "tmp",
+            csv_table_path=EXPORT_PATH / "tmp",
         )
     )

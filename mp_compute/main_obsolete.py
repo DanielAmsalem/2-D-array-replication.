@@ -12,7 +12,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from models import Export, SteadyStateResult
+from define_objects import IMPORT_EXPORT, SteadyStateResult
 from gamma_functions import Get_Steady_State
 from preparation import (
     prepare_initial_state,
@@ -29,7 +29,7 @@ EXPORT_PATH = Path(__file__).parent.parent / "export"
 t0 = time.time()
 
 
-def main(export: Export) -> None:
+def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
     T0_unitless = 0.001
     T_std = 1
@@ -90,11 +90,11 @@ def main(export: Export) -> None:
             executor.map(loaded_state_function, range(init.loop_count))
         )
 
-    I_vec_avg, I_vec_std = curve_plotter.iv_curve_computer(init=init,
-                                                           filename=run_name,
-                                                           results=results,
-                                                           Vleft=Vleft,
-                                                           repetition=0)
+    I_vec_avg, I_vec_std = curve_plotter.iv_curve_compute_and_save_csv(init=init,
+                                                                       filename=run_name,
+                                                                       results=results,
+                                                                       Vleft=Vleft,
+                                                                       repetition=0)
 
     curve_plotter.report_param(init=init,
                                filename=run_name,
@@ -129,9 +129,9 @@ def main(export: Export) -> None:
 
 if __name__ == "__main__":
     main(
-        Export(
+        IMPORT_EXPORT(
             plot_results=True,
             prepare_table_triplets_file=EXPORT_PATH / "table_triplets.npz",
-            results_file=EXPORT_PATH / "tmp",
+            csv_table_path=EXPORT_PATH / "tmp",
         )
     )

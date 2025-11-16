@@ -6,7 +6,7 @@ import numpy.typing as npt
 from mpmath import quad, mp
 
 import Functions as F
-from models import ExperimentInitialState
+from define_objects import ExperimentInitialState
 
 
 def compute_distributed_R_matrices(
@@ -236,7 +236,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
                            neg_energy_bound) -> npt.NDArray:
     rr = 0
     mp.dps = 30
-
+    print(pos_energy_bound, neg_energy_bound, init_state.resolution)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
     vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
     rows = []

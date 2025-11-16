@@ -61,10 +61,10 @@ class ExperimentInitialState:
 
 
 @dataclass
-class Export:
+class IMPORT_EXPORT:
     plot_results: bool
     prepare_table_triplets_file_list: list[Path]
-    results_file: Path
+    csv_table_path: Path
 
 @dataclass
 class SteadyStateResult:

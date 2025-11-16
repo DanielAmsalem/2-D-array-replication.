@@ -2,10 +2,10 @@ import csv
 
 import numpy as np
 import time
-from models import ExperimentInitialState
+from define_objects import ExperimentInitialState
 
 
-def iv_curve_computer(
+def iv_curve_compute_and_save_csv(
         init: ExperimentInitialState,
         filename: str,
         Vleft,
@@ -48,7 +48,7 @@ def report_param(init: ExperimentInitialState,
                  loop_count: int,
                  T_std: float,
                  t0):
-    with open(f"parameters_{filename}_rep{0}.txt", "w") as f:
+    with open(f"parameters_{filename}_rep{repetition}.txt", "w") as f:
         f.write(f"repetition {repetition}\n")
         f.write("loop parameters" + "\n")
         f.write("---------------------------------------------" + "\n")
