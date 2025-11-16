@@ -292,7 +292,9 @@ def Get_Steady_State(
         flip,
         table_T,
         expected_error: float,
-        T: npt.NDArray
+        T: npt.NDArray,
+        pos_energy_bound: float,
+        neg_energy_bound: float,
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -349,8 +351,8 @@ def Get_Steady_State(
                 islands=init.islands,
                 row_num=init.row_num,
                 C_inv=init.C_inv,
-                pos_energy_bound=init.pos_energy_bound,
-                neg_energy_bound=init.neg_energy_bound,
+                pos_energy_bound=pos_energy_bound,
+                neg_energy_bound=neg_energy_bound,
                 T_gradient=T,
                 R_t_ij=init.R_t_ij,
                 R_t_i=init.R_t_i,

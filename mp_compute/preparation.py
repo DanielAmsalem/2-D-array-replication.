@@ -201,8 +201,6 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
         Rg=np.array([mean_Rg] * array_size),
         Cg=np.array([mean_Cg] * array_size),
         Ec=1 / (2 * mean_Cg),
-        pos_energy_bound=0.14,  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
-        neg_energy_bound=-0.24,  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
         resolution=0.000001,
         Steady_state_rep=100,
         Volts=abs(e) / C,  # normalized voltage unit
@@ -232,18 +230,19 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
     )
 
 
-def prepare_table_triplets(init_state: ExperimentInitialState, expected_list) -> npt.NDArray:
+def prepare_table_triplets(init_state: ExperimentInitialState,
+                           expected_list,
+                           pos_energy_bound,
+                           neg_energy_bound) -> npt.NDArray:
     rr = 0
     mp.dps = 30
 
-    num_of_calc = (init_state.pos_energy_bound - init_state.neg_energy_bound) / init_state.resolution
-    vals_to_calc = np.linspace(
-        init_state.pos_energy_bound, init_state.neg_energy_bound, num=round(num_of_calc)
-    )
+    num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
+    vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
     rows = []
 
     T_list_to_compute = np.array(expected_list)
-    print(f"computing for energies {init_state.pos_energy_bound} > dE > {init_state.neg_energy_bound}")
+    print(f"computing for energies {pos_energy_bound} > dE > {neg_energy_bound}")
     print(T_list_to_compute)
     total_to_calc = len(vals_to_calc) * len(T_list_to_compute)
 

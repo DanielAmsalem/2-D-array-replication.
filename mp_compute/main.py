@@ -1,3 +1,4 @@
+import os
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -27,12 +28,16 @@ import orjson
 EXPORT_PATH = Path(__file__).parent.parent / "export"
 t0 = time.time()
 
+
 def main(export: Export) -> None:
     loop_count = 100
     T0_unitless = 0.001
     T_std = 1
     flip = False
-    init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless)
+    init = prepare_initial_state(loop_count=loop_count,
+                                 unitless_T0=T0_unitless,
+                                 pos_energy_bound=0.14,
+                                 neg_energy_bound=-0.24)
     expected_err = 0.01 * (init.row_num - 1)
     T = [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]
 
@@ -67,7 +72,7 @@ def main(export: Export) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
 
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
         loaded_state_function = partial(
             Get_Steady_State,
             init=init,
@@ -97,7 +102,7 @@ def main(export: Export) -> None:
                                T=T,
                                expected_error=expected_err,
                                loop_count=init.loop_count,
-                               T_std=T_std*init.T0,
+                               T_std=T_std * init.T0,
                                t0=t0)
 
     if export.plot_results:

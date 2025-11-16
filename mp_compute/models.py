@@ -39,8 +39,6 @@ class ExperimentInitialState:
     default_dt: float
     Tau: npt.NDArray
     C_inv: npt.NDArray
-    pos_energy_bound: float
-    neg_energy_bound: float
 
     timeStep: float
 
@@ -65,9 +63,8 @@ class ExperimentInitialState:
 @dataclass
 class Export:
     plot_results: bool
-    prepare_table_triplets_file: Path
+    prepare_table_triplets_file_list: list[Path]
     results_file: Path
-
 
 @dataclass
 class SteadyStateResult:
