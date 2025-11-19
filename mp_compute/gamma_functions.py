@@ -388,9 +388,7 @@ def Get_Steady_State(
                     raise ValueError
 
                 # picking a specific transition
-                n, l, m, chosen_rate = execute_transition(
-                    Gamma, n, R, reaction_index, init.e
-                )
+                n, l, m, chosen_rate = execute_transition(Gamma, n, R, reaction_index, init.e)
 
             else:  # rates too low, Tau leap instead
                 dt = init.default_dt
@@ -400,11 +398,6 @@ def Get_Steady_State(
                         and zero_curr_steady_state_counter > 2
                 ):
                     not_in_steady_state = False
-
-            # check if any n is negative
-            # if F.has_neg(n):
-            #     print(n, l, m, chosen_rate)
-            #     raise ValueError
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, n, VxCix, init)

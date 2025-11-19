@@ -63,11 +63,14 @@ class ExperimentInitialState:
 @dataclass
 class IMPORT_EXPORT:
     plot_results: bool
+    export_path: Path
     prepare_table_triplets_file_list: list[Path]
     csv_table_path: Path
+    results_dir_path: Path
 
 @dataclass
 class SteadyStateResult:
     loop_index: int
     error_count: int
     I_vec: npt.NDArray
+

@@ -1,5 +1,5 @@
 import csv
-
+from pathlib import Path
 import numpy as np
 import time
 from define_objects import ExperimentInitialState
@@ -11,6 +11,7 @@ def iv_curve_compute_and_save_csv(
         Vleft,
         results,
         repetition: int,
+        results_path: Path
 ):
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
 
@@ -27,7 +28,7 @@ def iv_curve_compute_and_save_csv(
     I_vec_std = np.sqrt(I_vec_var)
 
     # w+ truncates file
-    with open(f"book_{filename}_rep{repetition}.csv", "w+") as f:
+    with open(results_path / f"book_{filename}_rep{repetition}.csv", "w+") as f:
         file = csv.writer(f)
         for row in range(len(V_doubled)):
             to_write = [
@@ -47,8 +48,9 @@ def report_param(init: ExperimentInitialState,
                  expected_error: float,
                  loop_count: int,
                  T_std: float,
-                 t0):
-    with open(f"parameters_{filename}_rep{repetition}.txt", "w") as f:
+                 t0,
+                 results_path: Path):
+    with open(results_path / f"parameters_{filename}_rep{repetition}.txt", "w") as f:
         f.write(f"repetition {repetition}\n")
         f.write("loop parameters" + "\n")
         f.write("---------------------------------------------" + "\n")

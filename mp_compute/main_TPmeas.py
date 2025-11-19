@@ -4,7 +4,7 @@ from pathlib import Path
 import datetime
 import warnings
 import numpy as np
-from define_objects import IMPORT_EXPORT, SteadyStateResult
+from define_objects import IMPORT_EXPORT, SteadyStateResult, ExperimentInitialState
 from gamma_functions import Get_Steady_State
 from preparation import (
     prepare_initial_state,
@@ -19,31 +19,37 @@ import csv
 import math
 import time
 
-EXPORT_PATH = Path(__file__).parent.parent / "export"
-MP_COMPUTE_PATH = Path(__file__).parent.parent / "mp_compute"
-t0 = time.time()
-
-
-def main(import_export: IMPORT_EXPORT) -> None:
-    date_ = datetime.datetime.now()
-    run_name = date_.strftime("%Y%m%d, %Hh%Mm%Ss")
-
+def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # FIXED PARAMETERS
-    loop_count = 5
+    loop_count = 100
     T0_unitless = 0.001
+    repetition = 2  # int : m -> the first gradient to check will be dT=(m+1)Tstd
+    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
     flip = False
-    first_run = False
-    rep_json = False
-    null_path_name = EXPORT_PATH / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
+    first_run = True
+    rep_json = True
+    null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
     pos_energy_boundT0 = -0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
     neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
-    init = prepare_initial_state(loop_count=loop_count,
-                                 unitless_T0=T0_unitless)
+    # choose a specific run
+    run_name = run_name
+    outfile = Path(import_export.results_dir_path / f"{run_name}.json")
+    if outfile.exists():
+        # do not relace json file with new init
+        rep_json = False
+        json_txt = outfile.read_text()
+        raw_fields = orjson.loads(json_txt)
+        # recreate old init state
+        init = ExperimentInitialState(**raw_fields)
+
+    else:
+        # create new initial state
+        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless)
+
 
     ### report init state to report file
     if rep_json:
-        outfile = Path(EXPORT_PATH / f"{run_name}.json")
         raw_fields = asdict(init)
         serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
         outfile.write_text(serialized_init_data)
@@ -72,6 +78,7 @@ def main(import_export: IMPORT_EXPORT) -> None:
     expected_err = 0.01 * (init.row_num - 1)
 
     if first_run:
+        t0 = time.time()
         with ProcessPoolExecutor() as executor:
             loaded_state_function = partial(
                 Get_Steady_State,
@@ -96,7 +103,8 @@ def main(import_export: IMPORT_EXPORT) -> None:
                                                                            filename=run_name,
                                                                            results=results,
                                                                            Vleft=Vleft,
-                                                                           repetition=0)
+                                                                           repetition=0,
+                                                                           results_path=import_export.results_dir_path)
 
         ### report run specific output
         curve_plotter.report_param(init=init,
@@ -106,7 +114,8 @@ def main(import_export: IMPORT_EXPORT) -> None:
                                    expected_error=expected_err,
                                    loop_count=init.loop_count,
                                    T_std=0,
-                                   t0=t0)
+                                   t0=t0,
+                                   results_path=import_export.results_dir_path)
 
         index_2 = np.searchsorted(I_vec_avg, 2 * init.Amp, side="right")
         if index_2 >= len(I_vec_avg):
@@ -123,13 +132,13 @@ def main(import_export: IMPORT_EXPORT) -> None:
 
     ### run thermopower until I(V)<0
     current_at_V0 = True
-    repetition = 2  # how many *T_std the gradient had before starting repetition.
 
     while current_at_V0:
         repetition += 1
-        if repetition > 20:
+        if repetition > last_repetition_to_do:
             print("Tstd>T0, finished all runs for Tstd<=T0")
             current_at_V0 = False
+            continue
 
         # new temperature profile
         T_std = repetition * init.T0 / 20
@@ -149,6 +158,7 @@ def main(import_export: IMPORT_EXPORT) -> None:
 
         ### run repetition for new dT
         with ProcessPoolExecutor() as executor:
+            t0 = time.time()
             T = np.linspace(init.T0, init.T0 + init.row_num * T_std, init.row_num)
             loaded_state_function = partial(
                 Get_Steady_State,
@@ -175,7 +185,8 @@ def main(import_export: IMPORT_EXPORT) -> None:
                                                                            filename=run_name,
                                                                            results=results,
                                                                            Vleft=Vleft,
-                                                                           repetition=repetition)
+                                                                           repetition=repetition,
+                                                                           results_path=import_export.results_dir_path)
 
         ### report run specific parameters
         curve_plotter.report_param(init=init,
@@ -185,17 +196,29 @@ def main(import_export: IMPORT_EXPORT) -> None:
                                    expected_error=expected_err,
                                    loop_count=init.loop_count,
                                    T_std=0,
-                                   t0=t0)
+                                   t0=t0,
+                                   results_path=import_export.results_dir_path)
 
         if I_vec_avg[index_2] < 0:
             current_at_V0 = False
 
 
 if __name__ == "__main__":
+    date_ = datetime.datetime.now()
+    run_name_flat = date_.strftime("%Y%m%d, %Hh%Mm%Ss")
+
+    EXPORT_PATH = Path(__file__).parent.parent / "export"
+    MP_COMPUTE_PATH = Path(__file__).parent.parent / "mp_compute"
+    RESULTS_DIR_PATH = Path(__file__).parent.parent / f"results_{run_name_flat}"
+    RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
+
     main(
         IMPORT_EXPORT(
             plot_results=True,
+            export_path=EXPORT_PATH,
             prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tstd{n}_20.npz" for n in range(20)],
             csv_table_path=MP_COMPUTE_PATH / f"table.csv",
-        )
+            results_dir_path=RESULTS_DIR_PATH
+        ),
+        run_name=run_name_flat
     )
