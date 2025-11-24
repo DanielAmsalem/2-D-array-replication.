@@ -3,6 +3,7 @@ from functools import partial
 from pathlib import Path
 import datetime
 import warnings
+import Functions as F
 import numpy as np
 from define_objects import IMPORT_EXPORT, SteadyStateResult, ExperimentInitialState
 from gamma_functions import Get_Steady_State
@@ -19,37 +20,40 @@ import csv
 import math
 import time
 
+
 def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # FIXED PARAMETERS
     loop_count = 100
     T0_unitless = 0.001
     repetition = 2  # int : m -> the first gradient to check will be dT=(m+1)Tstd
     last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
-    flip = False
-    first_run = True
+    flip = True
+    first_run = False
     rep_json = True
     null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
     pos_energy_boundT0 = -0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
     neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
     # choose a specific run
-    run_name = run_name
-    outfile = Path(import_export.results_dir_path / f"{run_name}.json")
-    if outfile.exists():
-        # do not relace json file with new init
-        rep_json = False
-        json_txt = outfile.read_text()
+    run_to_get_init_from = "20251117_18h02m00s"
+    results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
+    infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
+    if infile.exists():
+        json_txt = infile.read_text()
         raw_fields = orjson.loads(json_txt)
         # recreate old init state
-        init = ExperimentInitialState(**raw_fields)
+        init_str = ExperimentInitialState(**raw_fields)
+        # if is old 20251117_18h02m00s run, put init_str = ExperimentInitialState(**raw_fields, flip=flip)
+        init = F.fix_types(init_str)
+        print("success")
 
     else:
         # create new initial state
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless)
-
+        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip) # BEFORE NEXT RUN ADD FLIP=FLIP HERE!!!!!!
 
     ### report init state to report file
     if rep_json:
+        outfile = Path(import_export.results_dir_path / f"{run_name}.json")
         raw_fields = asdict(init)
         serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
         outfile.write_text(serialized_init_data)
@@ -71,7 +75,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN PARAMETERS
     V_diff = 4
     steps = 100
-    Vleft = np.linspace(init.Vright * init.Volts, (init.Vright + V_diff) * init.Volts, num=steps, )
+    Vleft = np.linspace(init.Vright * init.Volts, (init.Vright + V_diff) * init.Volts, num=steps)
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
@@ -205,7 +209,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
 
 if __name__ == "__main__":
     date_ = datetime.datetime.now()
-    run_name_flat = date_.strftime("%Y%m%d, %Hh%Mm%Ss")
+    run_name_flat = date_.strftime("%Y%m%d_%Hh%Mm%Ss")
 
     EXPORT_PATH = Path(__file__).parent.parent / "export"
     MP_COMPUTE_PATH = Path(__file__).parent.parent / "mp_compute"

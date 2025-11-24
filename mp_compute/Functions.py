@@ -87,7 +87,7 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
     I_right = 0
     I_down = 0
     for i in range(len(gamma_list)):
-        l, m = reaction_index[i]
+        l, m = reaction_index[i]  # electron in isle l moved to isle m
 
         # positive side current
         if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
@@ -195,7 +195,7 @@ def contains_allclose(needles, haystack, rtol=1e-8, atol=1e-8):
         if not np.any(np.isclose(t, haystack, rtol=rtol, atol=atol)):
             print(t, haystack)
             for h in haystack:
-                print(h-t)
+                print(h - t)
             return False
     return True
 
@@ -214,6 +214,7 @@ def orjson_default(obj):
         return obj.tolist()
     raise TypeError
 
+
 def unique_significant_floats(list_of_lists, rtol=1e-5, atol=1e-8):
     # Flatten to one array
     arr = np.array(list_of_lists).ravel()
@@ -228,7 +229,65 @@ def unique_significant_floats(list_of_lists, rtol=1e-5, atol=1e-8):
             unique.append(x)
     return np.array(unique).tolist()
 
+
 def has_neg(n):
-    if len(n[n<0]) > 0:
+    if len(n[n < 0]) > 0:
         return True
     return False
+
+
+def fix_types(init: ExperimentInitialState):
+    return ExperimentInitialState(
+        e=int(init.e),
+        kB=float(init.kB),
+
+        Tau_inv=np.array(init.Tau_inv),
+        InvTauEigenValues=np.array(init.InvTauEigenValues),
+        InvTauEigenVectorsInv=np.array(init.InvTauEigenVectorsInv),
+        InvTauEigenVectors=np.array(init.InvTauEigenVectors),
+        matrixQnPart=np.array(init.matrixQnPart),
+        Cix=np.array(init.Cix),
+
+        array_size=int(init.array_size),
+        row_num=int(init.row_num),
+        loop_count=int(init.loop_count),
+
+        islands=[int(isle) for isle in init.islands],
+        near_left=[int(isle) for isle in init.near_left],
+        near_right=[int(isle) for isle in init.near_right],
+
+        distribute_R=bool(init.distribute_R),
+        distribute_C=bool(init.distribute_C),
+
+        R_t_ij=np.array(init.R_t_ij),
+        R_t_i=np.array(init.R_t_i),
+
+        CondRg=float(init.CondRg),
+        Rg=np.array(init.Rg),
+        Cg=np.array(init.Cg),
+        C_avg=float(init.C_avg),
+        R_avg=float(init.R_avg),
+
+        default_dt=float(init.default_dt),
+        Tau=np.array(init.Tau),
+        C_inv=np.array(init.C_inv),
+        timeStep=float(init.timeStep),
+
+        Volts=float(init.Volts),
+        Amp=float(init.Amp),
+        Vright=float(init.Vright),
+        max_count=int(init.max_count),
+
+        T0=float(init.T0),
+        Ec=float(init.Ec),
+        resolution=float(init.resolution),
+
+        Steady_state_rep=int(init.Steady_state_rep),
+        sig=float(init.sig),
+        stdR=float(init.stdR),
+        mean_allCs=float(init.mean_allCs),
+        mean_sideCs=float(init.mean_sideCs),
+        std_allCs=float(init.std_allCs),
+        std_sideCs=float(init.std_sideCs),
+        flip=bool(init.flip)
+    )

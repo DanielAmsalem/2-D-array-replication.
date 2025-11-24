@@ -143,7 +143,7 @@ def define_tau_matrix(
     return -res / np.repeat(reshaped, res.shape[1], axis=1)
 
 
-def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInitialState:
+def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool) -> ExperimentInitialState:
     distribute_R = True
     distribute_C = True
 
@@ -226,7 +226,8 @@ def prepare_initial_state(loop_count: int, unitless_T0: float) -> ExperimentInit
         mean_allCs=mean_allCs,
         mean_sideCs=mean_sideCs,
         std_allCs=std_allCs,
-        std_sideCs=std_sideCs
+        std_sideCs=std_sideCs,
+        flip=flip
     )
 
 

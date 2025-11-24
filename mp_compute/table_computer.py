@@ -2,19 +2,23 @@ import csv
 from pathlib import Path
 import datetime
 import time
-
-import numpy as np
-
-from define_objects import IMPORT_EXPORT, SteadyStateResult
+from define_objects import IMPORT_EXPORT
 from preparation import (
     prepare_initial_state,
-    validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
 )
 
 import re
 import os
+
+'''
+THIS FILE SHOULD BE NAMED "...Tstd(\d+)..." where (\d+) is an int
+A TABLE WILL BE PRODUCED FOR T LIST [T0,T0+Tstd*int,...T0+std*(row_num-1)]
+SHOULD HAVE IN ITS DIRECTORY A "table.csv" WHICH LOOKS LIKE
+# | POS | NEG
+where for each position the appropriate bounds for dE calc are given
+'''
 
 EXPORT_PATH = Path(__file__).parent.parent / "export"
 t0 = time.time()
@@ -40,12 +44,13 @@ def main(export: IMPORT_EXPORT) -> None:
 
     ### prep tables
     init = prepare_initial_state(loop_count=loop_count,
-                                 unitless_T0=T0_unitless,
-                                 pos_energy_bound=pos,
-                                 neg_energy_bound=neg)
+                                 unitless_T0=T0_unitless)
     T_list_to_compute = [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]
-    table_triplets = prepare_table_triplets(init, T_list_to_compute)
-    output_table_triplets(table_triplets, export.prepare_table_triplets_file)
+    table_triplets = prepare_table_triplets(init,
+                                            T_list_to_compute,
+                                            pos_energy_bound=pos,
+                                            neg_energy_bound=neg)
+    output_table_triplets(table_triplets, export.prepare_table_triplets_file_list[0])
 
     date_ = datetime.datetime.now()
     run_name = date_.strftime("%Y%m%d, %Hh%Mm%Ss")
@@ -56,7 +61,7 @@ if __name__ == "__main__":
     main(
         IMPORT_EXPORT(
             plot_results=True,
-            prepare_table_triplets_file=EXPORT_PATH / f"table_triplets_Tstd{iter_name}_20.npz",
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tstd{iter_name}_20.npz"],
             csv_table_path=EXPORT_PATH / "tmp",
         )
     )

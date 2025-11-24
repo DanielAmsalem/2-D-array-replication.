@@ -2,11 +2,14 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-import numpy.typing as npt
-from mpmath import quad, mp
 
-import Functions as F
-from define_objects import ExperimentInitialState
+''' 
+THIS FILE FINDS A TABLE IN A GIVEN PATH AND RETURNS:
+    neg_bound < dE < pos_bound 
+    Ec = ? 
+    T: list -> the temperature gradient for this table
+    how many values are stored 
+'''
 
 path_to_check = Path(__file__).parent.parent / "export"
 

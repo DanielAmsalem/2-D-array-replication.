@@ -59,6 +59,8 @@ class ExperimentInitialState:
     std_allCs: float
     std_sideCs: float
 
+    flip: bool
+
 
 @dataclass
 class IMPORT_EXPORT:

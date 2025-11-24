@@ -83,6 +83,7 @@ def report_param(init: ExperimentInitialState,
         f.write("T_std : " + str(T_std) + "\n")
         f.write("T : " + str(T) + "\n")
         f.write("---------------------------------------------" + "\n")
+        f.write(f"flip : {init.flip}")
         f.write("steady_state_rep : " + str(init.Steady_state_rep) + "\n")
         f.write("expected_error : " + str(expected_error) + "\n")
         f.write("resolution : " + str(init.resolution) + "\n")
