@@ -89,13 +89,14 @@ def Gamma_approx(
         raise ValueError
 
 
-def execute_transition(Gamma_list, n_list, RR, reaction_index_, e):
+def execute_transition(Gamma_list, n_list, reaction_index_, e):
     r = 0
-    x = np.random.random() * RR
+    x = np.random.random() * np.sum(Gamma_list)
+
     for item in range(len(Gamma_list)):
         r += Gamma_list[item]
         if r < x:
-            pass
+            continue
         else:
             # register transition
             ll, mm = reaction_index_[item]
@@ -154,44 +155,33 @@ def Get_Gamma(
         # else calculate transition rate to jth island
         neighbour_list = F.neighbour_list(row_num, i)
         for j in neighbour_list:
-            # calculate energy difference due to transition
-            dEij[i][j] = (
-                    e
-                    * (
-                            2 * curr_V[j]
-                            - e * C_inv[j][i]
-                            + e * C_inv[j][j]
-                            - (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])
-                    )
-                    / 2
-            )
+            # calculate energy difference due to transition dE = e*[(Vj-Vi)+(V'j-V'í)]
+            # dEij[i][j] = e * (curr_V[j]-curr_V[i]) + e*e* (C_inv[j][j]+C_inv[i][i] - 2 *C_inv[i][j])/2
+            dEij[i][j] = (e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
+                               (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2)
 
             # dEij must be negative enough for transition i->j
             if dEij[i][j] < pos_energy_bound:
-                Gamma_ += [
-                    Gamma_approx(
-                        dEij[i][j],
-                        T_gradient[i % row_num],
-                        R_t_ij[i][j],
-                        Ec,
-                        e,
-                        neg_energy_bound,
-                        pos_energy_bound,
-                        table_val,
-                        table_prob,
-                        T_table,
-                        flip
-                    )
-                ]
+                Gamma_ += [Gamma_approx(dEij[i][j],
+                                        T_gradient[i % row_num],
+                                        R_t_ij[i][j],
+                                        Ec,
+                                        e,
+                                        neg_energy_bound,
+                                        pos_energy_bound,
+                                        table_val,
+                                        table_prob,
+                                        T_table,
+                                        flip)]
                 RR += Gamma_[-1]
                 reaction_index_ += [(i, j)]
+                # if (i // row_num == j // row_num == 0) or (i // row_num == j // row_num == row_num - 1):
+                #     print(f"i : {i}, j : {j} ;    g : {Gamma_[-1]}   ;   ")
 
     # left electrode to island transition:
     for isle in near_left:
         # for ith transition from electrode
-        dE_left = (
-                (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
-        )
+        dE_left = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
@@ -215,9 +205,7 @@ def Get_Gamma(
 
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
-            dE_left = (
-                    (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
-            )
+            dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
@@ -305,7 +293,8 @@ def Get_Steady_State(
         T: npt.NDArray,
         pos_energy_bound: float,
         neg_energy_bound: float,
-        repetition: int
+        repetition: int,
+        capture_heatmap_at_idx: float
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -315,6 +304,7 @@ def Get_Steady_State(
 
     # vector counting charge flow
     I_vec = np.zeros(cycles)
+    Jx, Jy = np.zeros((init.row_num, init.row_num + 1)), np.zeros((init.row_num, init.row_num + 1))
 
     for cycle in range(cycles):
         cycle_voltage = float(V_cycle[cycle])
@@ -326,13 +316,13 @@ def Get_Steady_State(
         not_in_steady_state = True
         t = 0
         steady_state_timer = init.timeStep  # steady state fixed time
-        steady_state_reps = init.Steady_state_rep * 5
+        steady_state_reps = init.Steady_state_rep * 5  # "5*RC"
 
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
             k += 1
 
-            VxCix = F.VxCix(
+            VxCix = F.get_VxCix(
                 cycle_voltage,
                 init.Vright,
                 init.array_size,
@@ -388,7 +378,7 @@ def Get_Steady_State(
                     raise ValueError
 
                 # picking a specific transition
-                n, l, m, chosen_rate = execute_transition(Gamma, n, R, reaction_index, init.e)
+                n, l, m, chosen_rate = execute_transition(Gamma, n, reaction_index, init.e)
 
             else:  # rates too low, Tau leap instead
                 dt = init.default_dt
@@ -404,8 +394,8 @@ def Get_Steady_State(
 
             # update statistics
             if steady_state_reps <= 0:
-                I_right, I_down = F.Get_current_from_gamma(
-                    Gamma, reaction_index, init.near_right, init.near_left)
+                I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, init.near_right, init.near_left,
+                                                           init.row_num)
                 I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
 
             Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
@@ -418,9 +408,7 @@ def Get_Steady_State(
 
             # check if distance from steady state is larger than the last by more than the allowed error
             if k > 100:
-                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))) / np.sqrt(
-                    len(Q_avg)
-                )
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))) / np.sqrt(len(Q_avg))
 
                 if dist_new - dist > min(std, expected_error):
                     not_decreasing += 1
@@ -430,14 +418,18 @@ def Get_Steady_State(
                         not_in_steady_state = False
 
                 # steady state conditions
-                elif (
-                        abs(dist_new) - expected_error < std < expected_error
-                        or abs(dist_new) < expected_error
-                ):
+                elif abs(dist_new) - expected_error < std < expected_error or abs(dist_new) < expected_error:
                     steady_state_reps -= 1
                     if steady_state_reps <= 0:
                         steady_state_timer -= dt
+                        if cycle_voltage == V_cycle[capture_heatmap_at_idx]:
+                            Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index,
+                                                         init.near_right, init.near_left, init.row_num, n)
+                            Jx += Jx_
+                            Jy += Jy_
+
                         if steady_state_timer <= 0:
+                            # for this V capture the current map
                             not_in_steady_state = False
 
                 # reset steady_state_timer
@@ -450,4 +442,4 @@ def Get_Steady_State(
             t += dt
 
         I_vec[cycle] = I_avg
-    return SteadyStateResult(loop_index, error_count, I_vec)
+    return SteadyStateResult(loop_index, error_count, I_vec, Jx, Jy)

@@ -26,6 +26,7 @@ def check_table_triplets_file(
     data = np.load(triplets_file.as_posix())
     table_val = data["val"]
     table_T = data["temp"]
+    table_prob = data["prob"]
     mu = data["mu"]
 
     T_in_file = np.unique(table_T)
@@ -35,6 +36,11 @@ def check_table_triplets_file(
     print("mu = " + str(mu))
     print(T_in_file)
     print(f"length is {len(table_val)}")
+    k = 0
+    for val in table_val:
+        k += 1
+        if not k % 100:
+            print(val, table_prob[k])
 
 
 if __name__ == "__main__":

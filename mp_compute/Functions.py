@@ -1,8 +1,11 @@
+import csv
+
 import numpy as np
 from mpmath import exp, sqrt
 
 # parameters
 from define_objects import ExperimentInitialState
+from dataclasses import replace
 
 
 def flattenToColumn(a):
@@ -82,20 +85,22 @@ def update_statistics(value, avg, n_var, total_time, time_step):
     return new_avg, new_n_var
 
 
-def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
+def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, row_num):
     # e == 1
     I_right = 0
     I_down = 0
     for i in range(len(gamma_list)):
         l, m = reaction_index[i]  # electron in isle l moved to isle m
 
-        # positive side current
-        if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
-            I_right += gamma_list[i]
-
+        if gamma_list[i] < 0:
+            raise ValueError
         # negative side current
-        elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
+        if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
             I_right -= gamma_list[i]
+
+        # positive side current
+        elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
+            I_right += gamma_list[i]
 
         # right isle to isle current
         elif l - m == -1:
@@ -106,14 +111,65 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left):
             I_right -= gamma_list[i]
 
         # up isle to isle current
-        elif l - m == 4:
+        elif l - m == -row_num:
             I_down -= gamma_list[i]
 
         # down isle to isle current
-        elif l - m == -4:
+        elif l - m == row_num:
             I_down += gamma_list[i]
 
     return I_right, I_down
+
+
+def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, n_list):
+    # e == 1
+    n = row_num  # row_num
+
+    # the x position of isle k is :  (k % n) + 1
+    # the y position of isle k is :  k // n
+    # the entry in J with position x and y is J[y][x]
+    Jy = np.zeros((n, n + 1))
+    Jx = np.zeros((n, n + 1))
+    with open("map.csv", "w+") as f:
+        writer = csv.writer(f)
+        writer.writerow(n_list)
+        for j in range(len(gamma_list)):
+            entry = gamma_list[j]
+            l, m = reaction_index[j]
+            writer.writerow([l, m, entry])
+    for i in range(len(gamma_list)):
+        l, m = reaction_index[i]  # electron in isle l moved to isle m
+
+        # negative side current
+        if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
+            if m == "to":  # left side
+                Jx[l // n][0] -= gamma_list[i]
+            else:
+                Jx[l // n][-1] -= gamma_list[i]
+
+        # positive side current
+        elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
+            if m == "to":  # right side
+                Jx[l // n][-1] += gamma_list[i]
+            else:
+                Jx[l // n][0] += gamma_list[i]
+
+        # right isle to isle current
+        elif l - m == -1:
+            Jx[l // n][(l % n) + 1] += gamma_list[i]
+
+        # left isle to isle current
+        elif l - m == 1:
+            Jx[l // n][(l % n) + 1] -= gamma_list[i]
+
+        # up isle to isle current
+        elif l - m == -row_num:
+            Jy[l // n][(l % n) + 1] += gamma_list[i]
+        # down isle to isle current
+        elif l - m == row_num:
+            Jy[l // n][(l % n) + 1] -= gamma_list[i]
+
+    return Jx, Jy
 
 
 def developQ(Q, dt, n, VxCix, init_state: ExperimentInitialState):
@@ -138,17 +194,18 @@ def developQ(Q, dt, n, VxCix, init_state: ExperimentInitialState):
     return init_state.InvTauEigenVectors.dot(Q_new_in_eigenbasis)
 
 
-def return_Qn_for_n(n, VxCix, init_state: ExperimentInitialState):
+def return_Qn_for_n(n, VxCix, init: ExperimentInitialState):
     """
     returns Qn for given n vector of array (NxN)
+    :param init:
     :param n: (1,N) numpy array
     :param VxCix: (1,N) numpy array
     :return:
     """
     # sum = Tau.dot(n_prime / Cg) / Rg
     # #return sum - n_prime
-    n_prime = init_state.e * n + init_state.e * VxCix
-    return init_state.matrixQnPart.dot(n_prime)
+    n_prime = init.e * n + init.e * VxCix
+    return init.matrixQnPart.dot(n_prime)
 
 
 def getWork(i, j, C_inv, curr_V, e):
@@ -200,7 +257,7 @@ def contains_allclose(needles, haystack, rtol=1e-8, atol=1e-8):
     return True
 
 
-def VxCix(Vl, Vr, array_size, near_left, near_right, Cix):
+def get_VxCix(Vl, Vr, array_size, near_left, near_right, Cix):
     _VxCix = np.zeros(array_size)
     for u in near_left:
         _VxCix[u] = Cix[u] * Vl
@@ -236,7 +293,7 @@ def has_neg(n):
     return False
 
 
-def fix_types(init: ExperimentInitialState):
+def fix_types(init: ExperimentInitialState, loop_count: int):
     return ExperimentInitialState(
         e=int(init.e),
         kB=float(init.kB),
@@ -250,7 +307,7 @@ def fix_types(init: ExperimentInitialState):
 
         array_size=int(init.array_size),
         row_num=int(init.row_num),
-        loop_count=int(init.loop_count),
+        loop_count=loop_count,
 
         islands=[int(isle) for isle in init.islands],
         near_left=[int(isle) for isle in init.near_left],
@@ -260,7 +317,7 @@ def fix_types(init: ExperimentInitialState):
         distribute_C=bool(init.distribute_C),
 
         R_t_ij=np.array(init.R_t_ij),
-        R_t_i=np.array(init.R_t_i),
+        R_t_i=list(init.R_t_i),
 
         CondRg=float(init.CondRg),
         Rg=np.array(init.Rg),
@@ -291,3 +348,34 @@ def fix_types(init: ExperimentInitialState):
         std_sideCs=float(init.std_sideCs),
         flip=bool(init.flip)
     )
+
+
+def swap_in_init(categry: str, suggestion, init: ExperimentInitialState):
+    # check if attribute exists
+    if not hasattr(init, categry):
+        raise AttributeError(f"{categry} is not a valid category")
+
+    # check type
+    old_val = getattr(init, categry)
+    if not isinstance(suggestion, type(old_val)):
+        print(type(suggestion), type(old_val))
+        raise TypeError(f"{categry} is not a valid suggestion and is of type {type(suggestion)}, "
+                        f"should be {type(old_val)}")
+
+    return replace(init, **{categry: suggestion})
+
+
+def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
+    R_new = R_t_ij.copy()
+    array_size = R_t_ij.shape[0]
+    row_num = sqrt(array_size)
+    for i in range(array_size):
+        for j in range(array_size):
+            y_i = i - i % sqrt(array_size)
+            y_j = j - j % sqrt(array_size)
+            ## if in row 0 or n-1 and same row neighbours
+            if (y_i == 0 or y_i == array_size-sqrt(array_size)) and y_i == y_j:
+                if abs(i - j) == 1:
+                    R_new[i, j] = insulate_R
+
+    return R_new

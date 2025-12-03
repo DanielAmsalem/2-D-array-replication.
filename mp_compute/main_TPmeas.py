@@ -25,9 +25,10 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # FIXED PARAMETERS
     loop_count = 100
     T0_unitless = 0.001
-    repetition = 2  # int : m -> the first gradient to check will be dT=(m+1)Tstd
+    repetition = 6  # int : m -> the first gradient to check will be dT=(m+1)Tstd
     last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
-    flip = True
+    V_capture = 4
+    flip = False
     first_run = False
     rep_json = True
     null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
@@ -35,7 +36,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
     # choose a specific run
-    run_to_get_init_from = "20251117_18h02m00s"
+    run_to_get_init_from = "20251202_00h42m25s"
     results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
@@ -44,12 +45,13 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         # recreate old init state
         init_str = ExperimentInitialState(**raw_fields)
         # if is old 20251117_18h02m00s run, put init_str = ExperimentInitialState(**raw_fields, flip=flip)
-        init = F.fix_types(init_str)
-        print("success")
+        init = F.fix_types(init_str, loop_count)
+        print(f"success, starting run for {run_to_get_init_from}")
 
     else:
         # create new initial state
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip) # BEFORE NEXT RUN ADD FLIP=FLIP HERE!!!!!!
+        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip)
+        print("CREATED NEW INIT FILE")
 
     ### report init state to report file
     if rep_json:
@@ -57,6 +59,17 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         raw_fields = asdict(init)
         serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
         outfile.write_text(serialized_init_data)
+        print("STORED INIT IN JSON")
+
+    Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
+                                                  near_left=init.near_left,
+                                                  near_right=init.near_right)
+    print("created resistance maps, now saving plots...")
+    curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
+                                       results_path=import_export.results_dir_path, show=True)
+    print("plotting capacitance map...")
+    curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
+                                       results_path=import_export.results_dir_path, show=True)
 
     if not validate_table_triplets_file(null_path_name, init, [init.T0]):
         table_triplets = prepare_table_triplets(init, [init.T0],
@@ -76,6 +89,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     V_diff = 4
     steps = 100
     Vleft = np.linspace(init.Vright * init.Volts, (init.Vright + V_diff) * init.Volts, num=steps)
+    V_capture_idx = np.searchsorted(Vleft, V_capture, side='left')
+    V_capture = float(Vleft[V_capture_idx])
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
@@ -97,18 +112,26 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 expected_error=expected_err,
                 pos_energy_bound=pos_energy_boundT0,
                 neg_energy_bound=neg_energy_boundT0,
-                repetition=0
+                repetition=0,
+                capture_heatmap_at_idx=V_capture_idx
             )
 
             results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
 
         ### find smallest I(V) > 2
-        I_vec_avg, I_vec_std = curve_plotter.iv_curve_compute_and_save_csv(init=init,
-                                                                           filename=run_name,
-                                                                           results=results,
-                                                                           Vleft=Vleft,
-                                                                           repetition=0,
-                                                                           results_path=import_export.results_dir_path)
+        curve_plotter.iv_curve_compute_and_save_csv(init=init,
+                                                    filename=run_name,
+                                                    results=results,
+                                                    Vleft=Vleft,
+                                                    repetition=0,
+                                                    results_path=import_export.results_dir_path,
+                                                    get_heatmap=True,
+                                                    heatmap_at_V=V_capture)
+
+        ### get errors
+        err = 0
+        for run in results:
+            err += run.error_count
 
         ### report run specific output
         curve_plotter.report_param(init=init,
@@ -119,11 +142,9 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    loop_count=init.loop_count,
                                    T_std=0,
                                    t0=t0,
-                                   results_path=import_export.results_dir_path)
+                                   results_path=import_export.results_dir_path,
+                                   tot_error_count=err)
 
-        index_2 = np.searchsorted(I_vec_avg, 2 * init.Amp, side="right")
-        if index_2 >= len(I_vec_avg):
-            warnings.warn("no I(V) larger than 2 in initial Tstd=0 run")
     else:
         print("skipped first run")
         index_2 = 90
@@ -177,7 +198,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 expected_error=expected_err * np.sqrt(max(T) / init.T0),
                 pos_energy_bound=float(pos[repetition - 3]),
                 neg_energy_bound=float(neg[repetition - 3]),
-                repetition=repetition
+                repetition=repetition,
+                capture_heatmap_at_idx=V_capture_idx
             )
 
             results: list[SteadyStateResult] = list(
@@ -185,12 +207,18 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             )
 
         ### find I(V) with gradient dT
-        I_vec_avg, I_vec_std = curve_plotter.iv_curve_compute_and_save_csv(init=init,
-                                                                           filename=run_name,
-                                                                           results=results,
-                                                                           Vleft=Vleft,
-                                                                           repetition=repetition,
-                                                                           results_path=import_export.results_dir_path)
+        curve_plotter.iv_curve_compute_and_save_csv(init=init,
+                                                    filename=run_name,
+                                                    results=results,
+                                                    Vleft=Vleft,
+                                                    repetition=repetition,
+                                                    results_path=import_export.results_dir_path,
+                                                    get_heatmap=True,
+                                                    heatmap_at_V=V_capture)
+
+        err = 0
+        for run in results:
+            err += run.error_count
 
         ### report run specific parameters
         curve_plotter.report_param(init=init,
@@ -201,10 +229,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    loop_count=init.loop_count,
                                    T_std=0,
                                    t0=t0,
-                                   results_path=import_export.results_dir_path)
-
-        if I_vec_avg[index_2] < 0:
-            current_at_V0 = False
+                                   results_path=import_export.results_dir_path,
+                                   tot_error_count=err)
 
 
 if __name__ == "__main__":
@@ -215,6 +241,7 @@ if __name__ == "__main__":
     MP_COMPUTE_PATH = Path(__file__).parent.parent / "mp_compute"
     RESULTS_DIR_PATH = Path(__file__).parent.parent / f"results_{run_name_flat}"
     RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
+    print(f"Created results directory at {RESULTS_DIR_PATH}")
 
     main(
         IMPORT_EXPORT(

@@ -30,7 +30,7 @@ class ExperimentInitialState:
     distribute_C: bool
 
     R_t_ij: npt.NDArray
-    R_t_i: npt.NDArray
+    R_t_i: list
     CondRg: float
     Rg: npt.NDArray
     Cg: npt.NDArray
@@ -75,4 +75,6 @@ class SteadyStateResult:
     loop_index: int
     error_count: int
     I_vec: npt.NDArray
+    Jx: npt.NDArray
+    Jy: npt.NDArray
 

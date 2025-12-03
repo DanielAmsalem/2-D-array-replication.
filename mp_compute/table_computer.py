@@ -29,6 +29,7 @@ def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
     T0_unitless = 0.001
     T_std_list = [i for i in range(3, 20)]
+    flip = False
 
     ### get runname -> check if Tstd is in list
     iteration = re.search(r"Tstd(\d+)", filename).group(1)  # filename should be "compute_table_Tstd%J_20" 3=<%J<=19
@@ -44,16 +45,14 @@ def main(export: IMPORT_EXPORT) -> None:
 
     ### prep tables
     init = prepare_initial_state(loop_count=loop_count,
-                                 unitless_T0=T0_unitless)
+                                 unitless_T0=T0_unitless,
+                                 flip=flip)
     T_list_to_compute = [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]
     table_triplets = prepare_table_triplets(init,
                                             T_list_to_compute,
                                             pos_energy_bound=pos,
                                             neg_energy_bound=neg)
     output_table_triplets(table_triplets, export.prepare_table_triplets_file_list[0])
-
-    date_ = datetime.datetime.now()
-    run_name = date_.strftime("%Y%m%d, %Hh%Mm%Ss")
 
 
 if __name__ == "__main__":

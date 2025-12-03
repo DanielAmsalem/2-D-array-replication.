@@ -15,7 +15,7 @@ def compute_distributed_R_matrices(
         array_size: int,
         near_left: list,
         near_right: list,
-) -> tuple[npt.NDArray, npt.NDArray]:
+) -> tuple[list, npt.NDArray]:
     R_t_ij = 2 ** np.random.uniform(
         low=np.log2(max(R - stdR, 0.01)),
         high=np.log2(R + stdR),
@@ -36,7 +36,7 @@ def compute_fixed_R_matrices(
         array_size: int,
         near_left: list[int],
         near_right: list[int],
-) -> tuple[npt.NDArray, npt.NDArray]:
+) -> tuple[list, npt.NDArray]:
     R_t_ij = np.full((array_size, array_size), R)
     R_i = np.full(array_size, R)
     R_t_i = [
@@ -116,8 +116,8 @@ def compute_fixed_C_matrices(
         C: float,
         row_num: int,
         array_size: int,
-        near_left: npt.NDArray,
-        near_right: npt.NDArray,
+        near_left: list[int],
+        near_right: list[int],
 ) -> tuple[npt.NDArray, npt.NDArray]:
     Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
     Cv = np.random.normal(C, 0, size=(row_num + 1, row_num))
