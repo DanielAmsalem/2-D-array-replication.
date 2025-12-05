@@ -14,19 +14,19 @@ def compute_distributed_R_matrices(
         R: float,
         array_size: int,
         near_left: list,
-        near_right: list,
+        near_right: list
 ) -> tuple[list, npt.NDArray]:
     R_t_ij = 2 ** np.random.uniform(
         low=np.log2(max(R - stdR, 0.01)),
         high=np.log2(R + stdR),
-        size=(array_size, array_size),
-    )
-    R_i = 2 ** np.random.uniform(
-        low=np.log2(max(R - stdR, 0.01)), high=np.log2(R + stdR), size=array_size
-    )
-    R_t_i = [
-        val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)
-    ]
+        size=(array_size, array_size), )
+
+    # make symmetric
+    R_t_ij = 0.5 * (R_t_ij + R_t_ij.T)
+
+    R_i = 2 ** np.random.uniform(low=np.log2(max(R - stdR, 0.01)), high=np.log2(R + stdR), size=array_size)
+
+    R_t_i = [val if idx in set(near_left + near_right) else 0 for idx, val in enumerate(R_i)]
 
     return R_t_i, R_t_ij
 
@@ -46,7 +46,7 @@ def compute_fixed_R_matrices(
     return R_t_i, R_t_ij
 
 
-def compute_C_inverse(Ch: npt.NDArray, Cv: npt.NDArray, row_num: int) -> npt.NDArray:
+def compute_C_inverse(Ch: npt.NDArray, Cv: npt.NDArray, row_num: int, periodic_y: bool) -> npt.NDArray:
     diagonal = Ch[:, :-1] + Ch[:, 1:] + Cv[:-1, :] + Cv[1:, :]
     second_diagonal = np.copy(Ch[:, 1:])
     second_diagonal[:, -1] = 0
@@ -60,6 +60,14 @@ def compute_C_inverse(Ch: npt.NDArray, Cv: npt.NDArray, row_num: int) -> npt.NDA
             - np.diagflat(n_diagonal, k=row_num)
             - np.diagflat(n_diagonal, k=-row_num)
     )
+    if periodic_y:
+        offset = (row_num - 1) * row_num
+        wrap_vals = Cv[0, :]
+        wrap_flat = wrap_vals.flatten()
+
+        C_mat -= np.diagflat(wrap_flat, k=offset)
+        C_mat -= np.diagflat(wrap_flat, k=-offset)
+
     return np.linalg.inv(C_mat)  # define inverse
 
 
@@ -70,6 +78,8 @@ def compute_distributed_C_matrices(
         array_size: int,
         near_left: list[int],
         near_right: list[int],
+        periodic_y: bool,
+        C_to_Cix_ratio
 ):
     Ch = np.random.normal(0, sig, size=(row_num, row_num + 1))
     Cv = np.random.normal(0, sig, size=(row_num + 1, row_num))
@@ -82,34 +92,28 @@ def compute_distributed_C_matrices(
 
     # Ch, Cv = Ch + max(min_val, C), Cv + max(min_val, C)
     Ch, Cv = Ch + min_val + C, Cv + min_val + C
+
+    # update Cix to be a factor Cix_ration smaller:
+    Ch[:, 0] /= C_to_Cix_ratio
+    Ch[:, -1] /= C_to_Cix_ratio
+
+    # get Cix in sparse form.
+    Cl = Ch[:, :-1].copy()
+    Cl[:, 1:] = 0
+    Cr = Ch[:, 1:].copy()
+    Cr[:, :-1] = 0
+
     all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
-
-    Cl = np.random.normal(0, sig / 3, size=(1, array_size))
-    Cr = np.random.normal(0, sig / 3, size=(1, array_size))
-
-    side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
-
-    if np.all(side_Cs >= 0):
-        pass
-    else:
-        min_val = -np.min(side_Cs) + 0.1
-
-    # Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
-    Cl, Cr = Cl + min_val + C, Cr + min_val + C
     side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
 
     Cix = np.zeros(array_size)
     for i in near_left:
-        Cix[i] = Cl[0][i]
+        Cix[i] = Cl[i // row_num][0]
     for i in near_right:
-        Cix[i] = Cr[0][i]
+        Cix[i] = Cr[i // row_num][0]
 
-    for c in np.concatenate([side_Cs.ravel(), all_Cs.ravel()]):
-        if c < 0:
-            print(c)
-            raise ValueError("Negative")
-
-    return Cix, compute_C_inverse(Ch, Cv, row_num), np.mean(all_Cs), np.mean(side_Cs), np.std(all_Cs), np.std(side_Cs)
+    return Cix, compute_C_inverse(Ch, Cv, row_num, periodic_y), np.mean(all_Cs), np.mean(side_Cs), np.std(
+        all_Cs), np.std(side_Cs)
 
 
 def compute_fixed_C_matrices(
@@ -118,6 +122,7 @@ def compute_fixed_C_matrices(
         array_size: int,
         near_left: list[int],
         near_right: list[int],
+        periodic_y: bool
 ) -> tuple[npt.NDArray, npt.NDArray]:
     Ch = np.random.normal(C, 0, size=(row_num, row_num + 1))
     Cv = np.random.normal(C, 0, size=(row_num + 1, row_num))
@@ -128,7 +133,7 @@ def compute_fixed_C_matrices(
     for i in near_right:
         Cix[i] = np.random.normal(C / 2, 0)
 
-    return Cix, compute_C_inverse(Ch, Cv, row_num)
+    return Cix, compute_C_inverse(Ch, Cv, row_num, periodic_y=periodic_y)
 
 
 def define_tau_matrix(
@@ -143,7 +148,7 @@ def define_tau_matrix(
     return -res / np.repeat(reshaped, res.shape[1], axis=1)
 
 
-def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool) -> ExperimentInitialState:
+def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, periodic_y: bool) -> ExperimentInitialState:
     distribute_R = True
     distribute_C = True
 
@@ -153,6 +158,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool) -> Ex
     mean_Rg = 100 * R
     stdR = 0.9 * R
     sig = 0.5 * C
+    C_to_Cix_ratio = 1
 
     row_num = 10
     array_size = row_num ** 2
@@ -161,20 +167,17 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool) -> Ex
     near_left = islands[0::row_num]
 
     if distribute_R:
-        R_t_i, R_t_ij = compute_distributed_R_matrices(
-            stdR, R, array_size, near_left, near_right
-        )
+        R_t_i, R_t_ij = compute_distributed_R_matrices(stdR, R, array_size, near_left, near_right)
     else:
         R_t_i, R_t_ij = compute_fixed_R_matrices(R, array_size, near_left, near_right)
 
     if distribute_C:
         Cix, C_inverse, mean_allCs, mean_sideCs, std_allCs, std_sideCs = compute_distributed_C_matrices(
-            C, sig, row_num, array_size, near_left, near_right
-        )
+            C, sig, row_num, array_size, near_left, near_right,
+            periodic_y=periodic_y, C_to_Cix_ratio=C_to_Cix_ratio)
     else:
-        Cix, C_inverse = compute_fixed_C_matrices(
-            C, row_num, array_size, near_left, near_right
-        )
+        Cix, C_inverse = compute_fixed_C_matrices(C, row_num, array_size, near_left, near_right,
+                                                  periodic_y=periodic_y)
         mean_allCs, mean_sideCs = C, C
         std_allCs, std_sideCs = 0, 0
 
@@ -227,7 +230,8 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool) -> Ex
         mean_sideCs=mean_sideCs,
         std_allCs=std_allCs,
         std_sideCs=std_sideCs,
-        flip=flip
+        flip=flip,
+        periodic_y=periodic_y
     )
 
 

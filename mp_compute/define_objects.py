@@ -60,6 +60,7 @@ class ExperimentInitialState:
     std_sideCs: float
 
     flip: bool
+    periodic_y: bool
 
 
 @dataclass

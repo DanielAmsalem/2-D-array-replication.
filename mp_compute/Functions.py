@@ -17,12 +17,13 @@ def flattenToColumn(a):
     return a.reshape((a.size, 1))
 
 
-def neighbour_list(n, i):
+def neighbour_list(n, i, periodic_y):
     """
     :param n: integer.
     :param i: integer
+    :param periodic_y: bool
     :return: positions of neighbours of ith position in nxn matrix
-    position of denoted as [(0,...,n-1),(n...2n-1),..(n(n-1),...n^2-1)]
+    position of denoted as [(0,...,n-1),(n...2n-1),...(n(n-1),...n^2-1)]
     """
     x = i % n
     y = (i - i % n) / n
@@ -33,8 +34,12 @@ def neighbour_list(n, i):
         neighbours += [i - 1]
     if y + 1 <= n - 1:
         neighbours += [i + n]
+    elif y == n and periodic_y:
+        neighbours += [i - n * (n - 1)]
     if y - 1 >= 0:
         neighbours += [i - n]
+    elif y == 0:
+        neighbours += [i + n * (n - 1)]
 
     return neighbours
 
@@ -61,7 +66,7 @@ def return_neighbours(n, I, J):
 
 
 def getVoltage(n, Qg, C_inverse, VxCix, e):
-    return np.dot(C_inverse, e * n + e * VxCix - Qg)
+    return np.dot(C_inverse, e * n - VxCix - Qg)
 
 
 def isNonNegative(x):
@@ -85,7 +90,7 @@ def update_statistics(value, avg, n_var, total_time, time_step):
     return new_avg, new_n_var
 
 
-def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, row_num):
+def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, row_num, periodic_y):
     # e == 1
     I_right = 0
     I_down = 0
@@ -114,14 +119,22 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, ro
         elif l - m == -row_num:
             I_down -= gamma_list[i]
 
+        # up isle to isle current on the y boundary
+        elif l - m == row_num * (row_num - 1) and periodic_y:
+            I_down -= gamma_list[i]
+
         # down isle to isle current
         elif l - m == row_num:
+            I_down += gamma_list[i]
+
+        # down isle to isle current
+        elif l - m == -row_num * (row_num - 1) and periodic_y:
             I_down += gamma_list[i]
 
     return I_right, I_down
 
 
-def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, n_list):
+def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, n_list, periodic_y):
     # e == 1
     n = row_num  # row_num
 
@@ -165,33 +178,38 @@ def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, 
         # up isle to isle current
         elif l - m == -row_num:
             Jy[l // n][(l % n) + 1] += gamma_list[i]
+
+        elif l - m == row_num * (row_num - 1) and periodic_y:
+            Jy[l // n][(l % n) + 1] += gamma_list[i]
+
         # down isle to isle current
         elif l - m == row_num:
+            Jy[l // n][(l % n) + 1] -= gamma_list[i]
+
+        elif l - m == -row_num * (row_num - 1) and periodic_y:
             Jy[l // n][(l % n) + 1] -= gamma_list[i]
 
     return Jx, Jy
 
 
-def developQ(Q, dt, n, VxCix, init_state: ExperimentInitialState):
+def developQ(Q, dt, n, VxCix, init: ExperimentInitialState):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b
-    b = -init_state.Tau_inv.dot(return_Qn_for_n(n, VxCix, init_state))
+    b = -init.Tau_inv.dot(return_Qn_for_n(n, VxCix, init))
+
+    # res = -init.C_inv.dot(init.e*n + VxCix) / init.CondRg
+    # b = init.InvTauEigenVectorsInv.dot(res)
 
     # exponent for time step
-    exponent = np.exp(init_state.InvTauEigenValues * dt)
+    exponent = np.exp(init.InvTauEigenValues * dt)
 
     # basis change
-    Q_in_eigenbasis, b = (
-        init_state.InvTauEigenVectorsInv.dot(Q),
-        init_state.InvTauEigenVectorsInv.dot(b),
-    )
+    Q_in_eigenbasis, b = init.InvTauEigenVectorsInv.dot(Q), init.InvTauEigenVectorsInv.dot(b)
 
     # solution in time
-    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (
-            b / init_state.InvTauEigenValues
-    ) * (exponent - 1)
+    Q_new_in_eigenbasis = (exponent * Q_in_eigenbasis) + (b / init.InvTauEigenValues) * (exponent - 1)
 
     # revert to old basis
-    return init_state.InvTauEigenVectors.dot(Q_new_in_eigenbasis)
+    return init.InvTauEigenVectors.dot(Q_new_in_eigenbasis)
 
 
 def return_Qn_for_n(n, VxCix, init: ExperimentInitialState):
@@ -204,21 +222,13 @@ def return_Qn_for_n(n, VxCix, init: ExperimentInitialState):
     """
     # sum = Tau.dot(n_prime / Cg) / Rg
     # #return sum - n_prime
-    n_prime = init.e * n + init.e * VxCix
+    n_prime = init.e * n - VxCix
     return init.matrixQnPart.dot(n_prime)
 
 
 def getWork(i, j, C_inv, curr_V, e):
-    Work = (
-            e
-            * (
-                    2 * curr_V[j]
-                    + e * C_inv[j][i]
-                    - e * C_inv[j][j]
-                    - (2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])
-            )
-            / 2
-    )
+    Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] - (
+                2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
     return Work
 
 
@@ -346,7 +356,8 @@ def fix_types(init: ExperimentInitialState, loop_count: int):
         mean_sideCs=float(init.mean_sideCs),
         std_allCs=float(init.std_allCs),
         std_sideCs=float(init.std_sideCs),
-        flip=bool(init.flip)
+        flip=bool(init.flip),
+        periodic_y=bool(init.periodic_y),
     )
 
 
@@ -371,10 +382,10 @@ def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
     row_num = sqrt(array_size)
     for i in range(array_size):
         for j in range(array_size):
-            y_i = i - i % sqrt(array_size)
-            y_j = j - j % sqrt(array_size)
+            y_i = i - i % row_num
+            y_j = j - j % row_num
             ## if in row 0 or n-1 and same row neighbours
-            if (y_i == 0 or y_i == array_size-sqrt(array_size)) and y_i == y_j:
+            if (y_i == 0 or y_i == array_size-row_num) and y_i == y_j:
                 if abs(i - j) == 1:
                     R_new[i, j] = insulate_R
 

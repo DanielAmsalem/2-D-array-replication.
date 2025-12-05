@@ -1,4 +1,5 @@
 import csv
+import warnings
 from pathlib import Path
 import matplotlib
 
@@ -152,42 +153,53 @@ def plot_heat_map(results,
     return 0
 
 
-def extract_nn_resistances(R, n, R_sides, near_left, near_right):
-    Rx = np.zeros((n, n + 1))  # horizontal edges
-    Ry = np.zeros((n - 1, n))  # vertical edges
+def extract_nn_resistances(R, n, R_sides, near_left, near_right, periodic_y):
+    """
+    R: full R_ij (n*n by n*n)
+    n: grid dimension
+    R_sides: resistances to electrodes
+    near_left, near_right: electrode island lists
+    periodic_y: if True, bottom row is connected to top row
+    """
+
+    Rx = np.zeros((n, n + 1))      # horizontal edges
+    Ry = np.zeros((n if periodic_y else (n - 1), n))  # vertical edges
 
     for y in range(n):
         for x in range(n):
-            i = x + n * y  # index of (x,y)
+            i = x + n * y  # index (x,y)
 
-            # horizontal neighbour
             if x < n - 1:
                 j = (x + 1) + n * y
                 Rx[y, x + 1] = R[i, j]
 
-            # vertical neighbour
             if y < n - 1:
                 j = x + n * (y + 1)
                 Ry[y, x] = R[i, j]
 
-    ## add electordes:
+            # periodic vertical neighbour (y = n-1 → y = 0)
+            if periodic_y and y == n - 1:
+                j = x  # top row index is y=0 → i = x
+                Ry[n - 1, x] = R[i, j]
+
     for y in range(n):
         for isle in near_left:
             if isle // n == y:
-                Rx[y][0] = R_sides[isle]
+                Rx[y, 0] = R_sides[isle]
 
         for isle in near_right:
             if isle // n == y:
-                Rx[y][n] = R_sides[isle]
+                Rx[y, n] = R_sides[isle]
 
     return Rx, Ry
+
 
 
 def plot_resistance_maps(Rx, Ry, n, results_path, show: bool):
     # Horizontal edges
     plt.figure(figsize=(6, 4))
     plt.title("Horizontal resistances $R_x$")
-    plt.imshow(Rx, cmap='inferno', origin='lower', extent=[0, Rx.shape[1], 0, Rx.shape[0]])
+    plt.imshow(Rx, cmap='inferno', origin='lower', extent=[0, Rx.shape[1], -0.5, Rx.shape[0]-0.5])
     plt.colorbar(label="Resistance")
     plt.xlabel("x (edge start)")
     plt.ylabel("y")
@@ -202,141 +214,129 @@ def plot_resistance_maps(Rx, Ry, n, results_path, show: bool):
     # Vertical edges
     plt.figure(figsize=(6, 4))
     plt.title("Vertical resistances $R_y$")
-    plt.imshow(Ry, cmap='inferno', origin='lower')
+    plt.imshow(Ry, cmap='inferno', origin='lower', extent=[-0.5, Ry.shape[1]-0.5, 0, Ry.shape[0]])
     plt.colorbar(label="Resistance")
     plt.xlabel("x")
     plt.ylabel("y (edge start)")
+    plt.xticks(range(n))
+    plt.yticks(list(range(n + 1)), [str(i) for i in range(n)] + ["0"])
     plt.tight_layout()
     plt.savefig(fname=results_path / "_Ry", dpi=2100, bbox_inches="tight")
     if show:
         plt.show()
+    print("saved Ry plot")
 
-def plot_capacitance_map(C_inv,n, results_path, show: bool):
+
+def plot_capacitance_map(C_inv, n, periodic_y: bool, show: bool, results_path: Path):
     """
         C_inv is an (n*n, n*n) inverse capacitance matrix.
-        n is grid dimension.
+        n is row_num.
     """
     # Extract blocks
     C_self = np.zeros((n, n))
     C_horiz = np.zeros((n, n - 1))
-    C_vert = np.zeros((n - 1, n))
+    C_vert = np.zeros((n, n))  # include periodic edge in last row
 
     for y in range(n):
         for x in range(n):
             i = y * n + x
             C_self[y, x] = C_inv[i, i]
 
+            # Horizontal C(x,y) => (x+1,y)
             if x < n - 1:
                 C_horiz[y, x] = C_inv[i, i + 1]
 
+            # Vertical C(x,y) => (x,y+1)
             if y < n - 1:
                 C_vert[y, x] = C_inv[i, (y + 1) * n + x]
 
-    # =====================================================
-    #      GLOBAL COLOR NORMALIZATION
-    # =====================================================
-    # Self-capacitance normalization
-    norm_self = Normalize(
-        vmin=np.min(C_self),
-        vmax=np.max(C_self)
-    )
+    # If periodic_y enabled, fill wrap-around coupling
+    if periodic_y:
+        for x in range(n):
+            i_top = (n - 1) * n + x
+            i_bot = x
+            C_vert[n - 1, x] = C_inv[i_top, i_bot]  # last row contains periodic coupling
 
-    # Mutual capacitance normalization (horizontal+vertical)
+    # colours need norm
+    norm_self = Normalize(vmin=np.min(C_self), vmax=np.max(C_self))
     mutual_vals = np.concatenate([C_horiz.flatten(), C_vert.flatten()])
-    norm_mut = Normalize(
-        vmin=np.min(mutual_vals),
-        vmax=np.max(mutual_vals)
-    )
+    norm_mut = Normalize(vmin=np.min(mutual_vals), vmax=np.max(mutual_vals))
 
-    # =====================================================
-    #                PLOTTING
-    # =====================================================
     fig, ax = plt.subplots(figsize=(8, 8))
-
-    # -------------------------
-    # Self-cap blocks
-    # -------------------------
     for y in range(n):
         for x in range(n):
-            xL = x - 0.25
-            xR = x + 0.25
-            yB = y - 0.25
-            yT = y + 0.25
-
+            xL, xR = x - 0.25, x + 0.25
+            yB, yT = y - 0.25, y + 0.25
             ax.pcolormesh(
-                [xL, xR],
-                [yB, yT],
+                [xL, xR], [yB, yT],
                 np.array([[C_self[y, x]]]),
-                cmap="inferno",
-                shading="auto",
-                norm=norm_self
+                cmap="inferno", norm=norm_self, shading="auto"
             )
-
-    # -------------------------
-    # Horizontal couplings
-    # -------------------------
+    # horizontal
     for y in range(n):
         for x in range(n - 1):
-            xL = x + 0.25
-            xR = x + 0.75
-            yB = y - 0.25
-            yT = y + 0.25
-
+            xL, xR = x + 0.25, x + 0.75
+            yB, yT = y - 0.25, y + 0.25
             ax.pcolormesh(
-                [xL, xR],
-                [yB, yT],
+                [xL, xR], [yB, yT],
                 np.array([[C_horiz[y, x]]]),
-                cmap="viridis",
-                shading="auto",
-                norm=norm_mut
+                cmap="viridis", norm=norm_mut, shading="auto"
             )
-
-    # -------------------------
-    # Vertical couplings
-    # -------------------------
+    # vertical coupling
     for y in range(n - 1):
         for x in range(n):
-            xL = x - 0.25
-            xR = x + 0.25
-            yB = y + 0.25
-            yT = y + 0.75
-
+            xL, xR = x - 0.25, x + 0.25
+            yB, yT = y + 0.25, y + 0.75
             ax.pcolormesh(
-                [xL, xR],
-                [yB, yT],
+                [xL, xR], [yB, yT],
                 np.array([[C_vert[y, x]]]),
-                cmap="viridis",
-                shading="auto",
-                norm=norm_mut
+                cmap="viridis", norm=norm_mut, shading="auto"
+            )
+    # periodic extra rows
+    if periodic_y:
+        for x in range(n):
+            val = C_vert[n - 1, x]
+
+            xL, xR = x - 0.25, x + 0.25
+            yB, yT = -0.75, -0.25
+            ax.pcolormesh(
+                [xL, xR], [yB, yT],
+                np.array([[val]]),
+                cmap="viridis", norm=norm_mut, shading="auto"
             )
 
-    # =====================================================
-    # Formatting
-    # =====================================================
+            yB2, yT2 = n + 0.25, n + 0.75
+            ax.pcolormesh(
+                [xL, xR], [yB2, yT2],
+                np.array([[val]]),
+                cmap="viridis", norm=norm_mut, shading="auto"
+            )
+
     ax.set_aspect("equal")
     ax.set_xlim(-0.5, n - 0.5)
-    ax.set_ylim(-0.5, n - 0.5)
+    ax.set_ylim(-1.0, n) if periodic_y else ax.set_ylim(-0.5, n - 0.5)
+
     ax.set_xticks(range(n))
     ax.set_yticks(range(n))
-    ax.grid(alpha=0.2)
-    ax.scatter(
-        np.arange(n).repeat(n),  # x coords: 0,0,0...,1,1,1..., ...
-        np.tile(np.arange(n), n),  # y coords: 0,1,2,...,0,1,2,...
-        c="black", s=8, zorder=10
-    )
+    ax.grid(alpha=0.3)
 
-    ax.set_title("$C^{-1}$ matrix, black dots are the sites/islands")
+    # Black dots marking node positions
+    xs = np.arange(n).repeat(n)
+    ys = np.tile(np.arange(n), n)
+    ax.scatter(xs, ys, c="black", s=10, zorder=10)
 
-    # Colorbars (one for each norm)
+    ax.set_title("Inverse Capacitance Map $C^{-1}_{ij}$")
+
     sm_self = plt.cm.ScalarMappable(norm=norm_self, cmap="inferno")
     sm_mut = plt.cm.ScalarMappable(norm=norm_mut, cmap="viridis")
 
-    cbar1 = fig.colorbar(sm_self, ax=ax, fraction=0.046, pad=0.16)
-    cbar1.set_label("Self capacitance $C^{-1}_{ii}$")
-
-    cbar2 = fig.colorbar(sm_mut, ax=ax, fraction=0.046, pad=0.04)
-    cbar2.set_label("Mutual capacitance $C^{-1}_{ij}$")
+    fig.colorbar(sm_self, ax=ax, fraction=0.046, pad=0.16).set_label("Self capacitance $C^{-1}_{ii}$")
+    fig.colorbar(sm_mut, ax=ax, fraction=0.046, pad=0.04).set_label("Mutual capacitance $C^{-1}_{ij}$")
 
     plt.tight_layout()
+    if isinstance(results_path, Path):
+        plt.savefig(fname=results_path / "_Cinv", dpi=2100, bbox_inches="tight")
+    else:
+        warnings.warn("NO RESULTS PATH FOR CAPACITANCE MAP")
     if show:
         plt.show()

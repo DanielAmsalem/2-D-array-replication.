@@ -47,19 +47,8 @@ def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table
             return probs[idx]
 
 
-def Gamma_approx(
-        dE,
-        T_at_junction,
-        Rt,
-        Ec,
-        e,
-        neg_energy_bound,
-        pos_energy_bound,
-        table_val,
-        table_prob,
-        T_table,
-        flip
-):
+def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_bound, table_val, table_prob, T_table,
+                 flip):
     # low bound starts at dE=-0.09 and thence is analytically the mean of a gaussian
     # high bound starts at dE=-0.01 and thence is 0
     if Rt < 0:
@@ -117,32 +106,9 @@ def execute_transition(Gamma_list, n_list, reaction_index_, e):
     return n_list, ll, mm, rate
 
 
-def Get_Gamma(
-        Gamma_,
-        RR,
-        e,
-        reaction_index_,
-        n_list,
-        curr_V,
-        cycle_voltage_,
-        array_size,
-        islands,
-        row_num,
-        C_inv,
-        pos_energy_bound,
-        neg_energy_bound,
-        T_gradient,
-        R_t_ij,
-        R_t_i,
-        near_left,
-        near_right,
-        Vright,
-        Ec,
-        table_val,
-        table_prob,
-        T_table,
-        flip
-):
+def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_size, islands, row_num, C_inv,
+              pos_energy_bound, neg_energy_bound, T_gradient, R_t_ij, R_t_i, near_left, near_right, Vright, Ec,
+              table_val, table_prob, T_table, flip, periodic_y, Cix):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
 
@@ -153,54 +119,29 @@ def Get_Gamma(
             continue
 
         # else calculate transition rate to jth island
-        neighbour_list = F.neighbour_list(row_num, i)
+        neighbour_list = F.neighbour_list(row_num, i, periodic_y=periodic_y)
         for j in neighbour_list:
-            # calculate energy difference due to transition dE = e*[(Vj-Vi)+(V'j-V'í)]
-            # dEij[i][j] = e * (curr_V[j]-curr_V[i]) + e*e* (C_inv[j][j]+C_inv[i][i] - 2 *C_inv[i][j])/2
-            dEij[i][j] = (e * (2 * curr_V[j] - e * C_inv[j][i] + e * C_inv[j][j] -
-                               (2 * curr_V[i] - e * C_inv[i][i] + e * C_inv[i][j])) / 2)
+            # calculate energy difference due to transition dE = e*[(Vj-Vi)+(V'j-V'í)]/2
+            # V'j = Vj +[C^-1 * (ej-ei)]j = Vj + C^-1(self) - C^-1[i][j]
+            # V'i = Vi + [C^-1 * (ej-ei)]i = Vi - C^-1(self) + C^-1[i][j]
+            dEij[i][j] = e * (curr_V[j] - curr_V[i]) + e * e * (C_inv[j][j] + C_inv[i][i] - 2 * C_inv[i][j]) / 2
 
             # dEij must be negative enough for transition i->j
             if dEij[i][j] < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dEij[i][j],
-                                        T_gradient[i % row_num],
-                                        R_t_ij[i][j],
-                                        Ec,
-                                        e,
-                                        neg_energy_bound,
-                                        pos_energy_bound,
-                                        table_val,
-                                        table_prob,
-                                        T_table,
-                                        flip)]
-                RR += Gamma_[-1]
+                Gamma_ += [Gamma_approx(dEij[i][j], T_gradient[i % row_num], R_t_ij[i][j], Ec, e, neg_energy_bound,
+                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
                 reaction_index_ += [(i, j)]
-                # if (i // row_num == j // row_num == 0) or (i // row_num == j // row_num == row_num - 1):
-                #     print(f"i : {i}, j : {j} ;    g : {Gamma_[-1]}   ;   ")
 
     # left electrode to island transition:
     for isle in near_left:
-        # for ith transition from electrode
-        dE_left = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
+        # for ith transition from electrode:
+        # V'i = V'i [C^-1(ei)]i = V'i + e*C^-1(self)
+        dE_left = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
-            Gamma_ += [
-                Gamma_approx(
-                    dE_left,
-                    T_gradient[isle % row_num],
-                    R_t_i[isle],
-                    Ec,
-                    e,
-                    neg_energy_bound,
-                    pos_energy_bound,
-                    table_val,
-                    table_prob,
-                    T_table,
-                    flip
-                )
-            ]
-            RR += Gamma_[-1]
+            Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
+                                    pos_energy_bound, table_val, table_prob, T_table, flip)]
             reaction_index_ += [(isle, "from")]
 
         # for ith transition to electrode there must be at least one electron at isle i
@@ -209,47 +150,19 @@ def Get_Gamma(
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
-                Gamma_ += [
-                    Gamma_approx(
-                        dE_left,
-                        T_gradient[i % row_num],
-                        R_t_i[isle],
-                        Ec,
-                        e,
-                        neg_energy_bound,
-                        pos_energy_bound,
-                        table_val,
-                        table_prob,
-                        T_table,
-                        flip
-                    )
-                ]
-                RR += Gamma_[-1]
+                Gamma_ += [Gamma_approx(dE_left, T_gradient[i % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
+                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
                 reaction_index_ += [(isle, "to")]
 
     # similarly, for right side
     for isle in near_right:
         # for ith transition from electrode
-        dE_right = (2 * curr_V[isle] - e * C_inv[isle][isle] - 2 * Vright) * e / 2
+        dE_right = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * Vright) * e / 2
 
         # rate for V_right->i
         if dE_right < pos_energy_bound:
-            Gamma_ += [
-                Gamma_approx(
-                    dE_right,
-                    T_gradient[isle % row_num],
-                    R_t_i[isle],
-                    Ec,
-                    e,
-                    neg_energy_bound,
-                    pos_energy_bound,
-                    table_val,
-                    table_prob,
-                    T_table,
-                    flip
-                )
-            ]
-            RR += Gamma_[-1]
+            Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
+                                    pos_energy_bound, table_val, table_prob, T_table, flip)]
             reaction_index_ += [(isle, "from")]
 
         # for ith transition to electrode
@@ -259,25 +172,11 @@ def Get_Gamma(
 
             # rate for i->V_right
             if dE_right < pos_energy_bound:
-                Gamma_ += [
-                    Gamma_approx(
-                        dE_right,
-                        T_gradient[isle % row_num],
-                        R_t_i[isle],
-                        Ec,
-                        e,
-                        neg_energy_bound,
-                        pos_energy_bound,
-                        table_val,
-                        table_prob,
-                        T_table,
-                        flip
-                    )
-                ]
-                RR += Gamma_[-1]
+                Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
+                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
                 reaction_index_ += [(isle, "to")]
 
-    return Gamma_, RR, reaction_index_
+    return Gamma_, reaction_index_
 
 
 def Get_Steady_State(
@@ -294,7 +193,8 @@ def Get_Steady_State(
         pos_energy_bound: float,
         neg_energy_bound: float,
         repetition: int,
-        capture_heatmap_at_idx: float
+        capture_heatmap_at_idx: float,
+        periodic_y: bool
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -302,7 +202,7 @@ def Get_Steady_State(
     n, n_avg, n_var = (np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size),)
     I_avg, I_var = 0, 0
 
-    # vector counting charge flow
+    # vectors counting charge flow
     I_vec = np.zeros(cycles)
     Jx, Jy = np.zeros((init.row_num, init.row_num + 1)), np.zeros((init.row_num, init.row_num + 1))
 
@@ -322,27 +222,19 @@ def Get_Steady_State(
             # update number of reactions and voltage from last loop
             k += 1
 
-            VxCix = F.get_VxCix(
-                cycle_voltage,
-                init.Vright,
-                init.array_size,
-                init.near_left,
-                init.near_right,
-                init.Cix, )
+            VxCix = F.get_VxCix(cycle_voltage, init.Vright, init.array_size, init.near_left, init.near_right, init.Cix)
 
             V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)  # find V_i for ith island
 
             if k == 1:
                 print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
 
-            # define overall reaction rate R, rate vector, and a useful index
-            R = 0
+            # define overall rate vector, and a useful index
             reaction_index = []
             Gamma = []
 
-            Gamma, R, reaction_index = Get_Gamma(
+            Gamma, reaction_index = Get_Gamma(
                 Gamma_=Gamma,
-                RR=R,
                 e=init.e,
                 reaction_index_=reaction_index,
                 n_list=n,
@@ -364,10 +256,13 @@ def Get_Steady_State(
                 table_val=table_val,
                 table_prob=table_prob,
                 T_table=table_T,
-                flip=flip
+                flip=flip,
+                periodic_y=periodic_y,
+                Cix=init.Cix
             )
 
-            # transition occurred, limit for R is the typical ground drain current
+            # transition occurred, limit for R=sum(Gamma) is the typical ground drain current
+            R = np.sum(Gamma)
             if R > cycle_voltage / init.CondRg:
                 # reset zero curr steady state detection
                 zero_curr_steady_state_counter = 0
@@ -395,7 +290,7 @@ def Get_Steady_State(
             # update statistics
             if steady_state_reps <= 0:
                 I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, init.near_right, init.near_left,
-                                                           init.row_num)
+                                                           init.row_num, periodic_y=periodic_y)
                 I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
 
             Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
@@ -424,7 +319,8 @@ def Get_Steady_State(
                         steady_state_timer -= dt
                         if cycle_voltage == V_cycle[capture_heatmap_at_idx]:
                             Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index,
-                                                         init.near_right, init.near_left, init.row_num, n)
+                                                         init.near_right, init.near_left, init.row_num, n,
+                                                         periodic_y=periodic_y)
                             Jx += Jx_
                             Jy += Jy_
 

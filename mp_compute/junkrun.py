@@ -2,99 +2,54 @@ import Functions as F
 import numpy as np
 import matplotlib
 from curve_plotter import plot_capacitance_map
+from preparation import compute_distributed_C_matrices
+
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
+C_to_Cix_ratio = 100
 
-###############HEAT MAP STUUFF
-# n = 10
-# islands = list(range(n ** 2))
-# near_right = islands[(n - 1):: n]
-# near_left = islands[0::n]
-# i = 9
-#
-# gamma_list = []
-# rec_idx = []
-#
-# gamma_list_full = [(8, 9, 1),
-#                    (18,19,2),
-#                    (2, 3, 2),
-#                    (4, 3, 3),
-#                    (50, 60, 2),
-#                    (16, 6, 1),
-#                    (98,99, 1)]
-# for listing in gamma_list_full:
-#     l, m, g = listing
-#     gamma_list.append(g)
-#     rec_idx.append((l, m))
-#
-# print(F.neighbour_list(n, i))
-# Jx, Jy = F.Get_current_map(gamma_list, rec_idx, near_right, near_left, n)
-#
-# # create grid
-# Y, X = np.mgrid[0:n, 0:(n + 1)]
-# plt.figure(figsize=(6, 6))
-# # create x current vecs at each point
-# plt.quiver(X + 0.5, Y + 0.5, Jx, np.zeros((n, n + 1)),
-#            np.sqrt(Jx ** 2 + Jy ** 2),  # color by magnitude
-#            scale=np.abs(Jx).max(), scale_units='xy', angles='xy',
-#            cmap='coolwarm')
-# # create y current vecs at each point
-# plt.quiver(X + 0.5, Y + 0.5, np.zeros((n, n + 1)), Jy,
-#            np.sqrt(Jx ** 2 + Jy ** 2),  # color by magnitude
-#            scale=np.abs(Jy).max(), scale_units='xy', angles='xy',
-#            cmap='coolwarm')
-# plt.grid(True, color="lightgray", alpha=0.5)
-# plt.xticks(list(range(n + 2)), ["Vleft"] + [str(i) for i in range(n)] + ["Vright"])
-# plt.yticks(range(n + 1))
-# print(Jx)
-# Jx_form = []
-# k = 0
-# for i in range(Jx.shape[0]):
-#     Jx_pos = []
-#     for j in range(Jx.shape[1]):
-#         Jx_pos += [(k, int(Jx[i, j]))]
-#         k += 1
-#     Jx_form.append(Jx_pos)
-# print(Jx_form)
-# plt.show()
-
-######################################### C INVERSE CHECKER
+C=1
+sig=0.5
 row_num = 10
-sig = 0
-C = 1
-array_size = row_num**2
+array_size = row_num ** 2
+islands = list(range(array_size))
+near_right = islands[(row_num - 1):: row_num]
+near_left = islands[0::row_num]
+
 Ch = np.random.normal(0, sig, size=(row_num, row_num + 1))
 Cv = np.random.normal(0, sig, size=(row_num + 1, row_num))
 
 all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
 if np.all(all_Cs >= 0):
-    min_val = 0
+    pass
 else:
     min_val = -np.min(all_Cs) + 0.1
 
 # Ch, Cv = Ch + max(min_val, C), Cv + max(min_val, C)
 Ch, Cv = Ch + min_val + C, Cv + min_val + C
+
+# update Cix to be a factor Cix_ration smaller:
+Ch[:, 0] /= C_to_Cix_ratio
+Ch[:, -1] /= C_to_Cix_ratio
+
+print(Ch)
+print("#################################################")
+
+# get Cix in sparse form.
+Cl = Ch[:, :-1].copy()
+Cl[:, 1:] = 0
+Cr = Ch[:, 1:].copy()
+Cr[:, :-1] = 0
+
 all_Cs = np.concatenate([Ch.ravel(), Cv.ravel()])
-
-Cl = np.random.normal(0, sig / 3, size=(1, array_size))
-Cr = np.random.normal(0, sig / 3, size=(1, array_size))
-
 side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
 
-if np.all(side_Cs >= 0):
-    min_val = 0
-else:
-    min_val = -np.min(side_Cs) + 0.1
-
-# Cl, Cr = Cl + max(min_val, C), Cr + max(min_val, C/2)
-Cl, Cr = Cl + min_val + C, Cr + min_val + C
-side_Cs = np.concatenate([Cl.ravel(), Cr.ravel()])
-
-for c in np.concatenate([side_Cs.ravel(), all_Cs.ravel()]):
-    if c < 0:
-        print(c)
-        raise ValueError("Negative")
+Cix = np.zeros(array_size)
+for i in near_left:
+    Cix[i] = Cl[i // row_num][0]
+for i in near_right:
+    Cix[i] = Cr[i // row_num][0]
 
 diagonal = Ch[:, :-1] + Ch[:, 1:] + Cv[:-1, :] + Cv[1:, :]
 second_diagonal = np.copy(Ch[:, 1:])
@@ -107,10 +62,14 @@ C_mat = (
         - np.diagflat(second_diagonal, k=1)
         - np.diagflat(second_diagonal, k=-1)
         - np.diagflat(n_diagonal, k=row_num)
-        - np.diagflat(n_diagonal, k=-row_num))
+        - np.diagflat(n_diagonal, k=-row_num)
+)
 
-plot_capacitance_map(C_mat, row_num, True)
+offset = (row_num - 1) * row_num
+wrap_vals = Cv[0, :]
+wrap_flat = wrap_vals.flatten()
 
-C_inv = np.linalg.inv(C_mat)
+C_mat -= np.diagflat(wrap_flat, k=offset)
+C_mat -= np.diagflat(wrap_flat, k=-offset)
 
-plot_capacitance_map(C_inv, row_num, True)
+plot_capacitance_map(C_mat, row_num, periodic_y=True, show=True, results_path=int(4))

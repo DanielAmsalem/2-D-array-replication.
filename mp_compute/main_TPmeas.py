@@ -23,20 +23,21 @@ import time
 
 def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # FIXED PARAMETERS
-    loop_count = 100
+    loop_count = 5
     T0_unitless = 0.001
-    repetition = 6  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
+    repetition = 2  # int : m -> the first gradient to check will be dT=(m+1)Tstd
+    last_repetition_to_do = 2  # int : n -> the last repetition has dT = n*Tstd
     V_capture = 4
     flip = False
-    first_run = False
+    first_run = True
     rep_json = True
+    periodic_y = True  # periodic boundary conditions in y-axis
     null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
     pos_energy_boundT0 = -0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
     neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
     # choose a specific run
-    run_to_get_init_from = "20251202_00h42m25s"
+    run_to_get_init_from = "20251203_18h49m03s"
     results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
@@ -44,13 +45,12 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         raw_fields = orjson.loads(json_txt)
         # recreate old init state
         init_str = ExperimentInitialState(**raw_fields)
-        # if is old 20251117_18h02m00s run, put init_str = ExperimentInitialState(**raw_fields, flip=flip)
         init = F.fix_types(init_str, loop_count)
         print(f"success, starting run for {run_to_get_init_from}")
 
     else:
         # create new initial state
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip)
+        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y)
         print("CREATED NEW INIT FILE")
 
     ### report init state to report file
@@ -61,15 +61,16 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         outfile.write_text(serialized_init_data)
         print("STORED INIT IN JSON")
 
-    Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
-                                                  near_left=init.near_left,
-                                                  near_right=init.near_right)
-    print("created resistance maps, now saving plots...")
-    curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
-                                       results_path=import_export.results_dir_path, show=True)
-    print("plotting capacitance map...")
-    curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
-                                       results_path=import_export.results_dir_path, show=True)
+    # Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
+    #                                               near_left=init.near_left,
+    #                                               near_right=init.near_right,
+    #                                               periodic_y=periodic_y,)
+    # print("created resistance maps, now saving plots...")
+    # curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
+    #                                    results_path=import_export.results_dir_path, show=False)
+    # print("plotting capacitance map...")
+    # curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
+    #                                    results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
 
     if not validate_table_triplets_file(null_path_name, init, [init.T0]):
         table_triplets = prepare_table_triplets(init, [init.T0],
@@ -113,7 +114,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 pos_energy_bound=pos_energy_boundT0,
                 neg_energy_bound=neg_energy_boundT0,
                 repetition=0,
-                capture_heatmap_at_idx=V_capture_idx
+                capture_heatmap_at_idx=V_capture_idx,
+                periodic_y=periodic_y
             )
 
             results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
@@ -199,7 +201,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 pos_energy_bound=float(pos[repetition - 3]),
                 neg_energy_bound=float(neg[repetition - 3]),
                 repetition=repetition,
-                capture_heatmap_at_idx=V_capture_idx
+                capture_heatmap_at_idx=V_capture_idx,
+                periodic_y=periodic_y
             )
 
             results: list[SteadyStateResult] = list(
