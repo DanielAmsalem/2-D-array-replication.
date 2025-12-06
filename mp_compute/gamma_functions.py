@@ -10,6 +10,7 @@ import matplotlib
 
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table, flip):
@@ -225,8 +226,9 @@ def Get_Steady_State(
         x, y = np.arange(init.row_num), np.arange(init.row_num)
         X, Y = np.meshgrid(x, y)
 
-        scatter = ax.scatter(X.ravel(), Y.ravel(), c=n.reshape(-1), cmap='plasma',
-                             vmin=0, vmax=10, s=20, edgecolors='none')
+        # log norm to see particle movement rather than stationary chrage
+        norm = LogNorm(vmin=0.1, vmax=15)
+        scatter = ax.scatter(X.ravel(), Y.ravel(), c=n.reshape(-1), cmap='plasma', norm=norm, s=20, edgecolors='none')
 
         plt.colorbar(scatter, ax=ax, label="Population")
 
@@ -251,8 +253,8 @@ def Get_Steady_State(
             VxCix = F.get_VxCix(cycle_voltage, init.Vright, init.array_size, init.near_left, init.near_right, init.Cix)
 
             V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)  # find V_i for ith island
-            if not (q % 1000) and plot_ongoing_voltage_map:
-                print(n)
+            if 0 < q % 1000 < 10 and plot_ongoing_voltage_map:
+                print(n.reshape(init.row_num, init.row_num))
                 im.set_data(V.reshape(init.row_num, init.row_num))
                 ax.set_title(f"Vleft-Vright: {cycle_voltage}")
                 scatter.set_array(n.reshape(-1))

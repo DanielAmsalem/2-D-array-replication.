@@ -27,10 +27,12 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     first_run = True
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
-    plot_ongoing_voltage_map = False
+    plot_ongoing_voltage_map = True
 
     # FIXED PARAMETERS
-    loop_count = 5
+    loop_count = 1
+    if loop_count != 1:
+        plot_ongoing_voltage_map = False
     T0_unitless = 0.001
     repetition = 2  # int : m -> the first gradient to check will be dT=(m+1)Tstd
     last_repetition_to_do = 2  # int : n -> the last repetition has dT = n*Tstd
@@ -64,16 +66,16 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         outfile.write_text(serialized_init_data)
         print("STORED INIT IN JSON")
 
-    Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
-                                                  near_left=init.near_left,
-                                                  near_right=init.near_right,
-                                                  periodic_y=periodic_y,)
-    print("created resistance maps, now saving plots...")
-    curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
-                                       results_path=import_export.results_dir_path, show=False)
-    print("plotting capacitance map...")
-    curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
-                                       results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
+    # Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
+    #                                               near_left=init.near_left,
+    #                                               near_right=init.near_right,
+    #                                               periodic_y=periodic_y,)
+    # print("created resistance maps, now saving plots...")
+    # curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
+    #                                    results_path=import_export.results_dir_path, show=False)
+    # print("plotting capacitance map...")
+    # curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
+    #                                    results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
 
     if not validate_table_triplets_file(null_path_name, init, [init.T0]):
         table_triplets = prepare_table_triplets(init, [init.T0],
