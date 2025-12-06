@@ -136,16 +136,14 @@ def compute_fixed_C_matrices(
     return Cix, compute_C_inverse(Ch, Cv, row_num, periodic_y=periodic_y)
 
 
-def define_tau_matrix(
+def define_tau_inverse_matrix(
         C_inverse: npt.NDArray,
         mean_Cg: float,
         mean_Rg: float,
         array_size: int,
 ) -> npt.NDArray:
     res = C_inverse + np.diagflat([1 / mean_Cg] * array_size)
-    a = np.array([mean_Rg] * array_size)  # flattening to column
-    reshaped = a.reshape((a.size, 1))
-    return -res / np.repeat(reshaped, res.shape[1], axis=1)
+    return -res / mean_Rg
 
 
 def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, periodic_y: bool) -> ExperimentInitialState:
@@ -181,7 +179,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         mean_allCs, mean_sideCs = C, C
         std_allCs, std_sideCs = 0, 0
 
-    Tau_inv = define_tau_matrix(C_inverse, mean_Cg, mean_Rg, array_size)
+    Tau_inv = define_tau_inverse_matrix(C_inverse, mean_Cg, mean_Rg, array_size)
     InvTauEigenValues, InvTauEigenVectors = np.linalg.eig(Tau_inv)
     InvTauEigenVectorsInv = np.linalg.inv(InvTauEigenVectors)
     default_dt = -0.1 / np.min(InvTauEigenValues)  # time in which Qg don't change much

@@ -147,7 +147,7 @@ def plot_heat_map(results,
     plt.xticks(list(range(n + 2)), ["Vleft"] + [str(i) for i in range(n)] + ["Vright"])
     plt.yticks(range(n + 1))
     pic_name = filename + f"_rep{repetition}.png"
-    plt.title(f"at V = {heatmap_at_V}")
+    plt.title(f"at V = {heatmap_at_V}\n Ix scale = {np.abs(Jx).max()} ; Iy scale = {np.abs(Jy).max()}")
     plt.savefig(fname=results_path / pic_name, dpi=2100, bbox_inches="tight")
     # plt.show()
     return 0

@@ -6,6 +6,10 @@ import numpy.typing as npt
 
 import Functions as F
 from define_objects import ExperimentInitialState, SteadyStateResult
+import matplotlib
+
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 
 
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table, flip):
@@ -108,7 +112,7 @@ def execute_transition(Gamma_list, n_list, reaction_index_, e):
 
 def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_size, islands, row_num, C_inv,
               pos_energy_bound, neg_energy_bound, T_gradient, R_t_ij, R_t_i, near_left, near_right, Vright, Ec,
-              table_val, table_prob, T_table, flip, periodic_y, Cix):
+              table_val, table_prob, T_table, flip, periodic_y):
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
 
@@ -194,21 +198,42 @@ def Get_Steady_State(
         neg_energy_bound: float,
         repetition: int,
         capture_heatmap_at_idx: float,
-        periodic_y: bool
+        periodic_y: bool,
+        plot_ongoing_voltage_map: bool
 ):
     error_count = 0
     # general Charge distribution vectors
-    Qg, Q_avg, Q_var = (np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size),)
-    n, n_avg, n_var = (np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size),)
+    Qg, Q_avg, Q_var = np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size)
+    n, n_avg, n_var = np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size)
     I_avg, I_var = 0, 0
 
     # vectors counting charge flow
     I_vec = np.zeros(cycles)
     Jx, Jy = np.zeros((init.row_num, init.row_num + 1)), np.zeros((init.row_num, init.row_num + 1))
 
+    if plot_ongoing_voltage_map:
+        plt.ion()
+        fig, ax = plt.subplots()
+
+        ### plot V on each island
+        im = ax.imshow(n.reshape(init.row_num, init.row_num), cmap='viridis', origin='lower')
+        im.set_clim(vmin=0, vmax=4)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label("Voltage (V)")
+
+        ### add population on each vertex
+        x, y = np.arange(init.row_num), np.arange(init.row_num)
+        X, Y = np.meshgrid(x, y)
+
+        scatter = ax.scatter(X.ravel(), Y.ravel(), c=n.reshape(-1), cmap='plasma',
+                             vmin=0, vmax=10, s=20, edgecolors='none')
+
+        plt.colorbar(scatter, ax=ax, label="Population")
+
     for cycle in range(cycles):
         cycle_voltage = float(V_cycle[cycle])
         k = 0
+        q = 0
         zero_curr_steady_state_counter = 0
         not_decreasing = 0
 
@@ -221,10 +246,17 @@ def Get_Steady_State(
         while not_in_steady_state:
             # update number of reactions and voltage from last loop
             k += 1
+            q += 1
 
             VxCix = F.get_VxCix(cycle_voltage, init.Vright, init.array_size, init.near_left, init.near_right, init.Cix)
 
             V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)  # find V_i for ith island
+            if not (q % 1000) and plot_ongoing_voltage_map:
+                print(n)
+                im.set_data(V.reshape(init.row_num, init.row_num))
+                ax.set_title(f"Vleft-Vright: {cycle_voltage}")
+                scatter.set_array(n.reshape(-1))
+                plt.pause(0.001)
 
             if k == 1:
                 print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
@@ -257,9 +289,7 @@ def Get_Steady_State(
                 table_prob=table_prob,
                 T_table=table_T,
                 flip=flip,
-                periodic_y=periodic_y,
-                Cix=init.Cix
-            )
+                periodic_y=periodic_y)
 
             # transition occurred, limit for R=sum(Gamma) is the typical ground drain current
             R = np.sum(Gamma)
