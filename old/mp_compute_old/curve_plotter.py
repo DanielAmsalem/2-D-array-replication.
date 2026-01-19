@@ -3,7 +3,7 @@ import warnings
 from pathlib import Path
 import matplotlib
 
-matplotlib.use("Agg") # for clustrer, TkAgg for Pc
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 import numpy as np

@@ -8,7 +8,7 @@ import Functions as F
 from define_objects import ExperimentInitialState, SteadyStateResult
 import matplotlib
 
-matplotlib.use("Agg") # for clustrer, TkAgg for Pc
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
@@ -254,7 +254,7 @@ def Get_Steady_State(
                 plt.pause(0.001)
 
             if k == 1:
-                print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", flush=True)
+                print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
 
             # define overall    rate vector, and a useful index
             reaction_index = []

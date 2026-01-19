@@ -260,8 +260,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
             )
             rr += 1
 
-            if not rr % 100:
-                print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%", flush=True)
+            print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%", flush=True)
 
     mp.dps = 15
     return np.array(rows, dtype=np.float32).reshape(-1, 4)

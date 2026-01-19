@@ -1,10 +1,11 @@
 import os
+
 ratio = 2
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = int(total_cpus/ratio)
+num_workers = int(total_cpus / ratio)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
 from concurrent.futures import ProcessPoolExecutor
@@ -32,7 +33,7 @@ import time
 
 def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
-    flip = True
+    flip = False
     print(f"flip = {flip}", flush=True)
     first_run = False
     rep_json = True
@@ -40,14 +41,13 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     plot_ongoing_voltage_map = False
 
     # FIXED PARAMETERS
-    loop_count = max(num_workers,100)
-    print(f"loop max: {loop_count}", flush=True)
+    loop_count = 100
     if loop_count != 1:
         plot_ongoing_voltage_map = False
     T0_unitless = 0.001
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 20  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = [1,3,6,9,11,15,19]
+    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = [1, 2, 12, 13, 14]
     print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
     null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
@@ -64,7 +64,6 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         # recreate old init state
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
-        init = F.swap_in_init("flip", flip, init)
         print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
     else:
@@ -210,9 +209,9 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         ### run repetition for new dT
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             t0 = time.time()
-            T = T_list_to_compute
+            T = np.linspace(init.T0, init.T0 + init.row_num * T_std, init.row_num)
             if flip:
-                T = np.flip(T_list_to_compute)
+                T = np.flip(T)
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -222,7 +221,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 table_prob=table_prob,
                 table_T=table_T,
                 flip=flip,
-                T=T,
+                T=T_list_to_compute,
                 expected_error=expected_err * np.sqrt(max(T) / init.T0),
                 pos_energy_bound=float(pos[repetition - 1]),
                 neg_energy_bound=float(neg[repetition - 1]),
@@ -254,8 +253,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         curve_plotter.report_param(init=init,
                                    filename=run_name,
                                    repetition=repetition,
-                                   T=T,
-                                   expected_error=expected_err * np.sqrt(max(T) / init.T0),
+                                   T=T_list_to_compute,
+                                   expected_error=expected_err,
                                    loop_count=init.loop_count,
                                    T_std=0,
                                    t0=t0,
