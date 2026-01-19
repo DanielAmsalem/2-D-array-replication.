@@ -16,18 +16,11 @@ from matplotlib.colors import LogNorm
 def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table, flip):
     tol = 1e-6
 
-    if flip:
-        matches = np.where(np.abs(np.flip(T_table) - T_at_junction) < tol)[0]
-        if len(matches) != 1:
-            raise ValueError("No single matching T found within tolerance\n T_table is " + str(np.array(T_table)) +
-                             "\n T_at_junction is " + str(np.array(T_at_junction)))
-        temp_idx = matches[0]
-    else:
-        matches = np.where(np.abs(np.array(T_table) - T_at_junction) < tol)[0]
-        if len(matches) != 1:
-            raise ValueError("No single matching T found within tolerance\n T_table is " + str(np.array(T_table)) +
-                             "\n T_at_junction is " + str(np.array(T_at_junction)))
-        temp_idx = matches[0]
+    matches = np.where(np.abs(np.array(T_table) - T_at_junction) < tol)[0]
+    if len(matches) != 1:
+        raise ValueError("No single matching T found within tolerance\n T_table is " + str(np.array(T_table)) +
+                         "\n T_at_junction is " + str(np.array(T_at_junction)) + " flip =" + str(flip))
+    temp_idx = matches[0]
 
     sorted_vals = table_val[temp_idx::len(T_table)]
     probs = table_prob[temp_idx::len(T_table)]
@@ -59,7 +52,7 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
     if Rt < 0:
         raise ValueError
 
-    val = (-dE - Ec) * e ** 2 / Rt
+    val = (-dE - Ec) / (Rt * e * e)
 
     if T_at_junction == 0:
         if dE < -Ec:
@@ -77,7 +70,7 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
         approx = approximate_gamma_integral(
             dE, T_at_junction, table_val, table_prob, T_table, flip
         )
-        val = approx * e ** 2 / Rt
+        val = approx / (Rt * e * e)
         return val
     else:
         raise ValueError
@@ -254,16 +247,16 @@ def Get_Steady_State(
 
             V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)  # find V_i for ith island
             if 0 < q % 1000 < 10 and plot_ongoing_voltage_map:
-                print(n.reshape(init.row_num, init.row_num))
+                # print(n.reshape(init.row_num, init.row_num))
                 im.set_data(V.reshape(init.row_num, init.row_num))
-                ax.set_title(f"Vleft-Vright: {cycle_voltage}")
+                ax.set_title(r" $\Delta$" + f" V : {round(cycle_voltage, 3)}")
                 scatter.set_array(n.reshape(-1))
                 plt.pause(0.001)
 
             if k == 1:
                 print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", file=sys.stdout)
 
-            # define overall rate vector, and a useful index
+            # define overall    rate vector, and a useful index
             reaction_index = []
             Gamma = []
 

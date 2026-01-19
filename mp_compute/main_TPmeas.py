@@ -1,3 +1,13 @@
+import os
+
+ratio = 2
+os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+num_workers = int(total_cpus / ratio)
+print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
+
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -24,34 +34,37 @@ import time
 def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
     flip = False
-    first_run = True
+    print(f"flip = {flip}", flush=True)
+    first_run = False
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
-    plot_ongoing_voltage_map = True
+    plot_ongoing_voltage_map = False
 
     # FIXED PARAMETERS
-    loop_count = 1
+    loop_count = 100
     if loop_count != 1:
         plot_ongoing_voltage_map = False
     T0_unitless = 0.001
-    repetition = 2  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 2  # int : n -> the last repetition has dT = n*Tstd
+    repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
+    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = [1, 2, 12, 13, 14]
+    print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
     null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
     pos_energy_boundT0 = -0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
     neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
     # choose a specific run
-    run_to_get_init_from = "20251204_05h16m16s"
+    run_to_get_init_from = "20251207_17h43m26s"
     results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
         json_txt = infile.read_text()
         raw_fields = orjson.loads(json_txt)
         # recreate old init state
-        init_str = ExperimentInitialState(**raw_fields, plot_ongoing_voltage_map=plot_ongoing_voltage_map)
+        init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
-        print(f"success, starting run for {run_to_get_init_from}")
+        print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
     else:
         # create new initial state
@@ -64,18 +77,18 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         raw_fields = asdict(init)
         serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
         outfile.write_text(serialized_init_data)
-        print("STORED INIT IN JSON")
+        print("STORED INIT IN JSON", flush=True)
 
-    # Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
-    #                                               near_left=init.near_left,
-    #                                               near_right=init.near_right,
-    #                                               periodic_y=periodic_y,)
-    # print("created resistance maps, now saving plots...")
-    # curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
-    #                                    results_path=import_export.results_dir_path, show=False)
-    # print("plotting capacitance map...")
-    # curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
-    #                                    results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
+    Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
+                                                  near_left=init.near_left,
+                                                  near_right=init.near_right,
+                                                  periodic_y=periodic_y, )
+    print("created resistance maps, now saving plots...", flush=True)
+    curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
+                                       results_path=import_export.results_dir_path, show=False)
+    print("plotting capacitance map...", flush=True)
+    curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
+                                       results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
 
     if not validate_table_triplets_file(null_path_name, init, [init.T0]):
         table_triplets = prepare_table_triplets(init, [init.T0],
@@ -100,11 +113,13 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
-    expected_err = 0.01 * (init.row_num - 1) * np.sqrt(max(T)/init.T0)
+    expected_err = 0.01 * (init.row_num - 1) * np.sqrt(max(T) / init.T0)
 
     if first_run:
         t0 = time.time()
-        with ProcessPoolExecutor() as executor:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            actual_workers = executor._max_workers
+            print(f"running with {actual_workers} workers", flush=True)
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -155,7 +170,6 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
 
     else:
         print("skipped first run")
-        index_2 = 90
 
     ### get bounds for dE for each temp from csv table
     with open(import_export.csv_table_path) as f:
@@ -169,8 +183,11 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     while current_at_V0:
         repetition += 1
         if repetition > last_repetition_to_do:
-            print("Tstd>T0, finished all runs for Tstd<=T0")
+            print("Tstd>T0, finished all runs for Tstd<=T0", flush=True)
             current_at_V0 = False
+            continue
+        if not int(repetition) in repetition_list:
+            print(f"repetition {repetition} was skipped")
             continue
 
         # new temperature profile
@@ -190,9 +207,11 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             table_T = np.unique(table_triplets["temp"]).tolist()
 
         ### run repetition for new dT
-        with ProcessPoolExecutor() as executor:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
             t0 = time.time()
             T = np.linspace(init.T0, init.T0 + init.row_num * T_std, init.row_num)
+            if flip:
+                T = np.flip(T)
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -204,8 +223,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 flip=flip,
                 T=T_list_to_compute,
                 expected_error=expected_err * np.sqrt(max(T) / init.T0),
-                pos_energy_bound=float(pos[repetition - 3]),
-                neg_energy_bound=float(neg[repetition - 3]),
+                pos_energy_bound=float(pos[repetition - 1]),
+                neg_energy_bound=float(neg[repetition - 1]),
                 repetition=repetition,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,

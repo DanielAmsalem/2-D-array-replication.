@@ -29,21 +29,20 @@ filename = os.path.basename(__file__)
 def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
     T0_unitless = 0.001
-    T_std_list = [i for i in range(1, 3)]
     flip = False
     row_num = 10
 
     ### get runname -> check if Tstd is in list
-    iteration = int(re.search(r"Tstd(\d+)", filename).group(1))  # filename should be "compute_table_Tstd%J_20" 1=<%J<=20
+    iteration = float(re.search(r"Tstd(\d+(?:\.\d+)?)", filename).group(1))  # filename should be "compute_table_Tstd%J.H_20" 1=<%J<=20, 1<=H<=9
     T_std = iteration / 20
-    if iteration not in T_std_list:
-        raise ValueError()
-
-    ### get pos & neg for this Tstd
-    with open("table.csv") as f:
-        rows = list(csv.reader(f))
-        neg = float(rows[iteration - 1][1])
-        pos = float(rows[iteration - 1][2])
+    # table frac 7 will have
+    # 7.2
+    # 7.4
+    # 7.6
+    # 7.8
+    # all with the same bounds appropriate for 8
+    neg = -0.17
+    pos = 0.07
 
     ### prep tables
     init = prepare_initial_state(loop_count=loop_count,
@@ -60,12 +59,12 @@ def main(export: IMPORT_EXPORT) -> None:
 
 
 if __name__ == "__main__":
-    iter_name = re.search(r"Tstd(\d+)", filename).group(1)  # filename should be "compute_table_Tstd%J_20" 3=<%J<=19
+    iter_name = re.search(r"Tstd(\d+(?:\.\d+)?)", filename).group(1) # filename should be "compute_table_Tstd%J.H_20" 1=<%J<=20, 1<=H<=9
     main(
         IMPORT_EXPORT(
             plot_results=True,
             prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tstd{iter_name}_20.npz"],
-            #these are not relevant here
+            # these are not relevant here
             csv_table_path=EXPORT_PATH / "tmp",
             export_path=EXPORT_PATH / "tmp",
             results_dir_path=EXPORT_PATH / "tmp",

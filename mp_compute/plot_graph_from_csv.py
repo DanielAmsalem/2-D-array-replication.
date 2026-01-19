@@ -10,7 +10,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import re
 
-run_name = "20251204_05h16m16s"
+run_name = "20251226_11h58m18s"
 directory = Path(__file__).parent.parent / f"results_{run_name}"
 
 # get init from json

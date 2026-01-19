@@ -158,7 +158,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
     sig = 0.5 * C
     C_to_Cix_ratio = 1
 
-    row_num = 10
+    row_num = 7
     array_size = row_num ** 2
     islands = list(range(array_size))
     near_right = islands[(row_num - 1):: row_num]
@@ -221,7 +221,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         default_dt=default_dt,
         timeStep=timeStep,
         Tau=Tau,
-        matrixQnPart=Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0]),
+        matrixQnPart=-Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0]), # Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0])
         sig=sig,
         stdR=stdR,
         mean_allCs=mean_allCs,
@@ -229,7 +229,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         std_allCs=std_allCs,
         std_sideCs=std_sideCs,
         flip=flip,
-        periodic_y=periodic_y
+        periodic_y=periodic_y,
     )
 
 
@@ -260,7 +260,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
             )
             rr += 1
 
-            print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%")
+            print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%", flush=True)
 
     mp.dps = 15
     return np.array(rows, dtype=np.float32).reshape(-1, 4)

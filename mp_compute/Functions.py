@@ -66,7 +66,7 @@ def return_neighbours(n, I, J):
 
 
 def getVoltage(n, Qg, C_inverse, VxCix, e):
-    return np.dot(C_inverse, e * n - VxCix - Qg)
+    return np.dot(C_inverse, e * n + VxCix + Qg)
 
 
 def isNonNegative(x):
@@ -131,7 +131,7 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, ro
         elif l - m == -row_num * (row_num - 1) and periodic_y:
             I_down += gamma_list[i]
 
-    return I_right, I_down
+    return I_right/(row_num+1), I_down/(row_num+1)
 
 
 def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, n_list, periodic_y):
@@ -194,9 +194,7 @@ def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, 
 
 def developQ(Q, dt, n, VxCix, init: ExperimentInitialState):
     # gate charge relaxation, for dQ/dt=inv_tau*Q + b, b=-inv_tau*Qn
-    b = -init.Tau_inv.dot(return_Qn_for_n(n, VxCix, init))
-
-    # equiv to b = -init.C_inv.dot(init.e*n + VxCix) / init.CondRg if charge actually had Qg positive
+    b = -init.C_inv.dot(n + VxCix) / init.CondRg
 
     # exponent for time step
     exponent = np.exp(init.InvTauEigenValues * dt)
@@ -221,7 +219,7 @@ def return_Qn_for_n(n, VxCix, init: ExperimentInitialState):
     """
     # sum = Tau.dot(n_prime / Cg) / Rg
     # #return sum - n_prime
-    n_prime = init.e * n - VxCix
+    n_prime = init.e * n + VxCix
     return init.matrixQnPart.dot(n_prime)
 
 
@@ -357,7 +355,6 @@ def fix_types(init: ExperimentInitialState, loop_count: int):
         std_sideCs=float(init.std_sideCs),
         flip=bool(init.flip),
         periodic_y=bool(init.periodic_y),
-        plot_ongoing_voltage_map=bool(init.plot_ongoing_voltage_map),
     )
 
 

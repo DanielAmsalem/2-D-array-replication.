@@ -61,7 +61,6 @@ class ExperimentInitialState:
 
     flip: bool
     periodic_y: bool
-    plot_ongoing_voltage_map: bool
 
 
 @dataclass

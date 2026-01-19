@@ -45,5 +45,5 @@ def check_table_triplets_file(
 
 if __name__ == "__main__":
     check_table_triplets_file(
-        path_to_check / "table_triplets_Tstd6_20.npz",
+        path_to_check / "table_triplets_T0_e-3.npz",
     )

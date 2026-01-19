@@ -92,7 +92,7 @@ def report_param(init: ExperimentInitialState,
         f.write("loop variables : " + str(loop_count) + "\n")
         f.write("---------------------------------------------" + "\n")
         f.write("these are the raw variances and means\n")
-        f.write("<R> : " + str(init.R_avg) + ", std(Rt_ij) : " + str(np.std(init.R_t_ij)) + "\n")
+        f.write("<R> : " + str(np.mean(init.R_t_ij)) + ", std(Rt_ij) : " + str(np.std(init.R_t_ij)) + "\n")
         f.write("<Rt_i> : " + str(np.mean(init.R_t_i)) + ", std(Rt_i) : " + str(np.std(np.array(init.R_t_i))) + "\n")
         f.write("<C> : " + str(init.mean_allCs) + ", std(C) : " + str(init.std_allCs) + "\n")
         f.write("<Cix> : " + str(init.mean_sideCs) + ", std(Cix) : " + str(init.std_sideCs) + "\n")
@@ -147,7 +147,8 @@ def plot_heat_map(results,
     plt.xticks(list(range(n + 2)), ["Vleft"] + [str(i) for i in range(n)] + ["Vright"])
     plt.yticks(range(n + 1))
     pic_name = filename + f"_rep{repetition}.png"
-    plt.title(f"at V = {heatmap_at_V}\n Ix scale = {np.abs(Jx).max()} ; Iy scale = {np.abs(Jy).max()}")
+    plt.title(f"at V = {heatmap_at_V}\n Ix scale = {round(np.abs(Jx).max(),1)} ;"
+              f" Iy scale = {round(np.abs(Jy).max(),1)}")
     plt.savefig(fname=results_path / pic_name, dpi=2100, bbox_inches="tight")
     # plt.show()
     return 0
