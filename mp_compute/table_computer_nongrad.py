@@ -14,10 +14,8 @@ import os
 import Functions as F
 
 '''
-THIS FILE SHOULD BE NAMED "...Tstd(\d+)..." where (\d+) is an int
-A TABLE WILL BE PRODUCED FOR T LIST [T0,T0+Tstd*int,...T0+std*(row_num-1)]
-SHOULD HAVE IN ITS DIRECTORY A "table.csv" WHICH LOOKS LIKE
-# | POS | NEG
+A TABLE WILL BE PRODUCED FOR
+T = T0 + 3*0.55*T0 = 0.00265
 where for each position the appropriate bounds for dE calc are given
 '''
 
@@ -27,23 +25,15 @@ filename = os.path.basename(__file__)
 
 
 def main(export: IMPORT_EXPORT) -> None:
+    const = 0.00265
     loop_count = 100
     T0_unitless = 0.001
-    T_std_list = [i for i in range(1, 3)]
     flip = False
     row_num = 10
 
-    ### get runname -> check if Tstd is in list
-    iteration = int(re.search(r"Tstd(\d+)", filename).group(1))  # filename should be "compute_table_Tstd%J_20" 1=<%J<=20
-    T_std = iteration / 20
-    if iteration not in T_std_list:
-        raise ValueError()
-
     ### get pos & neg for this Tstd
-    with open("table.csv") as f:
-        rows = list(csv.reader(f))
-        neg = float(rows[iteration - 1][1])
-        pos = float(rows[iteration - 1][2])
+    neg = -0.14
+    pos = 0.04
 
     ### prep tables
     init = prepare_initial_state(loop_count=loop_count,
@@ -51,7 +41,7 @@ def main(export: IMPORT_EXPORT) -> None:
                                  flip=flip,
                                  periodic_y=True)
     init = F.swap_in_init("row_num", row_num, init)
-    T_list_to_compute = [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]
+    T_list_to_compute = [const]
     table_triplets = prepare_table_triplets(init,
                                             T_list_to_compute,
                                             pos_energy_bound=pos,
@@ -64,7 +54,7 @@ if __name__ == "__main__":
     main(
         IMPORT_EXPORT(
             plot_results=True,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tstd{iter_name}_20.npz"],
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_T0_265e-5"],
             # these are not relevant here
             csv_table_path=EXPORT_PATH / "tmp",
             export_path=EXPORT_PATH / "tmp",

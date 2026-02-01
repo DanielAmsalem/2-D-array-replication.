@@ -37,13 +37,13 @@ def check_table_triplets_file(
     print(T_in_file)
     print(f"length is {len(table_val)}")
     k = 0
-    for val in table_val:
-        k += 1
-        if not k % 100:
-            print(val, table_prob[k])
+    # for val in table_val:
+    #     k += 1
+    #     if not k % 100:
+    #         print(val, table_prob[k])
 
 
 if __name__ == "__main__":
     check_table_triplets_file(
-        path_to_check / "table_triplets_Tstd6_20.npz",
+        path_to_check / "table_triplets_Tstd7_20.npz",
     )

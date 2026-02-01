@@ -150,7 +150,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
     distribute_R = True
     distribute_C = True
 
-    C: float = 1
+    C: float = 1  # ALWAYS CHOOSE C = kb/e^2 SUCH THAT T0 EQUALS T0_UNITLESS
     R: float = 10
     mean_Cg = 10 * C
     mean_Rg = 100 * R
@@ -198,7 +198,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         max_count=50000,
         distribute_R=distribute_R,
         distribute_C=distribute_C,
-        T0=unitless_T0 * e * e / (C * kB),
+        T0=unitless_T0 * e * e / (C * kB),  # ALWAYS CHOOSE UNITS SUCH THAT T0 EQUALS T0_UNITLESS
         Rg=np.array([mean_Rg] * array_size),
         Cg=np.array([mean_Cg] * array_size),
         Ec=1 / (2 * mean_Cg),
@@ -305,7 +305,7 @@ def validate_table_triplets_file(
             print("Ec = " + str(init_state.Ec))
             ValueError("mu doesn't match Ec")
     else:
-        print("Existing table doesn't match T list")
+        print(f"Existing table doesn't match T list for {triplets_file}")
         print(T_in_file)
         print(T)
         raise ValueError

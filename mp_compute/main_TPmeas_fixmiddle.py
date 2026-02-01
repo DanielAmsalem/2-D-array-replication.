@@ -1,17 +1,11 @@
 import os
-
 ratio = 2
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = int(total_cpus / ratio)
+num_workers = int(total_cpus/ratio)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
-
-'''
-THIS main_TPmeas is for non int fractions of T0/20 
-in this case dT = 7.x*T0/20
-'''
 
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
@@ -35,28 +29,33 @@ import csv
 import math
 import time
 
-
+'''
+THIS main_TPmeas where the mid point is fixed T = T0 + 3*0.55*T0 = 0.00265
+maximum total gradient across grid allowed is therefore |ΔT| =3.3T0
+'''
 def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
     flip = False
     print(f"flip = {flip}", flush=True)
-    first_run = False
+    first_run = True
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
 
     # FIXED PARAMETERS
-    loop_count = max(num_workers, 5)
+    loop_count = max(num_workers,100)
     print(f"loop max: {loop_count}", flush=True)
     if loop_count != 1:
         plot_ongoing_voltage_map = False
     T0_unitless = 0.001
+    constT = 2.65 # the average temperature is T0_untiless*constT
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
-    fraction_repetition_list = [2, 4, 7, 10, 13, 16, 18]  #
-    print(f"repeating for dT=7.x*Tstd, x = {fraction_repetition_list}", flush=True)
+    last_repetition_to_do = 20  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = [1,3,6,9,11,15,19]
+    print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
-    null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
+    null_path_name = import_export.export_path / f"table_triplets_T0_265e-5.npz"
+    print(f"null_path_name is {null_path_name}", flush=True)
     pos_energy_boundT0 = -0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
     neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
@@ -119,7 +118,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     V_capture = float(Vleft[V_capture_idx])
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
-    T = [init.T0] * init.row_num
+    T = [init.T0 * constT] * init.row_num
     expected_err = 0.01 * (init.row_num - 1) * np.sqrt(max(T) / init.T0)
 
     if first_run:
@@ -178,12 +177,6 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     else:
         print("skipped first run")
 
-    ### get bounds for dE for each temp from csv table
-    with open(import_export.csv_table_path) as f:
-        rows = list(csv.reader(f))
-        neg = [row[1] for row in rows]
-        pos = [row[2] for row in rows]
-
     ### run thermopower until I(V)<0
     current_at_V0 = True
 
@@ -193,13 +186,16 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             print("Tstd>T0, finished all runs for Tstd<=T0", flush=True)
             current_at_V0 = False
             continue
-        if not int(repetition) in fraction_repetition_list:
+        if not int(repetition) in repetition_list:
             print(f"repetition {repetition} was skipped")
             continue
 
-        # new temperature profile
-        T_std = (7 + repetition / 100) * init.T0 / 20
-        T_list_to_compute = [init.T0 + i * T_std for i in range(init.row_num)]
+        # new temperature profile. max T_std is 0.55*T0 for row_num=7
+        T_mid = constT * init.T0
+        max_std = 0.55 * init.T0
+        T_std = repetition * max_std / 20
+        first_site_T = T_mid - ((init.row_num - init.row_num % 2)/2) * T_std
+        T_list_to_compute = [first_site_T + i * T_std for i in range(init.row_num)]
 
         ### check if there is valid table for new dT
         if not validate_table_triplets_file(import_export.prepare_table_triplets_file_list[repetition],
@@ -230,8 +226,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 flip=flip,
                 T=T,
                 expected_error=expected_err * np.sqrt(max(T) / init.T0),
-                pos_energy_bound=float(pos[repetition - 1]),
-                neg_energy_bound=float(neg[repetition - 1]),
+                pos_energy_bound=float(0.07),
+                neg_energy_bound=float(-0.17),
                 repetition=repetition,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,
@@ -279,26 +275,12 @@ if __name__ == "__main__":
     RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
     print(f"Created results directory at {RESULTS_DIR_PATH}")
 
-    prepare_table_triplets_file_list_00s = [EXPORT_PATH / f"table_triplets_Tstd7.0{n}_20.npz" for n in range(10)]
-    prepare_table_triplets_file_list_10s = [EXPORT_PATH / f"table_triplets_Tstd7.1{n}_20.npz" for n in range(1, 10)]
-    prepare_table_triplets_file_list = (prepare_table_triplets_file_list_00s +
-                                        [EXPORT_PATH / f"table_triplets_Tstd7.1_20.npz"] +
-                                        prepare_table_triplets_file_list_10s)
-
-    # prepare_table_triplets_file_list = [EXPORT_PATH / "table_triplets_Tstd7.02_20.npz",
-    #                                     EXPORT_PATH / "table_triplets_Tstd7.04_20.npz",
-    #                                     EXPORT_PATH / "table_triplets_Tstd7.07_20.npz",
-    #                                     EXPORT_PATH / "table_triplets_Tstd7.1_20.npz",
-    #                                     EXPORT_PATH / "table_triplets_Tstd7.13_20.npz",
-    #                                     EXPORT_PATH / "table_triplets_Tstd7.16_20.npz",
-    #                                     EXPORT_PATH / "table_triplets_Tstd7.18_20.npz", ]
-
     main(
         IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=prepare_table_triplets_file_list,
-            csv_table_path=MP_COMPUTE_PATH / f"table.csv",
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tmid_std{n}_20.npz" for n in range(20)],
+            csv_table_path=MP_COMPUTE_PATH / f"tmp",
             results_dir_path=RESULTS_DIR_PATH
         ),
         run_name=run_name_flat

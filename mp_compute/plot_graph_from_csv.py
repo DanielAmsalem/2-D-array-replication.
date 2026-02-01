@@ -10,7 +10,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import re
 
-run_name = "20251204_05h16m16s"
+run_name = "20260131_21h07m00s"
 directory = Path(__file__).parent.parent / f"results_{run_name}"
 
 # get init from json
@@ -28,7 +28,8 @@ for csv_path in directory.glob("*.csv"):
     name = csv_path.name
     print(f"processing {name}")
     repetition = re.search(r"rep(\d+)", name).group(1)  # filename should be "...rep%J" %J is int
-    dT = int(repetition) / 20
+    max_std = 0.55
+    dT = int(repetition) * max_std / 20
     total_deltaT = dT*(init.row_num-1)
 
     with csv_path.open() as f:
@@ -65,12 +66,12 @@ for csv_path in directory.glob("*.csv"):
     pic_name = name + ".png"
 
     if init.flip:
-        plt.title(r"Even |$\Delta$T| = " + f"{round(total_deltaT, 1)}*T0 gradient, Tleft > Tright" + "\n"
-                  + f"T diff between sites : dT = {dT}*T0\n"
+        plt.title(r"Even |$\Delta$T| = " + f"{round(total_deltaT, 3)}*T0 gradient, Tleft > Tright" + "\n"
+                  + f"T diff between sites : dT = {round(dT,3)}*T0\n"
                   + f"T0 = {init.T0}\n")
     else:
-        plt.title(r"Even |$\Delta$T| = " + f"{round(total_deltaT, 1)}*T0 gradient, Tleft < Tright" + "\n"
-                  + f"T diff between sites : dT = {dT}*T0\n"
+        plt.title(r"Even |$\Delta$T| = " + f"{round(total_deltaT, 2)}*T0 gradient, Tleft < Tright" + "\n"
+                  + f"T diff between sites : dT = {round(dT,3)}*T0\n"
                   + f"T0 = {init.T0}\n")
 
     plt.savefig(fname=directory / pic_name, dpi=2100, bbox_inches="tight")
