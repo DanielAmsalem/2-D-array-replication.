@@ -22,6 +22,10 @@ maximum total gradient across grid allowed is therefore |ΔT| =3.3T0
 
 for Tmid = T0 + 3*0.4*T0 = 0.0022
 
+for Tmid = T0 + 3*0.2*T0 = 0.0016
+
+for Tmid = T0 + 3*0.7*T0 = 0.0031
+
 SHOULD HAVE IN ITS DIRECTORY A "table_mid.csv" WHICH LOOKS LIKE
 #rep | POS | NEG
 where for each position the appropriate bounds for dE calc are given
@@ -35,7 +39,7 @@ filename = os.path.basename(__file__)
 def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
     T0_unitless = 0.001
-    constT = 2.2  # the average temperature is T0_untiless*constT
+    constT = 2.2 # the average temperature is T0_untiless*constT
     T_std_list = [i for i in range(1, 20)]
     flip = False
     row_num = 7
@@ -51,8 +55,8 @@ def main(export: IMPORT_EXPORT) -> None:
     #     rows = list(csv.reader(f))
     #     neg = float(rows[iteration - 1][1])
     #     pos = float(rows[iteration - 1][2])
-    pos = 0.05
-    neg = -0.15
+    pos = 0.1
+    neg = -0.2
 
     ### prep tables
     init = prepare_initial_state(loop_count=loop_count,
@@ -78,7 +82,7 @@ if __name__ == "__main__":
     main(
         IMPORT_EXPORT(
             plot_results=True,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tmid_2_2_std{iter_name}_20.npz"],
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tmid_3_1_std{iter_name}_20.npz"],
             # these are not relevant here
             csv_table_path=EXPORT_PATH / "tmp",
             export_path=EXPORT_PATH / "tmp",

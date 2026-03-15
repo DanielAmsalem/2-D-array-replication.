@@ -238,7 +238,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
                            pos_energy_bound,
                            neg_energy_bound) -> npt.NDArray:
     rr = 0
-    mp.dps = 30
+    mp.dps = 40
     print(pos_energy_bound, neg_energy_bound, init_state.resolution)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
     vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
@@ -251,7 +251,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
 
     for val in vals_to_calc:
         for temp in T_list_to_compute:
-            probability = quad(F.integrand(temp, val, init_state.Ec), [-1, 1])
+            probability = quad(F.integrand(temp, val, init_state.Ec), [-1.513, 2.17])
             rows.append(
                 np.array(
                     [val, float(probability.real), temp, init_state.Ec],
@@ -264,7 +264,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
                 print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%", flush=True)
 
     mp.dps = 15
-    return np.array(rows, dtype=np.float32).reshape(-1, 4)
+    return np.array(rows, dtype=np.float64).reshape(-1, 4)
 
 
 def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:

@@ -32,7 +32,7 @@ import time
 
 def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
-    flip = True
+    flip = False
     print(f"flip = {flip}", flush=True)
     first_run = False
     rep_json = True
@@ -46,8 +46,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         plot_ongoing_voltage_map = False
     T0_unitless = 0.001
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 20  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = [1,3,6,9,11,15,19]
+    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = [11,12,13,14,15,16,17,18,19]
     print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
     null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
@@ -257,7 +257,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    T=T,
                                    expected_error=expected_err * np.sqrt(max(T) / init.T0),
                                    loop_count=init.loop_count,
-                                   T_std=0,
+                                   T_std=T_std,
                                    t0=t0,
                                    results_path=import_export.results_dir_path,
                                    tot_error_count=err)

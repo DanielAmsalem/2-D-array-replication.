@@ -10,7 +10,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import re
 
-run_name = "20260131_21h07m00s"
+run_name = "20260301_13h55m03s"
 directory = Path(__file__).parent.parent / f"results_{run_name}"
 
 # get init from json
@@ -28,8 +28,7 @@ for csv_path in directory.glob("*.csv"):
     name = csv_path.name
     print(f"processing {name}")
     repetition = re.search(r"rep(\d+)", name).group(1)  # filename should be "...rep%J" %J is int
-    max_std = 0.55
-    dT = int(repetition) * max_std / 20
+    dT = int(repetition) * 0.4 / 20
     total_deltaT = dT*(init.row_num-1)
 
     with csv_path.open() as f:
