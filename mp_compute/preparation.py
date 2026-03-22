@@ -255,7 +255,7 @@ def prepare_table_triplets(init_state: ExperimentInitialState,
             rows.append(
                 np.array(
                     [val, float(probability.real), temp, init_state.Ec],
-                    dtype=np.float32,
+                    dtype=np.float64,
                 )
             )
             rr += 1

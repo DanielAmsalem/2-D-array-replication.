@@ -111,8 +111,9 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
 
 script_name = os.path.basename(sys.argv[0])
 # Searches for the first contiguous block of digits in the filename
-match = re.search(r'\d+', script_name)
-multiplier = int(match.group()) if match else 0
+match = re.search(r'grad(\d+)', script_name)
+multiplier = int(match.group(1)) if match else 0
+print(f"running for grad {multiplier}/20")
 
 #temperature gradient
 T0 = 0.001
@@ -126,7 +127,7 @@ num_points = 101
 V_vals = np.linspace(0, 4, num_points)
 currents = []
 
-print(f"Starting voltage sweep with T_l={T_left/T0}*T0 ; Tdot={T_dot/T0}*T; T_r={T_right/T0}*T")
+print(f"Starting voltage sweep with T_l={round(T_left/T0,2)}*T0 ; Tdot={round(T_dot/T0,2)}*T0; T_r={round(T_right/T0,2)}*T0")
 for V in V_vals:
     print(f"Calculating for Vl = {V:.2f} V...")
     I = calculate_current(V, N=N_states, T_l=T_left, T_r=T_right, Tdot=T_dot)
@@ -135,7 +136,7 @@ for V in V_vals:
 # --- Plot the Results ---
 plt.figure(figsize=(8, 6))
 plt.plot(V_vals, currents, linestyle='-', color='r')
-plt.title(f"I-V Characteristic with $\Delta T$ ($T_l={T_left/T0}*T$, $T_r={T_right/T0}*T$)", fontsize=14)
+plt.title(f"I-V Characteristic with $\Delta T$ ($T_l={T_left/T0,2}*T0$, $T_r={T_right/T0,2}*T0$)", fontsize=14)
 plt.xlabel("Left Voltage $V_l$ (V)", fontsize=12)
 plt.ylabel("Steady-State Current I L->R", fontsize=12)
 plt.grid(True)
