@@ -2,7 +2,7 @@ import numpy as np
 from mpmath import quad, mp, exp, sqrt
 import matplotlib
 
-matplotlib.use("Agg")
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from scipy.linalg import eig
 import os
@@ -117,12 +117,12 @@ multiplier = int(match.group()) if match else 0
 #temperature gradient
 T0 = 0.001
 T_left = T0
-T_dot = T0 + multiplier*T0/20
-T_right = T0 + 2*multiplier*T0/20
+T_dot = 0.5
+T_right = 1
 
 # Define voltage sweep range
 N_states = 120
-num_points = 101
+num_points = 21
 V_vals = np.linspace(0, 4, num_points)
 currents = []
 

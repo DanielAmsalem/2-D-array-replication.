@@ -92,11 +92,11 @@ for n in np.arange(N+1):
     # n -> n+1 (Entering the dot)
     print(n)
     G_L_plus[n] = Gamma(W(n, Qn(V,n), V, 1, "left"), T, Rl)
-    G_R_plus[n] = Gamma(W(n, Qn(V,n), V, 1, "right"), T, Rr)
+    G_R_plus[n] = Gamma(W(n, Qn(V,n), V, 1, "right"), T*10, Rr)
 
     # n -> n-1 (Leaving the dot)
-    G_L_minus[n] = Gamma(W(n, Qn(V,n), V, -1, "left"), T, Rl)
-    G_R_minus[n] = Gamma(W(n, Qn(V,n), V, -1, "right"), T, Rr)
+    G_L_minus[n] = Gamma(W(n, Qn(V,n), V, -1, "left"), T*5, Rl)
+    G_R_minus[n] = Gamma(W(n, Qn(V,n), V, -1, "right"), T*5, Rr)
 
 # Total rates for the master equation
 G_plus = G_L_plus + G_R_plus
