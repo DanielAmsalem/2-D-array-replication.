@@ -1,3 +1,12 @@
+import os
+ratio = 2
+os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+num_workers = int(total_cpus/ratio)
+print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
+
 import csv
 from pathlib import Path
 import datetime
@@ -10,7 +19,6 @@ from preparation import (
 )
 
 import re
-import os
 import Functions as F
 
 '''
@@ -29,9 +37,9 @@ filename = os.path.basename(__file__)
 def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
     T0_unitless = 0.001
-    T_std_list = [i for i in range(1, 3)]
+    T_std_list = [i for i in range(1, 20)]
     flip = False
-    row_num = 10
+    row_num = 7
 
     ### get runname -> check if Tstd is in list
     iteration = int(re.search(r"Tstd(\d+)", filename).group(1))  # filename should be "compute_table_Tstd%J_20" 1=<%J<=20
@@ -55,7 +63,8 @@ def main(export: IMPORT_EXPORT) -> None:
     table_triplets = prepare_table_triplets(init,
                                             T_list_to_compute,
                                             pos_energy_bound=pos,
-                                            neg_energy_bound=neg)
+                                            neg_energy_bound=neg,
+                                            max_workers=num_workers)
     output_table_triplets(table_triplets, export.prepare_table_triplets_file_list[0])
 
 
@@ -64,8 +73,8 @@ if __name__ == "__main__":
     main(
         IMPORT_EXPORT(
             plot_results=True,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tstd{iter_name}_20.npz"],
-            # these are not relevant here
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tstd{iter_name}_20.npz"],
+            #these are not relevant here
             csv_table_path=EXPORT_PATH / "tmp",
             export_path=EXPORT_PATH / "tmp",
             results_dir_path=EXPORT_PATH / "tmp",

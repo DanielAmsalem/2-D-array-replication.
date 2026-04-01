@@ -34,7 +34,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
     flip = False
     print(f"flip = {flip}", flush=True)
-    first_run = False
+    first_run = True
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
@@ -47,12 +47,12 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     T0_unitless = 0.001
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
     last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = [11,12,13,14,15,16,17,18,19]
+    repetition_list = list(range(11,19))
     print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
-    null_path_name = import_export.export_path / f"table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
-    pos_energy_boundT0 = -0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
-    neg_energy_boundT0 = -0.09  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+    null_path_name = import_export.export_path / f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
+    pos_energy_boundT0 = 0.05  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
+    neg_energy_boundT0 = -0.22  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
     # choose a specific run
     run_to_get_init_from = "20251207_17h43m26s"
@@ -91,15 +91,16 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
                                        results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
 
-    if not validate_table_triplets_file(null_path_name, init, [init.T0]):
+    if not validate_table_triplets_file(null_path_name, init, [init.T0]) and first_run:
         table_triplets = prepare_table_triplets(init, [init.T0],
                                                 pos_energy_bound=pos_energy_boundT0,
-                                                neg_energy_bound=neg_energy_boundT0)
+                                                neg_energy_bound=neg_energy_boundT0,
+                                                max_workers=num_workers)
         output_table_triplets(table_triplets, null_path_name)
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
         table_T = [init.T0]
-    else:
+    elif first_run:
         table_triplets = np.load(null_path_name.as_posix())
         table_val = table_triplets["val"]
         table_prob = table_triplets["prob"]
@@ -277,7 +278,7 @@ if __name__ == "__main__":
         IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"table_triplets_Tstd{n}_20.npz" for n in range(20)],
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20.npz" for n in range(20)],
             csv_table_path=MP_COMPUTE_PATH / f"table.csv",
             results_dir_path=RESULTS_DIR_PATH
         ),

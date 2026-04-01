@@ -8,6 +8,8 @@ from mpmath import quad, mp
 import Functions as F
 from define_objects import ExperimentInitialState
 
+import concurrent.futures
+
 
 def compute_distributed_R_matrices(
         stdR: float,
@@ -233,36 +235,70 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
     )
 
 
-def prepare_table_triplets(init_state: ExperimentInitialState,
-                           expected_list,
-                           pos_energy_bound,
-                           neg_energy_bound) -> npt.NDArray:
-    rr = 0
+def _calc_segments(args):
+    """
+    Top-level worker function to calculate segmented probabilities.
+    """
+    val, temp, Ec = args
+
+    # Set precision locally for this process
+    import mpmath as mp
     mp.dps = 40
+
+    func = F.integrand(temp, val, Ec)
+    absval = abs(val)
+    limits = [-6, -0.1 - absval, 0, absval + 0.2, 5.17]
+
+    probability = 0
+
+    for i in range(len(limits) - 1):
+        a = limits[i]
+        b = limits[i + 1]
+        w = b - a
+        if w == 0:
+            continue
+
+        # fixed [0, 1] limits for memory leak mapping
+        segment_prob = quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1])
+        probability += segment_prob
+
+    # Fixed indentation: Returns a single row per (val, temp) pair
+    # after fully accumulating the probability across all segments.
+    return [val, float(probability.real), temp, Ec]
+
+
+def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers):
+    import mpmath as mp
+    rr = 0
     print(pos_energy_bound, neg_energy_bound, init_state.resolution)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
     vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
-    rows = []
 
     T_list_to_compute = np.array(expected_list)
     print(f"computing for energies {pos_energy_bound} > dE > {neg_energy_bound}")
     print(T_list_to_compute)
-    total_to_calc = len(vals_to_calc) * len(T_list_to_compute)
 
+    # 1. Flatten the nested loops into a list of tasks
+    tasks = []
     for val in vals_to_calc:
         for temp in T_list_to_compute:
-            probability = quad(F.integrand(temp, val, init_state.Ec), [-1.513, 2.17])
-            rows.append(
-                np.array(
-                    [val, float(probability.real), temp, init_state.Ec],
-                    dtype=np.float64,
-                )
-            )
+            tasks.append((val, temp, init_state.Ec))
+
+    total_to_calc = len(tasks)
+    rows = []
+
+    # 2. Execute tasks in parallel using ProcessPoolExecutor
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # executor.map handles distributing the tasks and guarantees
+        # the results are yielded in the original submission order.
+        # chunksize groups tasks to reduce communication overhead.
+        results = executor.map(_calc_segments, tasks, chunksize=10)
+
+        for result_row in results:
+            rows.append(result_row)
             rr += 1
 
-            if not rr % 100:
-                print(f"done {rr} out of {total_to_calc} -- {100 * rr / total_to_calc:.2f}%", flush=True)
-
+    # 3. Restore global precision for the main process and format the array
     mp.dps = 15
     return np.array(rows, dtype=np.float64).reshape(-1, 4)
 

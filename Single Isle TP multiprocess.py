@@ -26,9 +26,9 @@ from functools import partial
 e = 1
 Vr = 0
 Cl = 2
-Cr = 1
-Rl = 1
-Rr = 10
+Cr = 0.01
+Rl = 10
+Rr = 1 #R2
 Rg = 1000 * (Cl + Cr)
 Cg = 10 * (Cl + Cr)
 Cs = Cg + Cl + Cr
@@ -116,8 +116,8 @@ def worker_simulate_gradient(multiplier, V_vals, N_states, T0):
     print(f"Worker started for grad {multiplier}", flush=True)
 
     T_left = T0
-    T_dot = T0 + 1 * multiplier * T0
-    T_right = T0 + 2 * multiplier * T0
+    T_dot = T0 + 10 * multiplier * T0
+    T_right = T0 + 20 * multiplier * T0
 
     currents = []
     for V in V_vals:
@@ -202,6 +202,27 @@ if __name__ == '__main__':
 
     # Range of multipliers: 0 to 19 (inclusive) -> 20 total gradients
     num_of_grads = 20
+
+    #export params
+    params_path = output_folder / "parameters.txt"
+    with open(params_path, "w") as f:
+        # Global variables
+        f.write(f"e :  {e}\n")
+        f.write(f"Vr :  {Vr}\n")
+        f.write(f"Cl :  {Cl}\n")
+        f.write(f"Cr :  {Cr}\n")
+        f.write(f"Rl :  {Rl}\n")
+        f.write(f"Rr :  {Rr}\n")
+        f.write(f"Rg :  {Rg}\n")
+        f.write(f"Cg :  {Cg}\n")
+        f.write(f"Cs :  {Cs}\n")
+        # Run-specific variables
+        f.write(f"T0 :  {T0}\n")
+        f.write(f"N_states :  {N_states}\n")
+        f.write(f"num_points :  {num_points}\n")
+        f.write(f"num_of_grads :  {num_of_grads}\n")
+        f.write(f"job_id :  {job_id}\n")
+    print(f"Parameters saved to {params_path}")
 
     # Prepare the partial function
     loaded_state_function = partial(
