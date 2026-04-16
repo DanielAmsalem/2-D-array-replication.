@@ -241,13 +241,11 @@ def _calc_segments(args):
     """
     val, temp, Ec = args
 
-    # Set precision locally for this process
-    import mpmath as mp
     mp.dps = 40
 
     func = F.integrand(temp, val, Ec)
-    absval = abs(val)
-    limits = [-6, -0.1 - absval, 0, absval + 0.2, 5.17]
+    absval = abs(val + Ec)
+    limits = [-1.5, - absval, 0, absval, 2]
 
     probability = 0
 
@@ -255,21 +253,17 @@ def _calc_segments(args):
         a = limits[i]
         b = limits[i + 1]
         w = b - a
-        if w == 0:
+        if w < 1e-8:
             continue
 
         # fixed [0, 1] limits for memory leak mapping
-        segment_prob = quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1])
+        segment_prob = mp.quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1], method='tanh-sinh')
         probability += segment_prob
 
-    # Fixed indentation: Returns a single row per (val, temp) pair
-    # after fully accumulating the probability across all segments.
     return [val, float(probability.real), temp, Ec]
 
 
 def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers):
-    import mpmath as mp
-    rr = 0
     print(pos_energy_bound, neg_energy_bound, init_state.resolution)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
     vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
@@ -296,7 +290,6 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
 
         for result_row in results:
             rows.append(result_row)
-            rr += 1
 
     # 3. Restore global precision for the main process and format the array
     mp.dps = 15
