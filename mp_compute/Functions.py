@@ -1,6 +1,7 @@
 import csv
 
 import numpy as np
+import mpmath as mp
 from mpmath import exp, sqrt
 
 # parameters
@@ -239,14 +240,16 @@ def integrand(T, dE, Ec):
     """
 
     def conv(E):
-        if np.abs(E) < 1e-8:
-            zero_limit_gauss = exp(-((dE + Ec) ** 2) / (4 * Ec * T))
-            return zero_limit_gauss * sqrt(T / (4 * np.pi * Ec))
+        # mp.fabs instead of np.abs
+        if mp.fabs(E) < 1e-8:
+            # mp.exp, mp.sqrt, and mp.pi
+            zero_limit_gauss = mp.exp(-((dE + Ec) ** 2) / (4 * Ec * T))
+            return zero_limit_gauss * mp.sqrt(T / (4 * mp.pi * Ec))
 
-        gauss = exp(-((E + dE + Ec) ** 2) / (4 * Ec * T))
-        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
+        gauss = mp.exp(-((E + dE + Ec) ** 2) / (4 * Ec * T))
+        gauss = gauss / mp.sqrt(mp.pi * 4 * Ec * T)
 
-        bose_mean = E / (1 - exp(-E / T))
+        bose_mean = E / (1 - mp.exp(-E / T))
 
         return bose_mean * gauss
 

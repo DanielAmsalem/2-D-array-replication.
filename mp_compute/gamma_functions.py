@@ -24,7 +24,11 @@ def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table
 
     sorted_vals = table_val[temp_idx::len(T_table)]
     probs = table_prob[temp_idx::len(T_table)]
-
+    
+    if len(sorted_vals) > 1 and sorted_vals[0] > sorted_vals[-1]:
+        sorted_vals = sorted_vals[::-1]
+        probs = probs[::-1]
+    
     idx = bisect.bisect_left(sorted_vals, dE)
 
     # Compare the two closest values: sorted_list[idx - 1] and sorted_list[idx]
@@ -52,7 +56,7 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
     if Rt < 0:
         raise ValueError
 
-    val = (-dE - Ec) / (Rt * e * e)
+    val = (-dE - Ec) / Rt
 
     if T_at_junction == 0:
         if dE < -Ec:
@@ -70,7 +74,7 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
         approx = approximate_gamma_integral(
             dE, T_at_junction, table_val, table_prob, T_table, flip
         )
-        val = approx / (Rt * e * e)
+        val = approx / Rt
         return val
     else:
         raise ValueError
@@ -148,7 +152,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
 
             # rate for i->V_left
             if dE_left < pos_energy_bound:
-                Gamma_ += [Gamma_approx(dE_left, T_gradient[i % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
+                Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
                                         pos_energy_bound, table_val, table_prob, T_table, flip)]
                 reaction_index_ += [(isle, "to")]
 
@@ -249,7 +253,7 @@ def Get_Steady_State(
             if 0 < q % 1000 < 10 and plot_ongoing_voltage_map:
                 # print(n.reshape(init.row_num, init.row_num))
                 im.set_data(V.reshape(init.row_num, init.row_num))
-                ax.set_title(r" $\Delta$" + f" V : {round(cycle_voltage, 3)}")
+                ax.set_title(r" $\Delta$" + f" V : {round(cycle_voltage,3)}")
                 scatter.set_array(n.reshape(-1))
                 plt.pause(0.001)
 

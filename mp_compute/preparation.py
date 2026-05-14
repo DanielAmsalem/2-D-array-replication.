@@ -241,23 +241,34 @@ def _calc_segments(args):
     """
     val, temp, Ec = args
 
-    mp.dps = 40
+    mp.dps = 50
 
     func = F.integrand(temp, val, Ec)
     absval = abs(val + Ec)
-    limits = [-1.5, - absval, 0, absval, 2]
+
+    # Updated limits using mpmath's infinity
+    limits = [-mp.inf, -absval, 0, absval, mp.inf]
 
     probability = 0
 
     for i in range(len(limits) - 1):
         a = limits[i]
         b = limits[i + 1]
-        w = b - a
-        if w < 1e-8:
-            continue
 
-        # fixed [0, 1] limits for memory leak mapping
-        segment_prob = mp.quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1], method='tanh-sinh')
+        if a == -mp.inf:
+            # (-inf, b] to [0, 1]
+            segment_prob = mp.quad(lambda t, b=b: func(b - t / (1 - t)) / ((1 - t) ** 2), [0, 1], method='tanh-sinh')
+        elif b == mp.inf:
+            # [a, inf) to [0, 1]
+            segment_prob = mp.quad(lambda t, a=a: func(a + t / (1 - t)) / ((1 - t) ** 2), [0, 1], method='tanh-sinh')
+        else:
+            w = b - a
+            if w < 1e-8:
+                continue
+
+            # [0, 1] limits for finite memory leak mapping
+            segment_prob = mp.quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1] )
+
         probability += segment_prob
 
     return [val, float(probability.real), temp, Ec]

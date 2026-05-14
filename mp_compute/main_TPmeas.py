@@ -34,7 +34,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
     flip = False
     print(f"flip = {flip}", flush=True)
-    first_run = True
+    first_run = False #############################
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
@@ -46,13 +46,13 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         plot_ongoing_voltage_map = False
     T0_unitless = 0.001
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 19  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = list(range(11,19))
+    last_repetition_to_do = 80  ############################ int : n -> the last repetition has dT = n*Tstd
+    repetition_list = list(range(40,80,4)) ##############################
     print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
     null_path_name = import_export.export_path / f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
-    pos_energy_boundT0 = 0.05  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
-    neg_energy_boundT0 = -0.22  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+    pos_energy_boundT0 = 0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
+    neg_energy_boundT0 = -0.11  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
 
     # choose a specific run
     run_to_get_init_from = "20251207_17h43m26s"
@@ -115,7 +115,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
-    expected_err = 0.01 * (init.row_num - 1) * np.sqrt(max(T) / init.T0)
+    expected_err = 0.01 * (init.row_num - 1) * np.sqrt(np.mean(T) / init.T0)
 
     if first_run:
         t0 = time.time()
@@ -214,6 +214,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             T = T_list_to_compute
             if flip:
                 T = np.flip(T_list_to_compute)
+            expected_err = np.sum(0.01 * np.sqrt(np.array(T) / init.T0))
+            print(expected_err, flush=True)
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -224,7 +226,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 table_T=table_T,
                 flip=flip,
                 T=T,
-                expected_error=expected_err * np.sqrt(max(T) / init.T0),
+                expected_error=expected_err,
                 pos_energy_bound=float(pos[repetition - 1]),
                 neg_energy_bound=float(neg[repetition - 1]),
                 repetition=repetition,
@@ -278,7 +280,7 @@ if __name__ == "__main__":
         IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20.npz" for n in range(20)],
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20.npz" for n in range(501)],
             csv_table_path=MP_COMPUTE_PATH / f"table.csv",
             results_dir_path=RESULTS_DIR_PATH
         ),
