@@ -1,10 +1,26 @@
+import os
+
+ratio = 1
+os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+num_workers = max(1, int(0.9 * total_cpus / ratio))
+print(f"Worker number set to {num_workers} for {total_cpus} CPUs", flush=True)
+
+import concurrent.futures
+import mpmath
 import numpy as np
-from mpmath import quad, mp, exp, sqrt, ninf, inf
+from mpmath import mp, exp, sqrt
+from pathlib import Path
+import datetime
+
 import matplotlib
 
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# --- Parameters ---
 e = 1
 Vr = 0
 Cl = 2
@@ -17,14 +33,6 @@ Cs = Cg + Cl + Cr
 
 
 def integrand(T, dE, Ec):
-    """
-    P- function for high impedance.
-    :param dE: Energy difference == dE.
-    :param Ec: Electrostatic energy of environment == Ec.
-    :param T: Temperature.
-    :return: P(E)*E*f_BE(-E)
-    """
-
     def conv(E):
         if np.abs(E) < 1e-8:
             zero_limit_gauss = exp(-((dE + Ec) ** 2) / (4 * Ec * T))
@@ -32,22 +40,113 @@ def integrand(T, dE, Ec):
 
         gauss = exp(-((E + dE + Ec) ** 2) / (4 * Ec * T))
         gauss = gauss / sqrt(np.pi * 4 * Ec * T)
-
         bose_mean = E / (1 - exp(-E / T))
-
         return bose_mean * gauss
 
     return conv
 
 
+def qs_integrand(T, dE, Ec, D):
+    def conv(E, Etag):
+        n_E = dos(E, D)
+        if n_E == 0: return 0
+
+        n_Etag = dos(Etag - dE, D)
+        if n_Etag == 0: return 0
+
+        gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
+        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
+
+        return n_E * n_Etag * f(E, T) * (1 - f(Etag - dE, T)) * gauss
+
+    return conv
+
+
+def f(x, t):
+    if x / t > 1e10:
+        return exp(-x / t)
+    if x / t < -1e10:
+        return 1
+    expon = exp(x / t)
+    return 1 / (1 + expon)
+
+
+def dos(E, D):
+    if mpmath.fabs(E) <= D:
+        return 0
+    val = E * E - D * D
+    if val <= 0:
+        return 0
+    return mpmath.fabs(E) / sqrt(val)
+
+
 def Gamma(w, T, Rt, mu=0.5 / Cg):
-    # we set mu =0 since 2/cg is included in W.
-    absw = abs(w)
-    print(w)
-    mp.dps = 40
-    probability = quad(integrand(T, w, mu), [-6, -absw - 0.2, 0, absw + 0.1, 7])
-    mp.dps = 15
-    return probability / (Rt * e * e)
+    D = 0.2 * mu
+    mp.dps = 50
+    func = qs_integrand(T, w, mu, D)
+    absval = abs(D)
+
+    # Calculate the exact physical width of the Gaussian spike
+    sigma = mp.sqrt(2 * mu * T)
+    bracket_width = 5 * sigma
+
+    limits_E = [-mp.inf, -absval, 0, absval, mp.inf]
+
+    def get_mapping(a, b):
+        if a == -mp.inf:
+            return lambda t: (b - t / (1 - t), 1 / ((1 - t) ** 2))
+        elif b == mp.inf:
+            return lambda t: (a + t / (1 - t), 1 / ((1 - t) ** 2))
+        else:
+            width = b - a
+            if width < 1e-8:
+                return None
+            return lambda t: (a + t * width, width)
+
+    mappings_E = [get_mapping(limits_E[i], limits_E[i + 1]) for i in range(len(limits_E) - 1)]
+
+    probability = 0
+    print(f"  [T={T}] Calculating for w = {w:.3f}", flush=True)
+
+    for m_E in mappings_E:
+        if m_E is None: continue
+
+        # Outer integral over E
+        def outer_integrand(t_E, m_E=m_E):
+            if t_E <= 0 or t_E >= 1:
+                return 0
+
+            E, jac_E = m_E(t_E)
+
+            # Dynamically calculate where the Gaussian spike is in E'
+            peak_center = E - mu
+
+            # Combine fixed topological singularities with the dynamic Gaussian boundaries
+            # mpmath uses its own internal float types, so we explicitly convert w and absval
+            dynamic_limits = [
+                -mp.inf,
+                mp.mpf(w - absval),
+                mp.mpf(w),
+                mp.mpf(w + absval),
+                peak_center - bracket_width,
+                peak_center + bracket_width,
+                mp.inf
+            ]
+
+            # Sort and remove duplicates to create a clean piecewise integration path
+            sorted_Etag_limits = sorted(list(set(dynamic_limits)))
+
+            # Run the inner integral over E', letting mpmath natively handle the piecewise segments
+            inner_integral = mp.quad(lambda Etag: func(E, Etag), sorted_Etag_limits, method='tanh-sinh', maxdegree=7)
+
+            return inner_integral * jac_E
+
+        # Integrate the mapped outer function
+        segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh', maxdegree=7)
+        probability += segment_prob
+
+    print(f"  [T={T}] DONE Calculating for w = {w:.3f}", flush=True)
+    return probability
 
 
 def U(n, Qg, Vl):
@@ -59,73 +158,68 @@ def Qn(Vl, n):
 
 
 def W(n, Qg, Vl, in_out, left_right):
-    # in is 1 : n->n+1
-    # out is -1 : n-> n-1
     if abs(in_out) != 1:
         raise ValueError
-
     if left_right == "left":
         return e * (U(n + in_out, Qg, Vl) + U(n, Qg, Vl)) / 2 - e * Vl
     elif left_right == "right":
         return e * (U(n + in_out, Qg, Vl) + U(n, Qg, Vl)) / 2
     else:
         raise ValueError("left_right must be either 'left' or 'right'")
-    # if left_right == "left":
-    #     same = -Cg * e / (2 * Cs)
-    #     flip = -Cg * (Cl * Vl + n * e) / Cs - e * Vl
-    #     return same + in_out * flip
-    # elif left_right == "right":
-    #     same = -Cg * e / (2 * Cs)
-    #     flip = -Cg * (Cl * Vl + n * e) / Cs - e * Vr
-    #     return same + in_out * flip
-    return
 
 
-# find n so W is Large
-N = 0
-V = 4
-delE = -0.07
-val = 1
-delE = W(N, Qn(V, N), V, 1, left_right="left")
-print(delE, val)
-exit()
-w_values = np.concatenate((np.linspace(-1, -0.2, 50, endpoint=False),
-                           np.linspace(-0.2, 0.1, 100, endpoint=False),
-                           np.linspace(0.1, 1, 50, endpoint=False)))
+# --- Parallel Worker Function ---
+def compute_gamma_worker(w, T, Rt):
+    """Top-level wrapper to ensure it can be pickled by multiprocessing."""
+    return float(Gamma(w, T, Rt))
 
-# 2. Define the list of temperatures you want to plot
-T_values = [0.001, 0.01, 0.1]
 
-plt.figure(figsize=(8, 5))
+# --- Execution Block ---
+if __name__ == '__main__':
+    DIR = Path(__file__).parent
+    w_values = np.linspace(-1, 1, 40, endpoint=False)
+    T_values = [0.001, 0.01, 0.1]
 
-# 3. Loop through each T, calculate Gamma, and plot it
-for T in T_values:
-    # Calculate gamma for the current T
-    gamma_values = [Gamma(w, T, 1) for w in w_values]
+    # 1. Flatten the parameter space so ALL jobs can be queued at once
+    w_args = []
+    T_args = []
+    Rt_args = []
 
-    # Plot the curve. The label parameter is what the legend will display!
-    plt.plot(w_values, gamma_values, linewidth=2, label=f'T = {T}')
+    for T in T_values:
+        w_args.extend(w_values)
+        T_args.extend([T] * len(w_values))
+        Rt_args.extend([1] * len(w_values))
 
-# 4. Format the plot
-plt.title("Gamma vs w, Rt=1")  # Fixed a small stray parenthesis here
-plt.xlabel("w")
-plt.ylabel("Gamma")
-plt.grid(True, linestyle='--', alpha=0.7)
+    total_tasks = len(w_args)
+    print(f"Submitting all {total_tasks} tasks simultaneously...", flush=True)
 
-# 5. Add the legend to display the labels we set in the loop
-plt.legend()
+    # 2. Execute everything in one massive pool
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # map preserves the exact order of the flat list we submitted
+        all_gamma_results = list(executor.map(compute_gamma_worker, w_args, T_args, Rt_args))
 
-plt.tight_layout()
-plt.show()
+    print("Calculations complete. Generating plot...", flush=True)
 
-# # find n so W is Large
-# N = 0
-# V = 4
-# overflow = False
-# while not overflow:
-#     N += 1
-#     new_dE = W(N, Qn(Vl=V,n=N), V, 1, "left")
-#     rate = Gamma(new_dE, 0.001, 1)
-#     if Gamma(new_dE, 0.001, 1) < 1e-6:
-#         overflow = True
-#         print(N)
+    # 3. Re-split the results array and plot
+    plt.figure(figsize=(8, 5))
+    chunk_size = len(w_values)
+
+    for i, T in enumerate(T_values):
+        # Slice out the 40 results belonging to the current T
+        gamma_chunk = all_gamma_results[i * chunk_size: (i + 1) * chunk_size]
+        plt.plot(w_values, gamma_chunk, linewidth=2, label=f'T = {T}')
+
+    plt.title(r"Gamma vs w, $\Delta = 0.2*E_c$")
+    plt.xlabel("w")
+    plt.ylabel("Gamma")
+
+    # plt.yscale('log')
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+
+    # Save output to disk
+    filename = str(datetime.datetime.now()) + "_mp_dps50.png"
+    output_file = DIR / filename
+    plt.savefig(fname=output_file, dpi=2100, bbox_inches="tight")
+    print(f"Plot saved successfully to {output_file}", flush=True)
