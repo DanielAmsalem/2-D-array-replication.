@@ -115,7 +115,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
-    expected_err = 0.01 * (init.row_num - 1) * np.sqrt(np.mean(T) / init.T0)
+    expected_err = F.calc_expected_dist_std(T, init.T0)
 
     if first_run:
         t0 = time.time()
@@ -214,7 +214,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             T = T_list_to_compute
             if flip:
                 T = np.flip(T_list_to_compute)
-            expected_err = np.sum(0.01 * np.sqrt(np.array(T) / init.T0))
+            expected_err = F.calc_expected_dist_std(T, init.T0)
             print(expected_err, flush=True)
             loaded_state_function = partial(
                 Get_Steady_State,
@@ -258,7 +258,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    filename=run_name,
                                    repetition=repetition,
                                    T=T,
-                                   expected_error=expected_err * np.sqrt(max(T) / init.T0),
+                                   expected_error=expected_err,
                                    loop_count=init.loop_count,
                                    T_std=T_std,
                                    t0=t0,

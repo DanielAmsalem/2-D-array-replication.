@@ -267,7 +267,7 @@ def _calc_segments(args):
                 continue
 
             # [0, 1] limits for finite memory leak mapping
-            segment_prob = mp.quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1] )
+            segment_prob = mp.quad(lambda t, a=a, w=w: func(a + t * w) * w, [0, 1])
 
         probability += segment_prob
 

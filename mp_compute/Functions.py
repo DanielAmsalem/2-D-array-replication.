@@ -3,6 +3,8 @@ import csv
 import numpy as np
 import mpmath as mp
 from mpmath import exp, sqrt
+from scipy.integrate import quad
+from scipy.special import erf
 
 # parameters
 from define_objects import ExperimentInitialState
@@ -132,7 +134,7 @@ def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, ro
         elif l - m == -row_num * (row_num - 1) and periodic_y:
             I_down += gamma_list[i]
 
-    return I_right/(row_num+1), I_down/(row_num+1)
+    return I_right / (row_num + 1), I_down / (row_num + 1)
 
 
 def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, n_list, periodic_y):
@@ -226,7 +228,7 @@ def return_Qn_for_n(n, VxCix, init: ExperimentInitialState):
 
 def getWork(i, j, C_inv, curr_V, e):
     Work = e * (2 * curr_V[j] + e * C_inv[j][i] - e * C_inv[j][j] - (
-                2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
+            2 * curr_V[i] + e * C_inv[i][i] - e * C_inv[i][j])) / 2
     return Work
 
 
@@ -385,8 +387,48 @@ def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
             y_i = i - i % row_num
             y_j = j - j % row_num
             ## if in row 0 or n-1 and same row neighbours
-            if (y_i == 0 or y_i == array_size-row_num) and y_i == y_j:
+            if (y_i == 0 or y_i == array_size - row_num) and y_i == y_j:
                 if abs(i - j) == 1:
                     R_new[i, j] = insulate_R
 
     return R_new
+
+
+def Gamma_cp(dE, T, Ec, Ej):
+    # P(-dE)
+    gauss = mp.exp(-((dE + Ec) ** 2) / (4 * Ec * T))
+    gauss = gauss / mp.sqrt(mp.pi * 4 * Ec * T)
+    return gauss * Ej * Ej * mp.pi
+
+
+def calc_expected_dist_std(T_array, T0):
+    T = np.asarray(T_array) / T0
+
+    # T_array should be an N*N long list with entries [T0/T0...T0/T0,(T0+dT)/T0...(T0+dt/T0),...(T0+(N-1)dT)/T0]
+    # std of each site
+    sigma = 0.01 * np.sqrt(T)
+    sqrt2_sigma = np.sqrt(2) * sigma
+
+    # CDF of the maximum absolute deviation
+    def F_Z(z):
+        # np.prod over the array of error functions (independence assumption)
+        return np.prod(erf(z / sqrt2_sigma))
+
+    # integrands for the 1st and 2nd moments
+    def integrand_1st_moment(z):
+        return 1.0 - F_Z(z)
+
+    def integrand_2nd_moment(z):
+        return 2.0 * z * (1.0 - F_Z(z))
+
+    # 10 sigma of the hottest site
+    upper_limit = np.max(sigma) * 10.0
+
+    # epsrel is tightened slightly for high-precision stability
+    moment_1, err_1 = quad(integrand_1st_moment, 0, upper_limit, epsabs=1e-10, epsrel=1e-10)
+    moment_2, err_2 = quad(integrand_2nd_moment, 0, upper_limit, epsabs=1e-10, epsrel=1e-10)
+
+    variance_Z = moment_2 - (moment_1 ** 2)
+    std_Z = np.sqrt(variance_Z)
+
+    return std_Z  # expected err
