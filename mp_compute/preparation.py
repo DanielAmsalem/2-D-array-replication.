@@ -289,7 +289,6 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
         for temp in T_list_to_compute:
             tasks.append((val, temp, init_state.Ec))
 
-    total_to_calc = len(tasks)
     rows = []
 
     # 2. Execute tasks in parallel using ProcessPoolExecutor
@@ -306,6 +305,116 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
     mp.dps = 15
     return np.array(rows, dtype=np.float64).reshape(-1, 4)
 
+
+def _calc_segments_gapped(args):
+    """
+    Top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
+    args: (val, temp, Ec, D) where val is the energy difference 'w'.
+    """
+    val, temp, Ec, D = args
+
+    mp.dps = 50
+
+    # Call the 2D quasiparticle integrand from Functions.py
+    func = F.qp_integrand(temp, val, Ec, D)
+    absval = abs(D)
+
+    # Calculate the targeted segmentation width for the Gaussian spike
+    sigma = mp.sqrt(2 * Ec * temp)
+    bracket_width = 5 * sigma
+
+    # Base limits for the outer variable E
+    limits_E = [-mp.inf, -absval, 0, absval, mp.inf]
+
+    def get_mapping(a, b):
+        if a == -mp.inf:
+            return lambda t: (b - t / (1 - t), 1 / ((1 - t) ** 2))
+        elif b == mp.inf:
+            return lambda t: (a + t / (1 - t), 1 / ((1 - t) ** 2))
+        else:
+            width = b - a
+            if width < 1e-8:
+                return None
+            return lambda t: (a + t * width, width)
+
+    mappings_E = [get_mapping(limits_E[i], limits_E[i + 1]) for i in range(len(limits_E) - 1)]
+
+    probability = 0
+
+    for m_E in mappings_E:
+        if m_E is None: continue
+
+        def outer_integrand(t_E, m_E=m_E):
+            if t_E <= 0 or t_E >= 1:
+                return 0
+
+            E, jac_E = m_E(t_E)
+
+            # Locate the exact center of the Gaussian spike for this specific E
+            peak_center = E - Ec
+
+            # w-shifted singularities with +-sigma on the gauss peak
+            dynamic_limits = [
+                -mp.inf,
+                mp.mpf(val - absval),
+                mp.mpf(val),
+                mp.mpf(val + absval),
+                peak_center - bracket_width,
+                peak_center + bracket_width,
+                mp.inf
+            ]
+
+            sorted_Etag_limits = sorted(list(set(dynamic_limits)))
+            inner_integral = mp.quad(lambda Etag: func(E, Etag), sorted_Etag_limits, method='tanh-sinh', maxdegree=7)
+
+            return inner_integral * jac_E
+
+        # Integrate the mapped outer function
+        segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh', maxdegree=7)
+        probability += segment_prob
+
+    # returns the exact same 4-element structure, so it plays nicely with output_table_triplets
+    return [val, float(probability.real), temp, Ec]
+
+
+def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
+                                  gap_ratio=0.2):
+    """
+    Prepares and multiprocesses the 2D gapped integrations.
+    gap_ratio: determines D as a ratio of Ec (default 0.2*Ec based on your earlier code)
+    """
+    print(pos_energy_bound, neg_energy_bound, init_state.resolution)
+    num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
+    vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
+
+    T_list_to_compute = np.array(expected_list)
+    print(f"computing 2D gapped integrands for energies {pos_energy_bound} > dE > {neg_energy_bound}")
+    print(f"Temperatures: {T_list_to_compute}")
+
+    # Define the gap D based on the electrostatic energy (mu/Ec)
+    D = gap_ratio * init_state.Ec
+    print(f"Gap D set to {D} (Ec = {init_state.Ec})")
+
+    # 1. Flatten the nested loops into a list of tasks
+    tasks = []
+    for val in vals_to_calc:
+        for temp in T_list_to_compute:
+            # We add D to the tuple so the worker function receives it
+            tasks.append((val, temp, init_state.Ec, D))
+
+    rows = []
+
+    # 2. Execute tasks in parallel using ProcessPoolExecutor
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Map using the new gapped worker function
+        results = executor.map(_calc_segments_gapped, tasks, chunksize=10)
+
+        for result_row in results:
+            rows.append(result_row)
+
+    # 3. Restore global precision for the main process and format the array
+    mp.dps = 15
+    return np.array(rows, dtype=np.float64).reshape(-1, 4)
 
 def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
     table_val = table_triplets[:, 0]

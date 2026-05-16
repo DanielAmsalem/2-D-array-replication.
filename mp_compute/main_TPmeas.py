@@ -1,10 +1,11 @@
 import os
+
 ratio = 2
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = int(total_cpus/ratio)
+num_workers = int(total_cpus / ratio)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
 from concurrent.futures import ProcessPoolExecutor
@@ -34,25 +35,35 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
     flip = False
     print(f"flip = {flip}", flush=True)
-    first_run = False #############################
+    first_run = False  #############################
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
 
     # FIXED PARAMETERS
-    loop_count = max(num_workers,100)
-    print(f"loop max: {loop_count}", flush=True)
-    if loop_count != 1:
-        plot_ongoing_voltage_map = False
-    T0_unitless = 0.001
-    repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 80  ############################ int : n -> the last repetition has dT = n*Tstd
-    repetition_list = list(range(40,80,4)) ##############################
-    print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     V_capture = 4
-    null_path_name = import_export.export_path / f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
     pos_energy_boundT0 = 0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
     neg_energy_boundT0 = -0.11  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+
+    # EXPERIMENT PARAMETERS
+    loop_count = max(num_workers, 100)
+    T0_unitless = 0.001
+    repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
+
+    ######## CHANGABLES ###############
+    last_repetition_to_do = 80  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = list(range(40, 80, 4))
+    gap_ratio = 0.2
+    Ej_ratio = 0.2
+    ###################################
+
+    # MESSAGES
+    print(f"loop max: {loop_count}", flush=True)
+    print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
+    if loop_count != 1:
+        plot_ongoing_voltage_map = False
+
+    null_path_name = import_export.export_path / f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
 
     # choose a specific run
     run_to_get_init_from = "20251207_17h43m26s"
@@ -138,7 +149,9 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 repetition=0,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,
-                plot_ongoing_voltage_map=plot_ongoing_voltage_map
+                plot_ongoing_voltage_map=plot_ongoing_voltage_map,
+                gap_ratio=gap_ratio,
+                Ej=Ej_ratio*init.Ec
             )
 
             results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
@@ -168,7 +181,10 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    T_std=0,
                                    t0=t0,
                                    results_path=import_export.results_dir_path,
-                                   tot_error_count=err)
+                                   tot_error_count=err,
+                                   gap_ratio=gap_ratio,
+                                   Ej_ratio=Ej_ratio
+                                   )
 
     else:
         print("skipped first run")
@@ -232,7 +248,9 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 repetition=repetition,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,
-                plot_ongoing_voltage_map=plot_ongoing_voltage_map
+                plot_ongoing_voltage_map=plot_ongoing_voltage_map,
+                gap_ratio=gap_ratio,
+                Ej=Ej_ratio*init.Ec
             )
 
             results: list[SteadyStateResult] = list(
@@ -263,7 +281,9 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    T_std=T_std,
                                    t0=t0,
                                    results_path=import_export.results_dir_path,
-                                   tot_error_count=err)
+                                   tot_error_count=err,
+                                   gap_ratio=gap_ratio,
+                                   Ej_ratio=Ej_ratio)
 
 
 if __name__ == "__main__":

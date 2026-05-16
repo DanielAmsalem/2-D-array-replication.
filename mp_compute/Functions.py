@@ -5,6 +5,7 @@ import mpmath as mp
 from mpmath import exp, sqrt
 from scipy.integrate import quad
 from scipy.special import erf
+import mpmath
 
 # parameters
 from define_objects import ExperimentInitialState
@@ -399,6 +400,42 @@ def Gamma_cp(dE, T, Ec, Ej):
     gauss = mp.exp(-((dE + Ec) ** 2) / (4 * Ec * T))
     gauss = gauss / mp.sqrt(mp.pi * 4 * Ec * T)
     return gauss * Ej * Ej * mp.pi
+
+
+def qp_integrand(T, dE, Ec, D):
+    def conv(E, Etag):
+        n_E = dos(E, D)
+        if n_E == 0:
+            return 0
+
+        n_Etag = dos(Etag - dE, D)
+        if n_Etag == 0:
+            return 0
+
+        gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
+        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
+
+        return n_E * n_Etag * f(E, T) * (1 - f(Etag - dE, T)) * gauss
+
+    return conv
+
+
+def f(x, t):
+    if x / t > 1e10:
+        return exp(-x / t)
+    if x / t < -1e10:
+        return 1
+    expon = exp(x / t)
+    return 1 / (1 + expon)
+
+
+def dos(E, D):
+    if mpmath.fabs(E) <= D:
+        return 0
+    val = E * E - D * D
+    if val <= 0:
+        return 0
+    return mpmath.fabs(E) / sqrt(val)
 
 
 def calc_expected_dist_std(T_array, T0):

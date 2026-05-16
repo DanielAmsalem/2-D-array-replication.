@@ -67,9 +67,19 @@ def report_param(init: ExperimentInitialState,
                  T_std: float,
                  t0,
                  results_path: Path,
-                 tot_error_count: int):
+                 tot_error_count: int,
+                 gap_ratio: float,
+                 Ej_ratio: float
+                 ):
     with open(results_path / f"parameters_{filename}_rep{repetition}.txt", "w") as f:
         f.write(f"repetition {repetition}\n")
+        f.write(f"gap parameters" + "\n")
+        f.write("---------------------------------------------" + "\n")
+        f.write(f"gap ratio : {gap_ratio}" + "\n")
+        f.write(f"Ej ratio : {Ej_ratio}" + "\n")
+        f.write("---------------------------------------------" + "\n")
+        f.write("\n")
+        f.write("\n")
         f.write("loop parameters" + "\n")
         f.write("---------------------------------------------" + "\n")
         f.write("row_num : " + str(init.row_num) + "\n")
