@@ -339,7 +339,6 @@ def Get_Steady_State(
     # general Charge distribution vectors
     Qg, Q_avg, Q_var = np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size)
     n, n_avg, n_var = np.zeros(init.array_size), np.zeros(init.array_size), np.zeros(init.array_size)
-    I_avg, I_var = 0, 0
 
     # vectors counting charge flow
     I_vec = np.zeros(cycles)
@@ -375,6 +374,7 @@ def Get_Steady_State(
         # starting conditions
         not_in_steady_state = True
         t = 0
+        I_avg, I_var = 0, 0
         steady_state_timer = init.timeStep  # steady state fixed time
         steady_state_reps = init.Steady_state_rep * 5  # "5*RC"
 
