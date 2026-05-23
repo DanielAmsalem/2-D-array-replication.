@@ -211,7 +211,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
 
 def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_size, islands, row_num, C_inv,
                      pos_energy_bound, neg_energy_bound, T_gradient, R_t_ij, R_t_i, near_left, near_right, Vright, Ec,
-                     table_val, table_prob, T_table, flip, periodic_y, Ej):
+                     table_val, table_prob, T_table, flip, periodic_y, gap):
     '''
     opposed to regular get gamma here reaction index is of the form
     [(i,j,n)] where n={1,2} for qp/cp transition
@@ -239,7 +239,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
                 cp_dE = (2 * e) * (curr_V[j] - curr_V[i]) + (2 * e) * (2 * e) * (
                         C_inv[j][j] + C_inv[i][i] - 2 * C_inv[i][j]) / 2
 
-                Gamma_ += [F.Gamma_cp(cp_dE, T_gradient[i % row_num], Ec, Ej)]
+                Gamma_ += [F.Gamma_cp(cp_dE, T_gradient[i % row_num], Ec, Rt=R_t_ij[i][j], gap=gap)]
                 reaction_index_ += [(i, j, 2)]
 
             # dEij must be negative enough for qp transition i->j
@@ -256,7 +256,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         dE_left = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
         cp_dE_left = (2 * curr_V[isle] + (2 * e) * C_inv[isle][isle] - 2 * cycle_voltage_) * e
 
-        Gamma_ += [F.Gamma_cp(cp_dE_left, T_gradient[isle % row_num], Ec, Ej)]
+        Gamma_ += [F.Gamma_cp(cp_dE_left, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap)]
         reaction_index_ += [(isle, "from", 2)]
 
         # rate for V_left->i
@@ -272,7 +272,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             if n_list[isle] / e >= 2:
                 cp_dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + 2 * e * C_inv[isle][isle]) * e
 
-                Gamma_ += [F.Gamma_cp(cp_dE_left, T_gradient[isle % row_num], Ec, Ej)]
+                Gamma_ += [F.Gamma_cp(cp_dE_left, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap)]
                 reaction_index_ += [(isle, "to", 2)]
 
             # rate for i->V_left
@@ -287,7 +287,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         dE_right = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * Vright) * e / 2
         cp_dE_right = (2 * curr_V[isle] + 2 * e * C_inv[isle][isle] - 2 * Vright) * e
 
-        Gamma_ += [F.Gamma_cp(cp_dE_right, T_gradient[isle % row_num], Ec, Ej)]
+        Gamma_ += [F.Gamma_cp(cp_dE_right, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap)]
         reaction_index_ += [(isle, "from", 2)]
 
         # rate for V_right->i
@@ -304,7 +304,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             if n_list[isle] / e >= 2:
                 cp_dE_right = (2 * Vright - 2 * curr_V[isle] + 2 * e * C_inv[isle][isle]) * e
 
-                Gamma_ += [F.Gamma_cp(cp_dE_right, T_gradient[isle % row_num], Ec, Ej)]
+                Gamma_ += [F.Gamma_cp(cp_dE_right, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap)]
                 reaction_index_ += [(isle, "to", 2)]
 
             # rate for i->V_right
@@ -333,8 +333,7 @@ def Get_Steady_State(
         capture_heatmap_at_idx: float,
         periodic_y: bool,
         plot_ongoing_voltage_map: bool,
-        gap_ratio: float,
-        Ej: float
+        gap_ratio: float
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -479,7 +478,7 @@ def Get_Steady_State(
                     T_table=table_T,
                     flip=flip,
                     periodic_y=periodic_y,
-                    Ej=Ej)
+                    gap=gap_ratio*init.Ec)
 
                 R = np.sum(Gamma)
                 if R > cycle_voltage / init.CondRg:

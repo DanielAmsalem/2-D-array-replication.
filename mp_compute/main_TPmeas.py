@@ -54,11 +54,11 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     last_repetition_to_do = 80  # int : n -> the last repetition has dT = n*Tstd
     repetition_list = list(range(40, 80, 4))
     gap_ratio = 0.2
-    Ej_ratio = 0.2
     ###################################
 
     # MESSAGES
     print(f"loop max: {loop_count}", flush=True)
+    print(f"gap_ratio = {gap_ratio}", flush=True)
     print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
     if loop_count != 1:
         plot_ongoing_voltage_map = False
@@ -151,7 +151,6 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 periodic_y=periodic_y,
                 plot_ongoing_voltage_map=plot_ongoing_voltage_map,
                 gap_ratio=gap_ratio,
-                Ej=Ej_ratio*init.Ec
             )
 
             results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
@@ -183,7 +182,6 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    results_path=import_export.results_dir_path,
                                    tot_error_count=err,
                                    gap_ratio=gap_ratio,
-                                   Ej_ratio=Ej_ratio
                                    )
 
     else:
@@ -250,7 +248,6 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 periodic_y=periodic_y,
                 plot_ongoing_voltage_map=plot_ongoing_voltage_map,
                 gap_ratio=gap_ratio,
-                Ej=Ej_ratio*init.Ec
             )
 
             results: list[SteadyStateResult] = list(
@@ -282,8 +279,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    t0=t0,
                                    results_path=import_export.results_dir_path,
                                    tot_error_count=err,
-                                   gap_ratio=gap_ratio,
-                                   Ej_ratio=Ej_ratio)
+                                   gap_ratio=gap_ratio)
 
 
 if __name__ == "__main__":

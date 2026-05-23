@@ -395,11 +395,21 @@ def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
     return R_new
 
 
-def Gamma_cp(dE, T, Ec, Ej):
+def Gamma_cp(dE, T, Ec, gap, Rt):
+    tanh = np.tanh(gap/(2*T))
+    # Ej = (hbar/2eRt)(pi*gap/2e)*tanh
+    # set h=1 -> hbar = 1/2pi
+    # Ej = tanh * gap/8Rt
+    Ej = tanh * gap / (8*Rt)
+
     # P(-dE)
     gauss = mp.exp(-((dE + Ec) ** 2) / (4 * Ec * T))
     gauss = gauss / mp.sqrt(mp.pi * 4 * Ec * T)
-    return gauss * Ej * Ej * mp.pi
+
+    # Gamma_cp(dE) = (pi/2hbar)Ej^2 P(-dE)
+    # set h=1 -> 2hbar = 1/pi
+    # Gamma_cp(dE) = (pi*Ej)^2 P(-dE)
+    return gauss * (Ej * mp.pi)**2
 
 
 def qp_integrand(T, dE, Ec, D):
