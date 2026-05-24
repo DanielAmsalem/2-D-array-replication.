@@ -188,10 +188,16 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         print("skipped first run")
 
     ### get bounds for dE for each temp from csv table
+    bounds_dict = {}
     with open(import_export.csv_table_path) as f:
-        rows = list(csv.reader(f))
-        neg = [row[1] for row in rows]
-        pos = [row[2] for row in rows]
+        for row in csv.reader(f):
+            # Ensure row is not empty and row[0] is a valid integer
+            if row and row[0].strip().lstrip('-').isdigit():
+                rep_idx = int(row[0])
+                bounds_dict[rep_idx] = {
+                    "neg": float(row[1]),
+                    "pos": float(row[2])
+                }
 
     ### run thermopower until I(V)<0
     current_at_V0 = True
@@ -204,6 +210,10 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             continue
         if not int(repetition) in repetition_list:
             print(f"repetition {repetition} was skipped")
+            continue
+
+        if repetition not in bounds_dict:
+            print(f"repetition {repetition} missing from bounds table, skipped")
             continue
 
         # new temperature profile
@@ -241,8 +251,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 flip=flip,
                 T=T,
                 expected_error=expected_err,
-                pos_energy_bound=float(pos[repetition - 1]),
-                neg_energy_bound=float(neg[repetition - 1]),
+                pos_energy_bound=bounds_dict[repetition]["pos"],
+                neg_energy_bound=bounds_dict[repetition]["neg"],
                 repetition=repetition,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,
