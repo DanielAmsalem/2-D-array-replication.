@@ -35,7 +35,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     # RUN TYPE
     flip = False
     print(f"flip = {flip}", flush=True)
-    first_run = False  #############################
+    first_run = True  #############################
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
@@ -51,9 +51,9 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
-    last_repetition_to_do = 80  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = list(range(40, 80, 4))
-    gap_ratio = 0.2
+    last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = list(range(1, 10, 4))
+    gap_ratio = 0
     ###################################
 
     # MESSAGES

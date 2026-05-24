@@ -396,11 +396,11 @@ def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
 
 
 def Gamma_cp(dE, T, Ec, gap, Rt):
-    tanh = np.tanh(gap/(2*T))
+    tanh = np.tanh(gap / (2 * T))
     # Ej = (hbar/2eRt)(pi*gap/2e)*tanh
     # set h=1 -> hbar = 1/2pi
     # Ej = tanh * gap/8Rt
-    Ej = tanh * gap / (8*Rt)
+    Ej = tanh * gap / (8 * Rt)
 
     # P(-dE)
     gauss = mp.exp(-((dE + Ec) ** 2) / (4 * Ec * T))
@@ -409,7 +409,7 @@ def Gamma_cp(dE, T, Ec, gap, Rt):
     # Gamma_cp(dE) = (pi/2hbar)Ej^2 P(-dE)
     # set h=1 -> 2hbar = 1/pi
     # Gamma_cp(dE) = (pi*Ej)^2 P(-dE)
-    return gauss * (Ej * mp.pi)**2
+    return gauss * (Ej * mp.pi) ** 2
 
 
 def qp_integrand(T, dE, Ec, D):
@@ -448,12 +448,15 @@ def dos(E, D):
     return mpmath.fabs(E) / sqrt(val)
 
 
-def calc_expected_dist_std(T_array, T0):
-    T = np.asarray(T_array) / T0
+def calc_expected_dist_std(T_grad, T0):
+    #T should be unitless
+    T = np.asarray(T_grad) / T0
 
     # T_array should be an N*N long list with entries [T0/T0...T0/T0,(T0+dT)/T0...(T0+dt/T0),...(T0+(N-1)dT)/T0]
+    T_array = np.repeat(T, T.shape[0])
+
     # std of each site
-    sigma = 0.01 * np.sqrt(T)
+    sigma = 0.01 * np.sqrt(T_array)
     sqrt2_sigma = np.sqrt(2) * sigma
 
     # CDF of the maximum absolute deviation
@@ -475,7 +478,4 @@ def calc_expected_dist_std(T_array, T0):
     moment_1, err_1 = quad(integrand_1st_moment, 0, upper_limit, epsabs=1e-10, epsrel=1e-10)
     moment_2, err_2 = quad(integrand_2nd_moment, 0, upper_limit, epsabs=1e-10, epsrel=1e-10)
 
-    variance_Z = moment_2 - (moment_1 ** 2)
-    std_Z = np.sqrt(variance_Z)
-
-    return std_Z  # expected err
+    return moment_1  # expected err
