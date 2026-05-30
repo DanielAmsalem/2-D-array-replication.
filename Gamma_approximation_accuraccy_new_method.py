@@ -5,7 +5,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = max(1, int(0.9 * total_cpus / ratio))
+num_workers = int(0.9 * total_cpus / ratio)
 print(f"Worker number set to {num_workers} for {total_cpus} CPUs", flush=True)
 
 import concurrent.futures
@@ -21,6 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # --- Parameters ---
+DPS = 50  # Global precision parameter
 e = 1
 Vr = 0
 Cl = 2
@@ -43,7 +44,8 @@ def qp_integrand(T, dE, Ec, D):
             return 0
 
         gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
-        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
+        # FIXED: np.pi replaced with mp.pi to prevent precision truncation
+        gauss = gauss / sqrt(mp.pi * 4 * Ec * T)
 
         return n_E * n_Etag * f(E, T) * (1 - f(Etag - dE, T)) * gauss
 
@@ -97,7 +99,8 @@ def _calc_segments_gapped_master(args, dps):
     val, temp, Ec, D = args
     mp.dps = dps
 
-    print(f"calculating w ={val}")
+    print(f"START calculating w = {val:.3f} [T={temp}]", flush=True)
+
     # Step 1: Define the small constant parameter
     eps = mp.mpf('0.05')
 
@@ -136,6 +139,7 @@ def _calc_segments_gapped_master(args, dps):
             res = mp.quad(func_quadrant, [0, theta_max], [0, theta_max], method='gauss-legendre')
             probability += res
 
+        print(f"DONE  calculating w = {val:.3f} [T={temp}]", flush=True)
         return [val, float(probability.real), temp, Ec]
 
     # ---------------------------------------------------------
@@ -228,6 +232,7 @@ def _calc_segments_gapped_master(args, dps):
             res = mp.quad(func_quadrant, [0, theta1_max], [0, theta_max], method='gauss-legendre')
             probability += res
 
+        print(f"DONE  calculating w = {val:.3f} [T={temp}]", flush=True)
         return [val, float(probability.real), temp, Ec]
 
 
@@ -236,7 +241,7 @@ def compute_gamma_worker(w, T, Rt, mu=0.5 / Cg):
     """Top-level wrapper to ensure it can be pickled by multiprocessing."""
     D = 2 * mu
     args = (w, T, mu, D)
-    return float(_calc_segments_gapped_master(args, 15)[1])
+    return float(_calc_segments_gapped_master(args, DPS)[1])
 
 
 # --- Execution Block ---
@@ -274,16 +279,20 @@ if __name__ == '__main__':
         gamma_chunk = all_gamma_results[i * chunk_size: (i + 1) * chunk_size]
         plt.plot(w_values, gamma_chunk, linewidth=2, label=f'T = {T}')
 
-    plt.title(r"Gamma vs w, $\Delta = 2*E_c$")
+    plt.title(r"Gamma vs w, $\Delta = 0.2*E_c$")
     plt.xlabel("w")
     plt.ylabel("Gamma")
 
+    # plt.yscale('log')
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend()
     plt.tight_layout()
 
     # Save output to disk
-    filename = str(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")) + "_mp_dps40.png"
+    # FIXED: Date format removes colons, and DPS parameter is dynamically inserted into the filename
+    filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_mp_dps{DPS}.png"
     output_file = DIR / filename
-    plt.savefig(fname=output_file, dpi=2100, bbox_inches="tight")
+
+    # FIXED: dpi reduced to 600 to prevent Matplotlib MemoryError
+    plt.savefig(fname=output_file, dpi=600, bbox_inches="tight")
     print(f"Plot saved successfully to {output_file}", flush=True)
