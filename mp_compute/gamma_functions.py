@@ -449,6 +449,7 @@ def Get_Steady_State(
                             zero_curr_steady_state_counter % init.Steady_state_rep == 1
                             and zero_curr_steady_state_counter > 2
                     ):
+                        I_avg = 0
                         not_in_steady_state = False
 
             else:
@@ -478,7 +479,7 @@ def Get_Steady_State(
                     T_table=table_T,
                     flip=flip,
                     periodic_y=periodic_y,
-                    gap=gap_ratio*init.Ec)
+                    gap=gap_ratio * init.Ec)
 
                 R = np.sum(Gamma)
                 if R > cycle_voltage / init.CondRg:
@@ -499,7 +500,9 @@ def Get_Steady_State(
                     if (
                             zero_curr_steady_state_counter % init.Steady_state_rep == 1
                             and zero_curr_steady_state_counter > 2
+
                     ):
+                        I_avg = 0
                         not_in_steady_state = False
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)

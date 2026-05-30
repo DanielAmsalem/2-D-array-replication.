@@ -76,6 +76,10 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
         init = F.swap_in_init("flip", flip, init)
+        if init.T0 != T0_unitless:
+            print("T0 is different in reference file or Temperature units != 1. switching.")
+            init = F.swap_in_init("T0", T0_unitless, init)
+            print(f"T0 is now {init.T0}")
         print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
     else:

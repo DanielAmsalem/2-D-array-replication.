@@ -378,7 +378,7 @@ def _calc_segments_gapped(args):
 
 
 def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
-                                  gap_ratio=0.2):
+                                  gap_ratio):
     """
     Prepares and multiprocesses the 2D gapped integrations.
     gap_ratio: determines D as a ratio of Ec (default 0.2*Ec based on your earlier code)
