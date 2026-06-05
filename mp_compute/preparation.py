@@ -1,6 +1,7 @@
 import warnings
 from pathlib import Path
 
+from dataclasses import replace
 import numpy as np
 import numpy.typing as npt
 from mpmath import quad, mp
@@ -148,6 +149,41 @@ def define_tau_inverse_matrix(
     return -res / mean_Rg
 
 
+def recalculate_tau_dependencies(C_inverse: npt.NDArray, mean_Cg: float, mean_Rg: float, array_size: int) -> dict:
+    """
+    Recalculates all physics matrices and time steps that depend on Cg and Rg.
+    """
+    Tau_inv = define_tau_inverse_matrix(C_inverse, mean_Cg, mean_Rg, array_size)
+    InvTauEigenValues, InvTauEigenVectors = np.linalg.eig(Tau_inv)
+    InvTauEigenVectorsInv = np.linalg.inv(InvTauEigenVectors)
+    default_dt = -0.1 / np.min(InvTauEigenValues)  # time in which Qg don't change much
+    timeStep = -2 / np.max(InvTauEigenValues)
+    Tau = np.linalg.inv(Tau_inv)
+    matrixQnPart = -Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0])
+
+    return {
+        "Cg": np.array([mean_Cg] * array_size),
+        "Rg": np.array([mean_Rg] * array_size),
+        "Ec": 1 / (2 * mean_Cg),
+        "CondRg": mean_Rg,
+        "Tau_inv": Tau_inv,
+        "InvTauEigenVectors": InvTauEigenVectors,
+        "InvTauEigenValues": InvTauEigenValues,
+        "InvTauEigenVectorsInv": InvTauEigenVectorsInv,
+        "default_dt": default_dt,
+        "timeStep": timeStep,
+        "Tau": Tau,
+        "matrixQnPart": matrixQnPart
+    }
+
+def update_init_Cg_Rg(init: ExperimentInitialState, new_mean_Cg: float, new_mean_Rg: float) -> ExperimentInitialState:
+    """
+    Safely updates an existing initialization object with a new Cg and Rg,
+    recalculating all cascading dependencies while preserving the spatial grid.
+    """
+    updates = recalculate_tau_dependencies(init.C_inv, new_mean_Cg, new_mean_Rg, init.array_size)
+    return replace(init, **updates)
+
 def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, periodic_y: bool,
                           Cg_C_ratio: float, Rg_R_ratio: float, stdR_R_ratio: float, sigC_C_ratio: float) -> ExperimentInitialState:
     distribute_R = True
@@ -182,12 +218,8 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         mean_allCs, mean_sideCs = C, C
         std_allCs, std_sideCs = 0, 0
 
-    Tau_inv = define_tau_inverse_matrix(C_inverse, mean_Cg, mean_Rg, array_size)
-    InvTauEigenValues, InvTauEigenVectors = np.linalg.eig(Tau_inv)
-    InvTauEigenVectorsInv = np.linalg.inv(InvTauEigenVectors)
-    default_dt = -0.1 / np.min(InvTauEigenValues)  # time in which Qg don't change much
-    timeStep = -2 / np.max(InvTauEigenValues)
-    Tau = np.linalg.inv(Tau_inv)
+    # Retrieve all the Tau dependencies cleanly
+    tau_dependencies = recalculate_tau_dependencies(C_inverse, mean_Cg, mean_Rg, array_size)
 
     return ExperimentInitialState(
         e=(e := 1),
@@ -202,14 +234,10 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         distribute_R=distribute_R,
         distribute_C=distribute_C,
         T0=unitless_T0 * e * e / (C * kB),  # ALWAYS CHOOSE UNITS SUCH THAT T0 EQUALS T0_UNITLESS
-        Rg=np.array([mean_Rg] * array_size),
-        Cg=np.array([mean_Cg] * array_size),
-        Ec=1 / (2 * mean_Cg),
         resolution=0.000001,
         Steady_state_rep=100,
         Volts=abs(e) / C,  # normalized voltage unit
         Amp=abs(e) / (C * R),  # normalized current unit
-        CondRg=mean_Rg,
         C_avg=C,
         R_avg=R,
         loop_count=loop_count,
@@ -217,14 +245,6 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         R_t_i=R_t_i,
         Cix=Cix,
         C_inv=C_inverse,
-        Tau_inv=Tau_inv,
-        InvTauEigenVectors=InvTauEigenVectors,
-        InvTauEigenValues=InvTauEigenValues,
-        InvTauEigenVectorsInv=InvTauEigenVectorsInv,
-        default_dt=default_dt,
-        timeStep=timeStep,
-        Tau=Tau,
-        matrixQnPart=-Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0]), # Tau / (mean_Cg * mean_Rg) - np.eye(Tau.shape[0])
         sig=sig,
         stdR=stdR,
         mean_allCs=mean_allCs,
@@ -233,6 +253,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         std_sideCs=std_sideCs,
         flip=flip,
         periodic_y=periodic_y,
+        **tau_dependencies # Unpacks Ec, Cg, Rg, CondRg, Tau_inv, etc. into the class
     )
 
 

@@ -316,6 +316,37 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
     return Gamma_, reaction_index_
 
 
+def apply_multiple_transitions(n_list, reaction_index_, firings, e):
+    """
+    Applies multiple transitions based on an array of firing counts.
+    Works for both standard and gapped reaction indices.
+    """
+    for item, count in enumerate(firings):
+        if count == 0:
+            continue
+
+        reaction = reaction_index_[item]
+        # Check if it's a gapped reaction (length 3) or normal (length 2)
+        if len(reaction) == 3:
+            ll, mm, particles_moved = reaction
+            charge_transfer = e * particles_moved * count
+        else:
+            ll, mm = reaction
+            charge_transfer = e * count
+
+        # Apply the transitions
+        if isinstance(mm, int):  # island to island
+            n_list[ll] -= charge_transfer
+            n_list[mm] += charge_transfer
+        elif isinstance(mm, str):  # side to island
+            if mm == "from":
+                n_list[ll] += charge_transfer
+            elif mm == "to":
+                n_list[ll] -= charge_transfer
+
+    return n_list
+
+
 def Get_Steady_State(
         loop_index: int,
         init: ExperimentInitialState,
@@ -374,7 +405,9 @@ def Get_Steady_State(
         # starting conditions
         not_in_steady_state = True
         t = 0
+        t_ss = 0  # steady state timer for recording the current
         I_avg, I_var = 0, 0
+
         steady_state_timer = init.timeStep  # steady state fixed time
         steady_state_reps = init.Steady_state_rep * 5  # "5*RC"
 
@@ -442,15 +475,22 @@ def Get_Steady_State(
                     # picking a specific transition
                     n, l, m, chosen_rate = execute_transition(Gamma, n, reaction_index, init.e)
 
-                else:  # rates too low, Tau leap instead
+                else:  # rates too low, Poisson Tau-Leaping instead
                     dt = init.default_dt
-                    zero_curr_steady_state_counter += 1
-                    if (
-                            zero_curr_steady_state_counter % init.Steady_state_rep == 1
-                            and zero_curr_steady_state_counter > 2
-                    ):
-                        I_avg = 0
-                        not_in_steady_state = False
+                    # expected occurrences = Rate * Time
+                    firings = np.random.poisson(np.array(Gamma) * dt)
+                    if np.any(firings > 0):
+                        # A transition occurred! Apply them and reset freeze counter.
+                        zero_curr_steady_state_counter = 0
+                        n = apply_multiple_transitions(n, reaction_index, firings, init.e)
+                    else:
+                        # Truly no transitions occurred.
+                        zero_curr_steady_state_counter += 1
+                        if (
+                                zero_curr_steady_state_counter % init.Steady_state_rep == 1
+                                and zero_curr_steady_state_counter > 2
+                        ):
+                            not_in_steady_state = False
 
             else:
                 # gapped case
@@ -494,16 +534,22 @@ def Get_Steady_State(
                     # picking a specific transition
                     n, l, m, chosen_rate = execute_gapped_transition(Gamma, n, reaction_index, init.e)
 
-                else:  # rates too low, Tau leap instead
+                else:  # rates too low, Poisson Tau-Leaping instead
                     dt = init.default_dt
-                    zero_curr_steady_state_counter += 1
-                    if (
-                            zero_curr_steady_state_counter % init.Steady_state_rep == 1
-                            and zero_curr_steady_state_counter > 2
-
-                    ):
-                        I_avg = 0
-                        not_in_steady_state = False
+                    # expected occurrences = Rate * Time
+                    firings = np.random.poisson(np.array(Gamma) * dt)
+                    if np.any(firings > 0):
+                        # A transition occurred! Apply them and reset freeze counter.
+                        zero_curr_steady_state_counter = 0
+                        n = apply_multiple_transitions(n, reaction_index, firings, init.e)
+                    else:
+                        # Truly no transitions occurred.
+                        zero_curr_steady_state_counter += 1
+                        if (
+                                zero_curr_steady_state_counter % init.Steady_state_rep == 1
+                                and zero_curr_steady_state_counter > 2
+                        ):
+                            not_in_steady_state = False
 
             # solve ODE to update Qg, dQg/dt = (T^-1)(Qg-Qn)
             Qg = F.developQ(Qg, dt, n, VxCix, init)
@@ -512,8 +558,11 @@ def Get_Steady_State(
             if steady_state_reps <= 0:
                 I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, init.near_right, init.near_left,
                                                            init.row_num, periodic_y=periodic_y)
-                I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t, dt)
+                # Use t_ss for current statistics only
+                I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t_ss, dt)
+                t_ss += dt  # Increment steady state time
 
+            # Charge statistics continue to use standard time 't'
             Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
             n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
 
@@ -529,6 +578,10 @@ def Get_Steady_State(
                 if dist_new - dist > min(std, expected_error):
                     not_decreasing += 1
                     steady_state_reps = init.Steady_state_rep * 5
+                    # reset current stats/timer when steady state is lost
+                    t_ss = 0
+                    I_avg, I_var = 0, 0
+
                     if not not_decreasing % init.max_count:
                         error_count += 1
                         not_in_steady_state = False
@@ -553,6 +606,9 @@ def Get_Steady_State(
                 else:
                     steady_state_timer = init.timeStep
                     steady_state_reps = init.Steady_state_rep * 5
+                    # reset current stats/timer when steady state is lost
+                    t_ss = 0
+                    I_avg, I_var = 0, 0
 
             # update time
             dist = dist_new

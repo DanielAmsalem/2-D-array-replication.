@@ -22,6 +22,7 @@ from preparation import (
     validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
+    update_init_Cg_Rg
 )
 import curve_plotter
 from dataclasses import asdict
@@ -99,6 +100,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
             print("T0 is different in reference file or Temperature units != 1. switching.")
             init = F.swap_in_init("T0", T0_unitless, init)
             print(f"T0 is now {init.T0}")
+        print(f"success, starting run for {run_to_get_init_from}", flush=True)
+
+        # different Cg or Rg
+        if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
+            print(f"Mismatch in Cg or Rg from past run. Updating physics matrices...", flush=True)
+            init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
+            print(f"Successfully updated Cg to {init.Cg[0]} and Rg to {init.Rg[0]}. New Ec = {init.Ec}", flush=True)
+
         print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
     else:

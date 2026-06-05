@@ -402,9 +402,11 @@ def Gamma_cp(dE, T, Ec, gap, Rt):
     # Ej = tanh * gap/8Rt
     Ej = tanh * gap / (8 * Rt)
 
-    # P(-dE)
-    gauss = mp.exp(-((dE + Ec) ** 2) / (4 * Ec * T))
-    gauss = gauss / mp.sqrt(mp.pi * 4 * Ec * T)
+    # P2(-dE)
+    kappa_2 = mp.mpf('4')
+    mu = kappa_2 * Ec
+    gauss = mp.exp(-((dE + mu) ** 2) / (4 * mu * T))
+    gauss = gauss / mp.sqrt(mp.pi * 4 * mu * T)
 
     # Gamma_cp(dE) = (pi/2hbar)Ej^2 P(-dE)
     # set h=1 -> 2hbar = 1/pi
