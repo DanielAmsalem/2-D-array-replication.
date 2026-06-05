@@ -148,16 +148,17 @@ def define_tau_inverse_matrix(
     return -res / mean_Rg
 
 
-def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, periodic_y: bool) -> ExperimentInitialState:
+def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, periodic_y: bool,
+                          Cg_C_ratio: float, Rg_R_ratio: float, stdR_R_ratio: float, sigC_C_ratio: float) -> ExperimentInitialState:
     distribute_R = True
     distribute_C = True
 
     C: float = 1  # ALWAYS CHOOSE C = kb/e^2 SUCH THAT T0 EQUALS T0_UNITLESS
     R: float = 10
-    mean_Cg = 10 * C
-    mean_Rg = 100 * R
-    stdR = 0.9 * R
-    sig = 0.5 * C
+    mean_Cg = Cg_C_ratio * C  # default 10
+    mean_Rg = Rg_R_ratio * R  # default 100
+    stdR = stdR_R_ratio * R  # default 0.9
+    sig = sigC_C_ratio * C  # default 0.5
     C_to_Cix_ratio = 1
 
     row_num = 7
@@ -306,14 +307,14 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
     return np.array(rows, dtype=np.float64).reshape(-1, 4)
 
 
-def _calc_segments_gapped(args, dps):
+def _calc_segments_gapped(args):
     """
     Top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
     args: (val, temp, Ec, D) where val is the energy difference 'w'.
     """
     val, temp, Ec, D = args
 
-    mp.dps = dps
+    mp.dps = 50
 
     # Call the 2D quasiparticle integrand from Functions.py
     func = F.qp_integrand(temp, val, Ec, D)
@@ -324,7 +325,7 @@ def _calc_segments_gapped(args, dps):
     bracket_width = 5 * sigma
 
     # Base limits for the outer variable E
-    limits_E = [-mp.inf, -absval, absval, mp.inf]
+    limits_E = [-mp.inf, -absval, 0, absval, mp.inf]
 
     def get_mapping(a, b):
         if a == -mp.inf:
@@ -375,148 +376,6 @@ def _calc_segments_gapped(args, dps):
 
     # returns the exact same 4-element structure, so it plays nicely with output_table_triplets
     return [val, float(probability.real), temp, Ec]
-
-def _calc_segments_gapped_master(args, dps):
-    """
-    Master top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
-    Dynamically routes integration paths to isolate and annihilate singularities near the gap,
-    while utilizing fast, dynamic piece-wise integrations for the smooth far-field.
-    """
-    val, temp, Ec, D = args
-    mp.dps = dps
-
-    print(f"calculating w ={val}")
-    # Step 1: Define the small constant parameter
-    eps = mp.mpf('0.05')
-
-    # We use abs(val) to determine if the gaussian peak is near the gap
-    abs_val = mp.fabs(val)
-
-    sigma = mp.sqrt(2 * Ec * temp)
-    bracket_width = 5 * sigma
-
-    probability = mp.mpf('0')
-    theta_max = 12.0
-    signs = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
-
-    # ---------------------------------------------------------
-    # CASE 1 (Step 2): Gaussian is near or inside the gap
-    # ---------------------------------------------------------
-    if abs_val < D + eps:
-        def mapped_integrand(theta1, theta2, sign_E, sign_Etag):
-            E = sign_E * D * mp.cosh(theta1)
-            Etag = sign_Etag * D * mp.cosh(theta2) + val
-
-            gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
-            if gauss_arg < -200:
-                return mp.mpf('0')
-            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
-
-            f_E = F.f(E, temp)
-            f_Etag_w = F.f(Etag - val, temp)
-
-            measure = mp.fabs(E) * mp.fabs(Etag - val)
-            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
-
-        for s1, s2 in signs:
-            func_quadrant = lambda t1, t2, s1=s1, s2=s2: mapped_integrand(t1, t2, s1, s2)
-            # Trivial constant limits; handled instantly with gauss-legendre
-            res = mp.quad(func_quadrant, [0, theta_max], [0, theta_max], method='gauss-legendre')
-            probability += res
-
-        return [val, float(probability.real), temp, Ec]
-
-    # ---------------------------------------------------------
-    # CASE 2 (Steps 3, 4, 5, 6): Gaussian is far from the gap
-    # ---------------------------------------------------------
-    else:
-        func = F.qp_integrand(temp, val, Ec, D)
-
-        # Step 4 & 5: The Outer Integral (Far-Field Regions)
-        limits_E_far_neg = [-mp.inf, -abs_val, -D - eps]
-        limits_E_far_pos = [D + eps, abs_val, mp.inf]
-
-        def get_mapping(a, b):
-            if a == -mp.inf:
-                return lambda t: (b - t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
-            elif b == mp.inf:
-                return lambda t: (a + t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
-            else:
-                width = b - a
-                if width < 1e-8:
-                    return None
-                return lambda t: (a + t * width, width)
-
-        mappings_E = []
-        for lims in [limits_E_far_neg, limits_E_far_pos]:
-            for i in range(len(lims) - 1):
-                m = get_mapping(lims[i], lims[i + 1])
-                if m is not None:
-                    mappings_E.append(m)
-
-        for m_E in mappings_E:
-            def outer_integrand(t_E, m_E=m_E):
-                if t_E <= 0 or t_E >= 1:
-                    return mp.mpf('0')
-
-                E, jac_E = m_E(t_E)
-                peak_center = E - Ec
-
-                # Etag topological boundaries safely use D directly
-                dynamic_limits = [
-                    -mp.inf,
-                    mp.mpf(val - D),
-                    mp.mpf(val),
-                    mp.mpf(val + D),
-                    peak_center - bracket_width,
-                    peak_center + bracket_width,
-                    mp.inf
-                ]
-
-                sorted_Etag_limits = sorted(list(set(dynamic_limits)))
-
-                # Filter microscopic 1e-8 segments purely in physical space
-                cleaned_limits = [sorted_Etag_limits[0]]
-                for cp in sorted_Etag_limits[1:]:
-                    if cp - cleaned_limits[-1] > 1e-8:
-                        cleaned_limits.append(cp)
-
-                inner_integral = mp.quad(lambda Etag: func(E, Etag), cleaned_limits, method='tanh-sinh', maxdegree=7)
-
-                return inner_integral * jac_E
-
-            segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh', maxdegree=7)
-            probability += segment_prob
-
-        # Step 6: The Inner Integrals (Near the Gap)
-        # Calculates E strictly in [-D-eps, -D] and [D, D+eps] using singularity-free transforms
-        def mapped_integrand_near(theta1, theta2, sign_E, sign_Etag):
-            E = sign_E * D * mp.cosh(theta1)
-            Etag = sign_Etag * D * mp.cosh(theta2) + val
-
-            gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
-            if gauss_arg < -200:
-                return mp.mpf('0')
-            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
-
-            f_E = F.f(E, temp)
-            f_Etag_w = F.f(Etag - val, temp)
-
-            measure = mp.fabs(E) * mp.fabs(Etag - val)
-            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
-
-        # D * cosh(theta1_max) = D + eps
-        theta1_max = mp.acosh((D + eps) / D)
-
-        for s1, s2 in signs:
-            func_quadrant = lambda t1, t2, s1=s1, s2=s2: mapped_integrand_near(t1, t2, s1, s2)
-
-            # Since theta1_max and theta_max are constants, caching is perfectly safe.
-            # No 't' transformations needed. No Gaussian peaks missed.
-            res = mp.quad(func_quadrant, [0, theta1_max], [0, theta_max], method='gauss-legendre')
-            probability += res
-
-        return [val, float(probability.real), temp, Ec]
 
 
 def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,

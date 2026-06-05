@@ -30,8 +30,13 @@ import csv
 import math
 import time
 
+#######
+Cg = 20
+Cg_list = [20, 50]
+######
 
-def main(import_export: IMPORT_EXPORT, run_name) -> None:
+
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
     # RUN TYPE
     flip = False
     print(f"flip = {flip}", flush=True)
@@ -42,18 +47,29 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
 
     # FIXED PARAMETERS
     V_capture = 4
-    pos_energy_boundT0 = 0.01  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
-    neg_energy_boundT0 = -0.11  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
-
+    if Cg in Cg_list:
+        if Cg == 20:
+            pos_energy_boundT0 = 0.02  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
+            neg_energy_boundT0 = -0.07  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+        elif Cg == 50:
+            pos_energy_boundT0 = 0.03  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
+            neg_energy_boundT0 = -0.05  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+        else:
+            raise ValueError("what")
+    else:
+        raise ValueError("Cg must be in Cg_list")
     # EXPERIMENT PARAMETERS
     loop_count = max(num_workers, 100)
-    T0_unitless = 0.001
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
     last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
     repetition_list = list(range(1, 10, 4))
+    T0_unitless = 0.001
     gap_ratio = 0
+    mean_Rg = 100
+    stdR = 0.9
+    sig = 0.5
     ###################################
 
     # MESSAGES
@@ -63,7 +79,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     if loop_count != 1:
         plot_ongoing_voltage_map = False
 
-    null_path_name = import_export.export_path / f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}.npz"
+    null_path_name = (import_export.export_path /
+                      f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
     # choose a specific run
     run_to_get_init_from = "20251207_17h43m26s"
@@ -75,6 +92,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
         # recreate old init state
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
+
+        # if old init has inappropriate variables
         init = F.swap_in_init("flip", flip, init)
         if init.T0 != T0_unitless:
             print("T0 is different in reference file or Temperature units != 1. switching.")
@@ -84,7 +103,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
 
     else:
         # create new initial state
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y)
+        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
+                                     Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
         print("CREATED NEW INIT FILE")
 
     ### report init state to report file
@@ -310,9 +330,11 @@ if __name__ == "__main__":
         IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20.npz" for n in range(501)],
-            csv_table_path=MP_COMPUTE_PATH / f"table.csv",
+            prepare_table_triplets_file_list=[EXPORT_PATH /
+                                              f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)],
+            csv_table_path=MP_COMPUTE_PATH / f"table_Cg{Cg}.csv",
             results_dir_path=RESULTS_DIR_PATH
         ),
-        run_name=run_name_flat
+        run_name=run_name_flat,
+        mean_Cg=Cg
     )
