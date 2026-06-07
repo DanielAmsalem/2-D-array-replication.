@@ -11,8 +11,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
 run_names = [
-    "20260503_15h47m58s",
-    "20260503_15h48m29s",
+    "20260607_14h34m28s"
 ]
 
 for run_name in run_names:

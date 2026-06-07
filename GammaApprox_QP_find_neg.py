@@ -1,11 +1,12 @@
 import os
+import csv
 
 ratio = 1
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = int(0.9 * total_cpus / ratio)
+num_workers = max(int(total_cpus / ratio) - 5, 1)
 print(f"Worker number set to {num_workers} for {total_cpus} CPUs", flush=True)
 
 import concurrent.futures
@@ -21,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # --- Parameters ---
-DPS = 50  # Global precision parameter
+DPS = 10  # Global precision parameter
 Cg = 50
 
 
@@ -65,8 +66,6 @@ def f(x, t):
 def _calc_segments_gapped_master(args, dps):
     """
     Master top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
-    Dynamically routes integration paths to isolate and annihilate singularities near the gap,
-    while utilizing fast, dynamic piece-wise integrations for the smooth far-field.
     """
     val = mp.mpf(args[0])
     temp = mp.mpf(args[1])
@@ -154,14 +153,12 @@ def _calc_segments_gapped_master(args, dps):
                 ]
 
                 sorted_Etag_limits = sorted(list(set(dynamic_limits)))
-
                 cleaned_limits = [sorted_Etag_limits[0]]
                 for cp in sorted_Etag_limits[1:]:
                     if cp - cleaned_limits[-1] > threshold:
                         cleaned_limits.append(cp)
 
                 inner_integral = mp.quad(lambda Etag: func(E, Etag), cleaned_limits, method='tanh-sinh')
-
                 return inner_integral * jac_E
 
             segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh')
@@ -238,9 +235,9 @@ def _calc_segments_gapped_master(args, dps):
         return [args[0], str(probability.real), args[1], args[2]]
 
 
-def compute_gamma_worker(w_str, T_str, Rt, g_ratio_str, mu_str, eps_str):
+def compute_gamma_worker(w_str, T_str, gap_ratio_str, mu_str, eps_str):
     mp.dps = DPS
-    D_mp = mp.mpf(g_ratio_str) * mp.mpf(mu_str)
+    D_mp = mp.mpf(gap_ratio_str) * mp.mpf(mu_str)
     args = (w_str, T_str, mu_str, str(D_mp), eps_str)
     return _calc_segments_gapped_master(args, DPS)[1]
 
@@ -257,146 +254,181 @@ if __name__ == '__main__':
     w_values_str = [str(w_start + mp.mpf(i) * (w_end - w_start) / mp.mpf(num_points - 1)) for i in range(num_points)]
     w_values_float = [float(w) for w in w_values_str]
 
-    T_values_str = ['0.001', '0.01', '0.1']
-    gap_ratios_str = ['2', '0.2']
-    EPS_values_str = ['1e-10']
+    gap_ratio_str = '2'
+    eps_str = '1e-10'
 
     mu_mp = mp.mpf('0.5') / mp.mpf(str(Cg))
     mu_str = str(mu_mp)
+    D_mp = mp.mpf(gap_ratio_str) * mu_mp
 
-    for eps_str in EPS_values_str:
-        print(f"\n==============================================")
-        print(f"Starting calculations for EPS = {eps_str}")
-        print(f"==============================================", flush=True)
+    # Temperature iteration sequence
+    n_values = [0, 1, 3, 5, 7, 9, 11, 13, 15, 19, 20, 24, 28, 32, 36, 40]
 
-        w_args = []
-        T_args = []
-        Rt_args = []
-        GAP_args = []
-        EPS_args = []
+    # Setup CSV tracking files
+    summary_filename = DIR / f"neg_Wc_thresholds_DPS{DPS}_Cg{Cg}.csv"
+    detailed_filename = DIR / f"neg_Detailed_Data_DPS{DPS}_Cg{Cg}.csv"
 
-        for g_ratio_str in gap_ratios_str:
-            for T_str in T_values_str:
-                w_args.extend(w_values_str)
-                T_args.extend([T_str] * len(w_values_str))
-                Rt_args.extend([1] * len(w_values_str))
-                GAP_args.extend([g_ratio_str] * len(w_values_str))
-                EPS_args.extend([eps_str] * len(w_values_str))
+    print(f"\n==============================================")
+    print(f"PHASE 1: Building Master Task List for ALL temperatures...")
 
-        total_tasks = len(w_args)
-        print(f"Submitting all {total_tasks} tasks simultaneously...", flush=True)
+    # Pre-allocate master lists for the mega-pool
+    w_args_all = []
+    T_args_all = []
+    GAP_args_all = []
+    MU_args_all = []
+    EPS_args_all = []
 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-            all_gamma_results_str = list(executor.map(
-                compute_gamma_worker,
-                w_args, T_args, Rt_args, GAP_args, [mu_str] * total_tasks, EPS_args
-            ))
+    # Flatten all temperatures and energy points into a 1D queue
+    for n in n_values:
+        T_mp = mp.mpf('0.001') + mp.mpf('0.006') * mp.mpf(n) / mp.mpf('20')
+        T_str = str(T_mp)
 
-        print("Calculations complete. Evaluating exact analytical physics...", flush=True)
+        w_args_all.extend(w_values_str)
+        T_args_all.extend([T_str] * num_points)
+        GAP_args_all.extend([gap_ratio_str] * num_points)
+        MU_args_all.extend([mu_str] * num_points)
+        EPS_args_all.extend([eps_str] * num_points)
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-        chunk_size = len(w_values_float)
-        colors = {0.001: '#1f77b4', 0.01: '#ff7f0e', 0.1: '#2ca02c'}
+    total_tasks = len(w_args_all)
+    print(f"Total tasks assembled: {total_tasks}")
+    print(f"==============================================", flush=True)
 
-        idx = 0
-        for g_ratio_str in gap_ratios_str:
-            D_mp = mp.mpf(g_ratio_str) * mu_mp
+    print(f"\nPHASE 2: Saturating {num_workers} CPUs with multiprocessing pool...", flush=True)
 
-            for T_str in T_values_str:
-                gamma_chunk_str = all_gamma_results_str[idx: idx + chunk_size]
-                idx += chunk_size
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        all_gamma_results_str = list(executor.map(
+            compute_gamma_worker,
+            w_args_all, T_args_all, GAP_args_all, MU_args_all, EPS_args_all
+        ))
 
-                T_float = float(T_str)
-                T_mp = mp.mpf(T_str)
-                c = colors[T_float]
-                lbl_main = f"T={T_float}, gap={g_ratio_str}"
+    print("\nPHASE 3: Parallel Execution Complete. Extracting Analytical Data & Plotting...", flush=True)
 
-                gamma_plot = []
-                ln_err_y1 = []
-                ln_err_y2 = []
-                ln_err_y3 = []
+    with open(summary_filename, mode='w', newline='') as summary_file, \
+            open(detailed_filename, mode='w', newline='') as detailed_file:
 
-                for w_str, g_str in zip(w_values_str, gamma_chunk_str):
-                    w_mp = mp.mpf(w_str)
-                    g_mp = mp.mpf(g_str)
-                    gamma_plot.append(float(g_mp))
+        # Setup writers
+        sum_writer = csv.writer(summary_file)
+        sum_writer.writerow(['n', 'T', 'Wc_n'])
 
-                    # V_nom is exactly the base integral width uncO
-                    uncO = -(mu_mp + w_mp)
-                    r = D_mp / uncO
+        det_writer = csv.writer(detailed_file)
+        det_writer.writerow(
+            ['n', 'T', 'w', 'Gamma_numeric', 'y1_Puiseux', 'y2_Elliptic', 'y3_Ultimate', 'Err_y1', 'Err_y2', 'Err_y3'])
 
-                    # ========================================================
-                    # MODEL 1: Rigorous Puiseux Asymptotic Expansion
-                    # ========================================================
-                    y1 = uncO * (mp.mpf('1') - r ** 2 + (r ** 4) * mp.log(mp.mpf('1') / r) - mp.mpf('3.25') * (r ** 4))
+        # Iterate through the flattened results, chunking by num_points
+        for idx, n in enumerate(n_values):
+            T_mp = mp.mpf('0.001') + mp.mpf('0.006') * mp.mpf(n) / mp.mpf('20')
+            T_str = str(T_mp)
+            T_float = float(T_mp)
+
+            print(f"--> Processing Analytical Evaluation for n = {n} (T = {T_float:.5f})", flush=True)
+
+            # Slice the master results list for the current temperature chunk
+            chunk_start = idx * num_points
+            chunk_end = chunk_start + num_points
+            gamma_chunk_str = all_gamma_results_str[chunk_start:chunk_end]
+
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+            gamma_plot = []
+            ln_err_y3 = []
+            diffs = []
+
+            for w_str, g_str in zip(w_values_str, gamma_chunk_str):
+                w_mp = mp.mpf(w_str)
+                g_mp = mp.mpf(g_str)
+                gamma_plot.append(float(g_mp))
+
+                # V_nom is exactly the base integral width uncO
+                uncO = -(mu_mp + w_mp)
+                r = D_mp / uncO
+
+                # ========================================================
+                # MODEL 1: Rigorous Puiseux Asymptotic Expansion
+                # ========================================================
+                y1 = uncO * (mp.mpf('1') - r ** 2 + (r ** 4) * mp.log(mp.mpf('1') / r) - mp.mpf('3.25') * (r ** 4))
 
 
-                    # ========================================================
-                    # MODEL 2: Exact Elliptic Integral (T=0)
-                    # ========================================================
-                    def exact_ellip(v):
-                        m_param = ((v - mp.mpf('2') * D_mp) / (v + mp.mpf('2') * D_mp)) ** 2
-                        term1 = (v + mp.mpf('2') * D_mp) * mp.ellipe(m_param)
-                        term2 = (mp.mpf('4') * D_mp * (v + D_mp)) / (v + mp.mpf('2') * D_mp) * mp.ellipk(m_param)
-                        return term1 - term2
+                # ========================================================
+                # MODEL 2: Exact Elliptic Integral (T=0)
+                # ========================================================
+                def exact_ellip(v):
+                    m_param = ((v - mp.mpf('2') * D_mp) / (v + mp.mpf('2') * D_mp)) ** 2
+                    term1 = (v + mp.mpf('2') * D_mp) * mp.ellipe(m_param)
+                    term2 = (mp.mpf('4') * D_mp * (v + D_mp)) / (v + mp.mpf('2') * D_mp) * mp.ellipk(m_param)
+                    return term1 - term2
 
 
-                    y2 = exact_ellip(uncO)
+                y2 = exact_ellip(uncO)
 
-                    # ========================================================
-                    # MODEL 3: Ultimate Formulation (Elliptic + Gaussian Variance)
-                    # ========================================================
-                    sigma_sq = mp.mpf('2') * mu_mp * T_mp
+                # ========================================================
+                # MODEL 3: Ultimate Formulation (Elliptic + Gaussian Variance)
+                # ========================================================
+                sigma_sq = mp.mpf('2') * mu_mp * T_mp
 
-                    # The EXACT closed-form second derivative from Mathematica
-                    d2_exact = (-2 * D_mp ** 2 * ((4 * D_mp ** 2 + uncO ** 2) * mp.ellipe(
-                        (-2 * D_mp + uncO) ** 2 / (2 * D_mp + uncO) ** 2) - 4 * D_mp * uncO * mp.ellipk(
-                        (-2 * D_mp + uncO) ** 2 / (2 * D_mp + uncO) ** 2))) / (
-                                       uncO ** 2 * (-2 * D_mp + uncO) ** 2 * (2 * D_mp + uncO))
+                d2_exact = (-2 * D_mp ** 2 * ((4 * D_mp ** 2 + uncO ** 2) * mp.ellipe(
+                    (-2 * D_mp + uncO) ** 2 / (2 * D_mp + uncO) ** 2) - 4 * D_mp * uncO * mp.ellipk(
+                    (-2 * D_mp + uncO) ** 2 / (2 * D_mp + uncO) ** 2))) / (
+                                   uncO ** 2 * (-2 * D_mp + uncO) ** 2 * (2 * D_mp + uncO))
 
-                    # Apply the Gaussian thermal smearing
-                    y3 = y2 + mp.mpf('0.5') * sigma_sq * d2_exact
+                y3 = y2 + mp.mpf('0.5') * sigma_sq * d2_exact
 
-                    # Error calculations
-                    diff1 = mp.fabs(g_mp - y1)
-                    diff2 = mp.fabs(g_mp - y2)
-                    diff3 = mp.fabs(g_mp - y3)
+                # Error calculations
+                diff1 = mp.fabs(g_mp - y1)
+                diff2 = mp.fabs(g_mp - y2)
+                diff3 = mp.fabs(g_mp - y3)
+                diffs.append(diff3)
 
-                    err1 = float(mp.log(diff1)) if diff1 > 0 else np.nan
-                    err2 = float(mp.log(diff2)) if diff2 > 0 else np.nan
-                    err3 = float(mp.log(diff3)) if diff3 > 0 else np.nan
+                err3 = float(mp.log(diff3)) if diff3 > 0 else np.nan
+                ln_err_y3.append(err3)
 
-                    ln_err_y1.append(err1)
-                    ln_err_y2.append(err2)
-                    ln_err_y3.append(err3)
+                # --- Write all exact 50-digit strings to detailed CSV ---
+                det_writer.writerow([
+                    n, T_str, w_str, g_str,
+                    str(y1), str(y2), str(y3),
+                    str(diff1), str(diff2), str(diff3)
+                ])
 
-                ax1.plot(w_values_float, gamma_plot, color=c, linestyle='-', linewidth=2, label=lbl_main)
+            # --- Extract Wc_n Boundary ---
+            target_error = mp.mpf('1e-9')
+            Wc_n = "N/A"
+            for w_val, diff in zip(reversed(w_values_float), reversed(diffs)):
+                if diff < target_error:
+                    Wc_n = w_val
+                    break
 
-                ax2.plot(w_values_float, ln_err_y1, color=c, linestyle='-', linewidth=2,
-                         label=f"T={T_float}, Puiseux Asymptote")
-                ax2.plot(w_values_float, ln_err_y2, color=c, linestyle='--', linewidth=2,
-                         label=f"T={T_float}, Exact Elliptic")
-                ax2.plot(w_values_float, ln_err_y3, color=c, linestyle=':', linewidth=2.5,
-                         label=f"T={T_float}, Elliptic + Gaussian")
+            # Write summary CSV
+            sum_writer.writerow([n, T_float, Wc_n])
+            summary_file.flush()
 
-        ax1.set_title(fr"$\Gamma(w)$ vs $w$, fixed $\epsilon = {eps_str}$")
-        ax1.set_xlabel("w")
-        ax1.set_ylabel(r"$\Gamma$")
-        ax1.grid(True, linestyle='--', alpha=0.7)
-        ax1.legend(loc='upper right')
+            # Plotting routine
+            lbl_main = f"T={T_float:.5f} (n={n})"
+            ax1.plot(w_values_float, gamma_plot, color='#1f77b4', linestyle='-', linewidth=2, label=lbl_main)
 
-        ax2.set_title(r"Log Error: Analytical Milestones evaluated at $50$ dps")
-        ax2.set_xlabel("w")
-        ax2.set_ylabel(r"$\ln(\text{Error})$")
-        ax2.grid(True, linestyle='--', alpha=0.7)
-        ax2.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
+            ax2.plot(w_values_float, ln_err_y3, color='#ff7f0e', linestyle='-', linewidth=2,
+                     label="Elliptic + Gaussian")
 
-        plt.tight_layout()
+            ax2.axhline(y=np.log(1e-9), color='red', linestyle=':', label='1e-9 Threshold')
+            if Wc_n != "N/A":
+                ax2.axvline(x=Wc_n, color='green', linestyle='--', label=f'Wc = {Wc_n:.2f}')
 
-        filename = datetime.datetime.now().strftime(
-            "%Y-%m-%d_%H-%M-%S") + f"_mp_dps{DPS}_eps{eps_str}_multi_gap_analysis.png"
-        output_file = DIR / filename
+            ax1.set_title(fr"$\Gamma(w)$ vs $w$ (n={n}, fixed $\epsilon = 10^{{-10}}$)")
+            ax1.set_xlabel("w")
+            ax1.set_ylabel(r"$\Gamma$")
+            ax1.grid(True, linestyle='--', alpha=0.7)
+            ax1.legend(loc='upper right')
 
-        plt.savefig(fname=output_file, dpi=600, bbox_inches="tight")
-        print(f"Plot saved successfully to {output_file}", flush=True)
-        plt.close(fig)
+            ax2.set_title(r"Log Error: analytic approximation at very negative $w$")
+            ax2.set_xlabel("w")
+            ax2.set_ylabel(r"$\ln(\text{Error})$")
+            ax2.grid(True, linestyle='--', alpha=0.7)
+            ax2.legend(loc='upper left', fontsize='small')
+
+            plt.tight_layout()
+
+            filename = DIR / f"neg_graph_n{n}_DPS{DPS}_eps{eps_str}_Cg{Cg}.png"
+            plt.savefig(fname=filename, dpi=600, bbox_inches="tight")
+            plt.close(fig)
+
+    print(
+        f"\nAll iterations complete! Summary saved to {summary_filename.name}, raw traces saved to {detailed_filename.name}",
+        flush=True)

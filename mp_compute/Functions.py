@@ -415,38 +415,42 @@ def Gamma_cp(dE, T, Ec, gap, Rt):
 
 
 def qp_integrand(T, dE, Ec, D):
+    """Master Quasi-particle Convolution Integrand."""
+
     def conv(E, Etag):
         n_E = dos(E, D)
-        if n_E == 0:
-            return 0
+        if n_E == mp.mpf('0'):
+            return mp.mpf('0')
 
         n_Etag = dos(Etag - dE, D)
-        if n_Etag == 0:
-            return 0
+        if n_Etag == mp.mpf('0'):
+            return mp.mpf('0')
 
         gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
-        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
+        gauss = gauss / sqrt(mp.pi * 4 * Ec * T)
 
-        return n_E * n_Etag * f(E, T) * (1 - f(Etag - dE, T)) * gauss
+        return n_E * n_Etag * f(E, T) * (mp.mpf('1') - f(Etag - dE, T)) * gauss
 
     return conv
 
 
 def f(x, t):
-    if x / t > 1e10:
+    """Fermi-Dirac distribution strictly using mpmath for precision preservation."""
+    if x / t > mp.mpf('1e10'):
         return exp(-x / t)
-    if x / t < -1e10:
-        return 1
+    if x / t < mp.mpf('-1e10'):
+        return mp.mpf('1')
     expon = exp(x / t)
-    return 1 / (1 + expon)
+    return mp.mpf('1') / (mp.mpf('1') + expon)
 
 
 def dos(E, D):
+    """Superconducting Density of States."""
     if mpmath.fabs(E) <= D:
-        return 0
+        return mp.mpf('0')
     val = E * E - D * D
     if val <= 0:
-        return 0
+        return mp.mpf('0')
     return mpmath.fabs(E) / sqrt(val)
 
 
@@ -481,3 +485,16 @@ def calc_expected_dist_std(T_grad, T0):
     moment_2, err_2 = quad(integrand_2nd_moment, 0, upper_limit, epsabs=1e-10, epsrel=1e-10)
 
     return moment_1  # expected err
+
+
+def get_mapping(a, b, threshold):
+    """Affine mapping generator for tanh-sinh infinity bounds."""
+    if a == -mp.inf:
+        return lambda t: (b - t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
+    elif b == mp.inf:
+        return lambda t: (a + t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
+    else:
+        width = b - a
+        if width < threshold:
+            return None
+        return lambda t: (a + t * width, width)

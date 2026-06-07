@@ -32,15 +32,16 @@ import math
 import time
 
 #######
-Cg = 20
-Cg_list = [20, 50]
+Cg = 2
+Cg_list = [2, 5, 10, 20, 50]
+
+
 ######
 
 
 def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
     # RUN TYPE
     flip = False
-    print(f"flip = {flip}", flush=True)
     first_run = True  #############################
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
@@ -53,8 +54,17 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
             pos_energy_boundT0 = 0.02  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
             neg_energy_boundT0 = -0.07  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
         elif Cg == 50:
-            pos_energy_boundT0 = 0.03  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
-            neg_energy_boundT0 = -0.05  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+            pos_energy_boundT0 = 0.03
+            neg_energy_boundT0 = -0.05
+        elif Cg == 10:
+            pos_energy_boundT0 = -0.01
+            neg_energy_boundT0 = -0.11
+        elif Cg == 5:
+            pos_energy_boundT0 = -0.02
+            neg_energy_boundT0 = -0.18
+        elif Cg == 2:
+            pos_energy_boundT0 = -0.12
+            neg_energy_boundT0 = -0.37
         else:
             raise ValueError("what")
     else:
@@ -64,19 +74,25 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
-    last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = list(range(1, 10, 4))
+    last_repetition_to_do = 1  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = [7]
     T0_unitless = 0.001
     gap_ratio = 0
     mean_Rg = 100
-    stdR = 0.9
-    sig = 0.5
+    stdR = 2
+    sig = 0.05
     ###################################
 
     # MESSAGES
+    print(f"############# MAIN PARAMETERS ##################")
+    print(f"flip = {flip}", flush=True)
     print(f"loop max: {loop_count}", flush=True)
     print(f"gap_ratio = {gap_ratio}", flush=True)
+    print(f"Cg = {Cg}")
+    print(f"stdR = {stdR}")
+    print(f"sig = {sig}")
     print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
+    print(f"############# INITZIALIZING GRID ##################")
     if loop_count != 1:
         plot_ongoing_voltage_map = False
 
@@ -84,7 +100,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
                       f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
     # choose a specific run
-    run_to_get_init_from = "20251207_17h43m26s"
+    run_to_get_init_from = "20260606_22h05m04s"  # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ; sig = 0.05, stdR =2 "20260606_22h05m04s"
     results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
@@ -100,7 +116,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
             print("T0 is different in reference file or Temperature units != 1. switching.")
             init = F.swap_in_init("T0", T0_unitless, init)
             print(f"T0 is now {init.T0}")
-        print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
         # different Cg or Rg
         if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
@@ -160,6 +175,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
     expected_err = F.calc_expected_dist_std(T, init.T0)
+    print("############# RUN VIRTUAL EXPERIMENT ##################", flush=True)
 
     if first_run:
         t0 = time.time()
@@ -226,11 +242,16 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
         for row in csv.reader(f):
             # Ensure row is not empty and row[0] is a valid integer
             if row and row[0].strip().lstrip('-').isdigit():
-                rep_idx = int(row[0])
-                bounds_dict[rep_idx] = {
-                    "neg": float(row[1]),
-                    "pos": float(row[2])
-                }
+                # Check that columns 1 and 2 actually exist and aren't empty
+                if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
+                    rep_idx = int(row[0])
+                    bounds_dict[rep_idx] = {
+                        "neg": float(row[1]),
+                        "pos": float(row[2])
+                    }
+                else:
+                    # Skip rows like "21,,," where bounds are missing
+                    continue
 
     ### run thermopower until I(V)<0
     current_at_V0 = True

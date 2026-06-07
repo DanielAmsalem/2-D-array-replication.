@@ -176,6 +176,7 @@ def recalculate_tau_dependencies(C_inverse: npt.NDArray, mean_Cg: float, mean_Rg
         "matrixQnPart": matrixQnPart
     }
 
+
 def update_init_Cg_Rg(init: ExperimentInitialState, new_mean_Cg: float, new_mean_Rg: float) -> ExperimentInitialState:
     """
     Safely updates an existing initialization object with a new Cg and Rg,
@@ -184,8 +185,10 @@ def update_init_Cg_Rg(init: ExperimentInitialState, new_mean_Cg: float, new_mean
     updates = recalculate_tau_dependencies(init.C_inv, new_mean_Cg, new_mean_Rg, init.array_size)
     return replace(init, **updates)
 
+
 def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, periodic_y: bool,
-                          Cg_C_ratio: float, Rg_R_ratio: float, stdR_R_ratio: float, sigC_C_ratio: float) -> ExperimentInitialState:
+                          Cg_C_ratio: float, Rg_R_ratio: float, stdR_R_ratio: float,
+                          sigC_C_ratio: float) -> ExperimentInitialState:
     distribute_R = True
     distribute_C = True
 
@@ -253,7 +256,7 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
         std_sideCs=std_sideCs,
         flip=flip,
         periodic_y=periodic_y,
-        **tau_dependencies # Unpacks Ec, Cg, Rg, CondRg, Tau_inv, etc. into the class
+        **tau_dependencies  # Unpacks Ec, Cg, Rg, CondRg, Tau_inv, etc. into the class
     )
 
 
@@ -328,115 +331,236 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
     return np.array(rows, dtype=np.float64).reshape(-1, 4)
 
 
-def _calc_segments_gapped(args):
+def _calc_segments_gapped_master(args, dps):
     """
-    Top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
-    args: (val, temp, Ec, D) where val is the energy difference 'w'.
+    Master top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
     """
-    val, temp, Ec, D = args
+    val = mp.mpf(args[0])
+    temp = mp.mpf(args[1])
+    Ec = mp.mpf(args[2])
+    D = mp.mpf(args[3])
+    eps = mp.mpf(args[4])
 
-    mp.dps = 50
+    mp.dps = dps
+    threshold = mp.mpf('1e-20')
 
-    # Call the 2D quasiparticle integrand from Functions.py
-    func = F.qp_integrand(temp, val, Ec, D)
-    absval = abs(D)
+    print(f"START calculating w = {float(val):.3f} [T={float(temp)}]", flush=True)
 
-    # Calculate the targeted segmentation width for the Gaussian spike
+    abs_val = mp.fabs(val)
     sigma = mp.sqrt(2 * Ec * temp)
     bracket_width = 5 * sigma
 
-    # Base limits for the outer variable E
-    limits_E = [-mp.inf, -absval, 0, absval, mp.inf]
+    probability = mp.mpf('0')
+    theta_max = mp.mpf('12.0')
+    signs = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
 
-    def get_mapping(a, b):
-        if a == -mp.inf:
-            return lambda t: (b - t / (1 - t), 1 / ((1 - t) ** 2))
-        elif b == mp.inf:
-            return lambda t: (a + t / (1 - t), 1 / ((1 - t) ** 2))
-        else:
-            width = b - a
-            if width < 1e-8:
-                return None
-            return lambda t: (a + t * width, width)
+    # CASE 1: Near or inside the gap
+    if abs_val < D + eps:
+        def mapped_integrand(theta1, theta2, sign_E, sign_Etag):
+            E = sign_E * D * mp.cosh(theta1)
+            Etag = sign_Etag * D * mp.cosh(theta2) + val
 
-    mappings_E = [get_mapping(limits_E[i], limits_E[i + 1]) for i in range(len(limits_E) - 1)]
+            gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
+            if gauss_arg < -200:
+                return mp.mpf('0')
+            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
 
-    probability = 0
+            f_E = F.f(E, temp)
+            f_Etag_w = F.f(Etag - val, temp)
 
-    for m_E in mappings_E:
-        if m_E is None: continue
+            measure = mp.fabs(E) * mp.fabs(Etag - val)
+            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
 
-        def outer_integrand(t_E, m_E=m_E):
-            if t_E <= 0 or t_E >= 1:
-                return 0
+        for s1, s2 in signs:
+            func_quadrant = lambda t1, t2, s1=s1, s2=s2: mapped_integrand(t1, t2, s1, s2)
+            res = mp.quad(func_quadrant, [0, theta_max], [0, theta_max], method='gauss-legendre')
+            probability += res
 
-            E, jac_E = m_E(t_E)
+        return [args[0], str(probability.real), args[1], args[2]]
 
-            # Locate the exact center of the Gaussian spike for this specific E
-            peak_center = E - Ec
+    # CASE 2: Far from the gap
+    else:
+        func = F.qp_integrand(temp, val, Ec, D)
 
-            # w-shifted singularities with +-sigma on the gauss peak
-            dynamic_limits = [
-                -mp.inf,
-                mp.mpf(val - absval),
-                mp.mpf(val),
-                mp.mpf(val + absval),
-                peak_center - bracket_width,
-                peak_center + bracket_width,
-                mp.inf
-            ]
+        limits_E_far_neg = [-mp.inf, -abs_val, -D - eps]
+        limits_E_far_pos = [D + eps, abs_val, mp.inf]
 
-            sorted_Etag_limits = sorted(list(set(dynamic_limits)))
-            inner_integral = mp.quad(lambda Etag: func(E, Etag), sorted_Etag_limits, method='tanh-sinh', maxdegree=7)
+        mappings_E = []
+        for lims in [limits_E_far_neg, limits_E_far_pos]:
+            for i in range(len(lims) - 1):
+                m = F.get_mapping(lims[i], lims[i + 1], threshold)
+                if m is not None:
+                    mappings_E.append(m)
 
-            return inner_integral * jac_E
+        for m_E in mappings_E:
+            def outer_integrand(t_E, m_E=m_E):
+                if t_E <= 0 or t_E >= 1:
+                    return mp.mpf('0')
 
-        # Integrate the mapped outer function
-        segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh', maxdegree=7)
-        probability += segment_prob
+                E, jac_E = m_E(t_E)
+                peak_center = E - Ec
 
-    # returns the exact same 4-element structure, so it plays nicely with output_table_triplets
-    return [val, float(probability.real), temp, Ec]
+                dynamic_limits = [
+                    -mp.inf,
+                    mp.mpf(val - D),
+                    mp.mpf(val),
+                    mp.mpf(val + D),
+                    peak_center - bracket_width,
+                    peak_center + bracket_width,
+                    mp.inf
+                ]
+
+                sorted_Etag_limits = sorted(list(set(dynamic_limits)))
+                cleaned_limits = [sorted_Etag_limits[0]]
+                for cp in sorted_Etag_limits[1:]:
+                    if cp - cleaned_limits[-1] > threshold:
+                        cleaned_limits.append(cp)
+
+                inner_integral = mp.quad(lambda Etag: func(E, Etag), cleaned_limits, method='tanh-sinh')
+                return inner_integral * jac_E
+
+            segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh')
+            probability += segment_prob
+
+        # Step 6: Inner Integrals (Near the Gap)
+        theta1_max = mp.acosh((D + eps) / D)
+
+        for s1 in [1, -1]:
+            def outer_integrand_near(theta1, s1=s1):
+                E = s1 * D * mp.cosh(theta1)
+                peak_center = E - Ec
+                prob_inner = mp.mpf('0')
+
+                for s2 in [1, -1]:
+                    def inner_near_Etag(theta2, s2=s2):
+                        Etag = val + s2 * D * mp.cosh(theta2)
+                        gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
+                        if gauss_arg < -200:
+                            return mp.mpf('0')
+                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
+                        f_E = F.f(E, temp)
+                        f_Etag_w = F.f(Etag - val, temp)
+
+                        measure = mp.fabs(E) * mp.fabs(Etag - val)
+                        return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+                    prob_inner += mp.quad(inner_near_Etag, [0, theta1_max], method='gauss-legendre')
+
+                dynamic_limits_far = [
+                    -mp.inf, val - D - eps, val + D + eps,
+                             peak_center - bracket_width, peak_center + bracket_width, mp.inf
+                ]
+
+                sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
+                cleaned_far = [sorted_Etag_far[0]]
+                for cp in sorted_Etag_far[1:]:
+                    if cp - cleaned_far[-1] > threshold:
+                        cleaned_far.append(cp)
+
+                for i in range(len(cleaned_far) - 1):
+                    a = cleaned_far[i]
+                    b = cleaned_far[i + 1]
+                    mid = (a + b) / mp.mpf('2.0')
+
+                    if val - D - eps < mid < val + D + eps:
+                        continue
+
+                    def inner_far_Etag(Etag):
+                        n_Etag = F.dos(Etag - val, D)
+                        if n_Etag == mp.mpf('0'):
+                            return mp.mpf('0')
+                        gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
+                        if gauss_arg < -200:
+                            return mp.mpf('0')
+                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
+                        f_E = F.f(E, temp)
+                        f_Etag_w = F.f(Etag - val, temp)
+
+                        measure_E = mp.fabs(E)
+                        return measure_E * n_Etag * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+                    prob_inner += mp.quad(inner_far_Etag, [a, b], method='tanh-sinh')
+
+                return prob_inner
+
+            res = mp.quad(outer_integrand_near, [0, theta1_max], method='gauss-legendre')
+            probability += res
+
+        return [args[0], str(probability.real), args[1], args[2]]
+
+
+def compute_gamma_worker_gapped(w_str, T_str, Ec_str, D_str, eps_str, dps):
+    """Picable wrapper for multiprocessing pool."""
+    args = (w_str, T_str, Ec_str, D_str, eps_str)
+    return _calc_segments_gapped_master(args, dps)
 
 
 def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
                                   gap_ratio):
     """
-    Prepares and multiprocesses the 2D gapped integrations.
-    gap_ratio: determines D as a ratio of Ec (default 0.2*Ec based on your earlier code)
+    Orchestrates the calculation of Gapped Gamma integrals over the SLURM CPU pool.
+    Returns a standard Nx4 float array for downstream validation/saving.
     """
+    DPS = 50
+    mp.dps = DPS
+
+    Ec_mp = mp.mpf(str(init_state.Ec))  # Assuming init_state holds standard Ec
+    mu_str = str(Ec_mp)
+    D_mp = mp.mpf(str(gap_ratio)) * Ec_mp
+    D_str = str(D_mp)
+    eps_str = '1e-10'
+
+    # Apply the exact resolution logic from the standard version
     print(pos_energy_bound, neg_energy_bound, init_state.resolution)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
-    vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
+    num_points = round(num_of_calc)
 
-    T_list_to_compute = np.array(expected_list)
-    print(f"computing 2D gapped integrands for energies {pos_energy_bound} > dE > {neg_energy_bound}")
-    print(f"Temperatures: {T_list_to_compute}")
+    print(f"computing for energies {pos_energy_bound} > dE > {neg_energy_bound}")
+    print(np.array(expected_list))
 
-    # Define the gap D based on the electrostatic energy (mu/Ec)
-    D = gap_ratio * init_state.Ec
-    print(f"Gap D set to {D} (Ec = {init_state.Ec})")
+    # Dynamically generate pure high-precision space mimicking np.linspace(pos, neg)
+    w_start = mp.mpf(str(pos_energy_bound))
+    w_end = mp.mpf(str(neg_energy_bound))
 
-    # 1. Flatten the nested loops into a list of tasks
-    tasks = []
-    for val in vals_to_calc:
-        for temp in T_list_to_compute:
-            # We add D to the tuple so the worker function receives it
-            tasks.append((val, temp, init_state.Ec, D))
+    if num_points > 1:
+        w_values_str = [str(w_start + mp.mpf(i) * (w_end - w_start) / mp.mpf(num_points - 1)) for i in
+                        range(num_points)]
+    else:
+        w_values_str = [str(w_start)]
 
-    rows = []
+    w_args = []
+    T_args = []
 
-    # 2. Execute tasks in parallel using ProcessPoolExecutor
+    # flatten nested loops into a list of tasks.
+    for w_str in w_values_str:
+        for T in expected_list:
+            w_args.append(w_str)
+            T_args.append(str(T))
+
+    total_tasks = len(w_args)
+    print(f"Submitting {total_tasks} gapped integral calculations to pool...", flush=True)
+
+    results = []
+    # execute tasks in parallel using ProcessPoolExecutor
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Map using the new gapped worker function
-        results = executor.map(_calc_segments_gapped, tasks, chunksize=10)
+        # executor.map guarantees results are yielded in original submission order
+        futures = list(executor.map(
+            compute_gamma_worker_gapped,
+            w_args,
+            T_args,
+            [mu_str] * total_tasks,
+            [D_str] * total_tasks,
+            [eps_str] * total_tasks,
+            [DPS] * total_tasks,
+        ))
 
-        for result_row in results:
-            rows.append(result_row)
+        # Cast the high-precision strings back to float64 strictly for final array formatting
+        for res in futures:
+            results.append([float(res[0]), float(res[1]), float(res[2]), float(res[3])])
 
-    # 3. Restore global precision for the main process and format the array
+    # global precision for main
     mp.dps = 15
-    return np.array(rows, dtype=np.float64).reshape(-1, 4)
+    return np.array(results, dtype=np.float64).reshape(-1, 4)
 
 def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
     table_val = table_triplets[:, 0]

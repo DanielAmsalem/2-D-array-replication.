@@ -408,7 +408,7 @@ def Get_Steady_State(
         t_ss = 0  # steady state timer for recording the current
         I_avg, I_var = 0, 0
 
-        steady_state_timer = init.timeStep  # steady state fixed time
+        steady_state_timer = init.timeStep * 3  # steady state fixed time
         steady_state_reps = init.Steady_state_rep * 5  # "5*RC"
 
         while not_in_steady_state:
