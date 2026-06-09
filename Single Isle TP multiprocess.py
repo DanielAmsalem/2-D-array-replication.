@@ -1,80 +1,314 @@
 import os
+import sys
+import gc
+import numpy as np
+from mpmath import mp, exp, sqrt
+import mpmath
+import multiprocessing
+from pathlib import Path
+from scipy.linalg import eig
 
-ratio = 2
+# --- Cluster Environment Configurations ---
+ratio = 1
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = max(5, int(total_cpus / ratio))
-print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
-import sys
-import csv
-import numpy as np
-from mpmath import quad, mp, exp, sqrt
-import matplotlib
-import datetime
+num_workers = max(int(0.9 * total_cpus / ratio), 1)
+print(f"Worker number set to {num_workers} for {total_cpus} CPUs", flush=True)
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from scipy.linalg import eig
+# --- Parameters ---
+DPS = 50  # Global precision parameter
+mp.dps = DPS
+Cg_val = 5
 
-# 1) Import the necessary modules for paths and multiprocessing
-from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
-
+# System physics variables
 e = 1
 Vr = 0
 Cl = 2
 Cr = 0.01
 Rl = 10
-Rr = 1 #R2
-Rg = 1000 * (Cl + Cr)
-Cg = 10 * (Cl + Cr)
+Rr = 1
+Rg = 100 * Rl
+Cg = 10
 Cs = Cg + Cl + Cr
+Ec = mp.mpf(str((e ** 2) / (2 * Cg)))
+D_gap = mp.mpf('2') * Ec  # Superconducting gap Delta
 
 
-def integrand(T, dE, Ec):
-    def conv(E):
-        if np.abs(E) < 1e-8:
-            zero_limit_gauss = exp(-((dE + Ec) ** 2) / (4 * Ec * T))
-            return zero_limit_gauss * sqrt(T / (4 * np.pi * Ec))
 
-        gauss = exp(-((E + dE + Ec) ** 2) / (4 * Ec * T))
-        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
+# ============================================================================
+# ENERGY TRANSITION HELPERS
+# ============================================================================
 
-        bose_mean = E / (1 - exp(-E / T))
-        return bose_mean * gauss
+def Qn(Vl, n):
+    """Calculates the induced charge on the dot at state n."""
+    return -e * (n - N_states / 2) + Cl * Vl + Cr * Vr
+
+
+def W(n, qn, Vl, dn, side):
+    """
+    Calculates the electrostatic energy difference (dE) for a tunneling event.
+    """
+    if side == "left":
+        voltage = Vl
+        capacitance = Cl
+    elif side == "right":
+        voltage = Vr
+        capacitance = Cr
+    else:
+        raise ValueError("Invalid side specified. Use 'left' or 'right'.")
+
+    # The charging energy penalty formula
+    dE = -dn * e * voltage + (dn * e) ** 2 / (2 * Cs) + (dn * e) * qn / Cs
+    return mp.mpf(str(dE))
+
+
+# ============================================================================
+# MASTER INTEGRATION ALGORITHMS
+# ============================================================================
+
+def Gamma_cp(dE, T, Ec, Rt):
+    """Cooper pair transition rate calculation using local Ambegaokar-Baratoff Ej."""
+    # Convert inputs strictly to 50-dps mpmath objects
+    dE_mp = mp.mpf(str(dE))
+    T_mp = mp.mpf(str(T))
+    Rt_mp = mp.mpf(str(Rt))
+
+    # Ej = (hbar/2eRt)(pi*gap/2e)*tanh
+    # set h=1, e=1 -> hbar = 1/2pi
+    # Ej = tanh * gap / 8Rt
+    tanh_val = mp.tanh(D_gap / (mp.mpf('2') * T_mp))
+    Ej = tanh_val * D_gap / (mp.mpf('8') * Rt_mp)
+
+    # Calculate P(E) Gaussian broadening
+    gauss = mp.exp(-((dE_mp + Ec) ** 2) / (mp.mpf('4') * Ec * T_mp))
+    gauss = gauss / mp.sqrt(mp.pi * mp.mpf('4') * Ec * T_mp)
+
+    return float(gauss * Ej * Ej * mp.pi)
+
+
+def dos(E, D):
+    if mpmath.fabs(E) <= D:
+        return mp.mpf('0')
+    val = E * E - D * D
+    if val <= 0:
+        return mp.mpf('0')
+    return mpmath.fabs(E) / sqrt(val)
+
+
+def f(x, t):
+    if x / t > mp.mpf('1e50'):
+        return exp(-x / t)
+    if x / t < mp.mpf('-1e50'):
+        return mp.mpf('1')
+    expon = exp(x / t)
+    return mp.mpf('1') / (mp.mpf('1') + expon)
+
+
+def qp_integrand(T, dE, Ec, D):
+    def conv(E, Etag):
+        n_E = dos(E, D)
+        if n_E == mp.mpf('0'):
+            return mp.mpf('0')
+
+        n_Etag = dos(Etag - dE, D)
+        if n_Etag == mp.mpf('0'):
+            return mp.mpf('0')
+
+        gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
+        gauss = gauss / sqrt(mp.pi * 4 * Ec * T)
+
+        return n_E * n_Etag * f(E, T) * (mp.mpf('1') - f(Etag - dE, T)) * gauss
 
     return conv
 
 
-def Gamma(w, T, Rt, mu=0.5 / Cg):
-    absw = abs(w)
-    mp.dps = 40
-    probability = quad(integrand(T, w, mu), [-6, -absw - 0.2, 0, absw + 0.1, 7])
-    mp.dps = 15
-    return probability / (Rt * e * e)
+def _calc_segments_gapped_master(args, dps):
+    """
+    Advanced adaptive segmented integration mapping that routes around density-of-states
+    singularities to evaluate quasiparticle rates down to 50 decimal digits of precision.
+    """
+    val = mp.mpf(args[0])
+    temp = mp.mpf(args[1])
+    Ec_val = mp.mpf(args[2])
+    D_val = mp.mpf(args[3])
+    eps = mp.mpf(args[4])
+    resistance = mp.mpf(args[5])  # Rl or Rr from exact diag
 
+    mp.dps = dps
+    threshold = mp.mpf('1e-20')
 
-def U(n, Qg, Vl):
-    return (Qg + n * e + Cl * Vl) / (Cl + Cr)
+    abs_val = mp.fabs(val)
+    sigma = mp.sqrt(2 * Ec_val * temp)
+    bracket_width = 5 * sigma
 
+    probability = mp.mpf('0')
+    theta_max = mp.mpf('12.0')
+    signs = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
 
-def Qn(Vl, n):
-    return -Cg * (Cl * Vl + n * e) / Cs
+    if abs_val < D_val + eps:
+        def mapped_integrand(theta1, theta2, sign_E, sign_Etag):
+            E = sign_E * D_val * mp.cosh(theta1)
+            Etag = sign_Etag * D_val * mp.cosh(theta2) + val
 
+            gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
+            if gauss_arg < -200:
+                return mp.mpf('0')
+            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
 
-def W(n, Qg, Vl, in_out, left_right):
-    if abs(in_out) != 1:
-        raise ValueError
-    if left_right == "left":
-        return in_out * e * (U(n + in_out, Qg, Vl) + U(n, Qg, Vl)) / 2 - in_out * e * Vl
-    elif left_right == "right":
-        return in_out * e * (U(n + in_out, Qg, Vl) + U(n, Qg, Vl)) / 2
+            f_E = f(E, temp)
+            f_Etag_w = f(Etag - val, temp)
+
+            measure = mp.fabs(E) * mp.fabs(Etag - val)
+            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+        for s1, s2 in signs:
+            func_quadrant = lambda t1, t2, s1=s1, s2=s2: mapped_integrand(t1, t2, s1, s2)
+            res = mp.quad(func_quadrant, [0, theta_max], [0, theta_max], method='gauss-legendre')
+            probability += res
+
+        # Apply standard (1 / (e^2 R_T)) multiplier for standard quasiparticles
+        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
+        return float(rate)
+
     else:
-        raise ValueError("left_right must be either 'left' or 'right'")
+        func = qp_integrand(temp, val, Ec_val, D_val)
 
+        limits_E_far_neg = [-mp.inf, -abs_val, -D_val - eps]
+        limits_E_far_pos = [D_val + eps, abs_val, mp.inf]
+
+        def get_mapping(a, b):
+            if a == -mp.inf:
+                return lambda t: (b - t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
+            elif b == mp.inf:
+                return lambda t: (a + t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
+            else:
+                width = b - a
+                if width < threshold:
+                    return None
+                return lambda t: (a + t * width, width)
+
+        mappings_E = []
+        for lims in [limits_E_far_neg, limits_E_far_pos]:
+            for i in range(len(lims) - 1):
+                m_func = get_mapping(lims[i], lims[i + 1])
+                if m_func is not None:
+                    mappings_E.append(m_func)
+
+        for m_E in mappings_E:
+            def outer_integrand(t_E, m_E=m_E):
+                if t_E <= 0 or t_E >= 1:
+                    return mp.mpf('0')
+
+                E, jac_E = m_E(t_E)
+                peak_center = E - Ec_val
+
+                dynamic_limits = [
+                    -mp.inf,
+                    mp.mpf(val - D_val),
+                    mp.mpf(val),
+                    mp.mpf(val + D_val),
+                    peak_center - bracket_width,
+                    peak_center + bracket_width,
+                    mp.inf
+                ]
+
+                sorted_Etag_limits = sorted(list(set(dynamic_limits)))
+                cleaned_limits = [sorted_Etag_limits[0]]
+                for cp in sorted_Etag_limits[1:]:
+                    if cp - cleaned_limits[-1] > threshold:
+                        cleaned_limits.append(cp)
+
+                inner_integral = mp.quad(lambda Etag: func(E, Etag), cleaned_limits, method='tanh-sinh')
+                return inner_integral * jac_E
+
+            segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh')
+            probability += segment_prob
+
+        theta1_max = mp.acosh((D_val + eps) / D_val)
+
+        for s1 in [1, -1]:
+            def outer_integrand_near(theta1, s1=s1):
+                E = s1 * D_val * mp.cosh(theta1)
+                peak_center = E - Ec_val
+                prob_inner = mp.mpf('0')
+
+                for s2 in [1, -1]:
+                    def inner_near_Etag(theta2, s2=s2):
+                        Etag = val + s2 * D_val * mp.cosh(theta2)
+                        gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
+                        if gauss_arg < -200:
+                            return mp.mpf('0')
+                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
+                        f_E = f(E, temp)
+                        f_Etag_w = f(Etag - val, temp)
+
+                        measure = mp.fabs(E) * mp.fabs(Etag - val)
+                        return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+                    prob_inner += mp.quad(inner_near_Etag, [0, theta1_max], method='gauss-legendre')
+
+                dynamic_limits_far = [
+                    -mp.inf,
+                    val - D_val - eps,
+                    val + D_val + eps,
+                    peak_center - bracket_width,
+                    peak_center + bracket_width,
+                    mp.inf
+                ]
+
+                sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
+                cleaned_far = [sorted_Etag_far[0]]
+                for cp in sorted_Etag_far[1:]:
+                    if cp - cleaned_far[-1] > threshold:
+                        cleaned_far.append(cp)
+
+                for i in range(len(cleaned_far) - 1):
+                    a = cleaned_far[i]
+                    b = cleaned_far[i + 1]
+                    mid = (a + b) / mp.mpf('2.0')
+
+                    if val - D_val - eps < mid < val + D_val + eps:
+                        continue
+
+                    def inner_far_Etag(Etag):
+                        n_Etag = dos(Etag - val, D_val)
+                        if n_Etag == mp.mpf('0'):
+                            return mp.mpf('0')
+                        gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
+                        if gauss_arg < -200:
+                            return mp.mpf('0')
+                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
+                        f_E = f(E, temp)
+                        f_Etag_w = f(Etag - val, temp)
+
+                        measure_E = mp.fabs(E)
+                        return measure_E * n_Etag * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+                    prob_inner += mp.quad(inner_far_Etag, [a, b], method='tanh-sinh')
+
+                return prob_inner
+
+            res = mp.quad(outer_integrand_near, [0, theta1_max], method='gauss-legendre')
+            probability += res
+
+        # Apply standard (1 / (e^2 R_T)) multiplier for standard quasiparticles
+        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
+        return float(rate)
+
+
+def Gamma(dE, T, resistance):
+    """Wrapper to map exact diag Gamma calls to the new master integrator."""
+    # Ensure dps state is maintained inside the multiprocessing worker
+    mp.dps = DPS
+    args = [str(dE), str(T), str(Ec), str(D_gap), '1e-10', str(resistance)]
+    return _calc_segments_gapped_master(args, DPS)
+
+
+# ============================================================================
+# EXACT DIAGONALIZATION ROUTINE
+# ============================================================================
 
 def calculate_current(Vl, N, T_l, T_r, Tdot):
     G_L_plus = np.zeros(N + 1)
@@ -82,164 +316,124 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
     G_L_minus = np.zeros(N + 1)
     G_R_minus = np.zeros(N + 1)
 
+    G_L_plus2 = np.zeros(N + 1)
+    G_R_plus2 = np.zeros(N + 1)
+    G_L_minus2 = np.zeros(N + 1)
+    G_R_minus2 = np.zeros(N + 1)
+
     for n in range(N + 1):
         G_L_plus[n] = Gamma(W(n, Qn(Vl, n), Vl, 1, "left"), T_l, Rl)
         G_L_minus[n] = Gamma(W(n, Qn(Vl, n), Vl, -1, "left"), Tdot, Rl)
         G_R_plus[n] = Gamma(W(n, Qn(Vl, n), Vl, 1, "right"), T_r, Rr)
         G_R_minus[n] = Gamma(W(n, Qn(Vl, n), Vl, -1, "right"), Tdot, Rr)
 
+        if n + 2 <= N:
+            G_L_plus2[n] = Gamma_cp(W(n, Qn(Vl, n), Vl, 2, "left"), T_l, Ec, Rt=Rl)
+            G_R_plus2[n] = Gamma_cp(W(n, Qn(Vl, n), Vl, 2, "right"), T_r, Ec, Rt=Rr)
+        if n - 2 >= 0:
+            G_L_minus2[n] = Gamma_cp(W(n, Qn(Vl, n), Vl, -2, "left"), Tdot, Ec, Rt=Rl)
+            G_R_minus2[n] = Gamma_cp(W(n, Qn(Vl, n), Vl, -2, "right"), Tdot, Ec, Rt=Rr)
+
+        gc.collect()
+
     G_plus = G_L_plus + G_R_plus
     G_minus = G_L_minus + G_R_minus
+    G_plus2 = G_L_plus2 + G_R_plus2
+    G_minus2 = G_L_minus2 + G_R_minus2
 
     G_plus[-1] = 0.0
     G_minus[0] = 0.0
+    G_plus2[-1], G_plus2[-2] = 0.0, 0.0
+    G_minus2[0], G_minus2[1] = 0.0, 0.0
 
-    diag_main = -(G_plus + G_minus)
+    diag_main = -(G_plus + G_minus + G_plus2 + G_minus2)
     diag_sub = G_plus[:-1]
     diag_super = G_minus[1:]
+    diag_sub2 = G_plus2[:-2]
+    diag_super2 = G_minus2[2:]
 
-    M = np.diag(diag_main) + np.diag(diag_sub, k=-1) + np.diag(diag_super, k=1)
+    M = (np.diag(diag_main) +
+         np.diag(diag_sub, k=-1) +
+         np.diag(diag_super, k=1) +
+         np.diag(diag_sub2, k=-2) +
+         np.diag(diag_super2, k=2))
 
     eigenvalues, eigenvectors = eig(M)
     zero_idx = np.argmin(np.abs(eigenvalues))
     p_stat = np.real(eigenvectors[:, zero_idx])
     p_stat = p_stat / np.sum(p_stat)
 
-    current = e * np.sum(p_stat * (G_L_plus - G_L_minus))
-    return current
+    current_1e = e * np.sum(p_stat * (G_L_plus - G_L_minus))
+    current_2e = 2 * e * np.sum(p_stat * (G_L_plus2 - G_L_minus2))
+
+    return current_1e + current_2e
 
 
-# ==========================================
-# Worker Function for the Pool Executor
-# ==========================================
-def worker_simulate_gradient(multiplier, V_vals, N_states, T0):
-    print(f"Worker started for grad {multiplier}", flush=True)
-
+def worker_single_point(task_args):
+    m, v_idx, V, N_states, T0, cp_dir = task_args
     T_left = T0
-    T_dot = T0 + 10 * multiplier * T0
-    T_right = T0 + 20 * multiplier * T0
+    T_dot = T0 + 10 * m * T0
+    T_right = T0 + 20 * m * T0
 
-    currents = []
-    for V in V_vals:
-        print(f"In grad {multiplier}, calculating for Vl = {V:.2f} V...")
-        I = calculate_current(V, N=N_states, T_l=T_left, T_r=T_right, Tdot=T_dot)
-        currents.append(I)
+    print(f"Worker computing grad {m}, Vl = {V:.3f} V...", flush=True)
+    I = calculate_current(V, N=N_states, T_l=T_left, T_r=T_right, Tdot=T_dot)
 
-    print(f"Worker finished for grad {multiplier}", flush=True)
+    cp_path = Path(cp_dir) / f"grad_{m}_vidx_{v_idx}.npy"
+    np.save(cp_path, I)
 
-    # Return a dictionary containing everything needed for saving/plotting
-    return {
-        "multiplier": multiplier,
-        "T_left": T_left,
-        "T_dot": T_dot,
-        "T_right": T_right,
-        "currents": currents
-    }
+    print(f"Worker DONE computing grad {m}, Vl = {V:.3f} V | I = {I:.5e}", flush=True)
+    return True
 
 
-# ==========================================
-# Post-Processing: Export & Plot
-# ==========================================
-def export_and_plot(results, output_dir, V_vals, T0):
-    # Ensure results are sorted by multiplier (multiprocessing returns can be out of order)
-    results = sorted(results, key=lambda x: x["multiplier"])
+# ============================================================================
+# MAIN CLUSTER SLICING ROUTINE
+# ============================================================================
 
-    # 1. Export unified CSV
-    csv_path = output_dir / "IV_data_all_grads.csv"
-    with open(csv_path, mode="w", newline="") as f:
-        writer = csv.writer(f)
-
-        # Build the header row
-        headers = ["Vl (V)"] + [f"Grad_{res['multiplier']}_I" for res in results]
-        writer.writerow(headers)
-
-        # Write the data rows
-        for i in range(len(V_vals)):
-            row = [V_vals[i]] + [res["currents"][i] for res in results]
-            writer.writerow(row)
-
-    print(f"Data exported to {csv_path}")
-
-    # 2. Plotting loop
-    for res in results:
-        m = res["multiplier"]
-        I_vals = res["currents"]
-        T_l, T_r = res["T_left"], res["T_right"]
-
-        plt.figure(figsize=(8, 6))
-        plt.plot(V_vals, I_vals, linestyle='-', color='r')
-        plt.title(f"I-V Characteristic with $\\Delta T$ ($T_l={T_l / T0:.2f}T_0$, $T_r={T_r / T0:.2f}T_0$)",
-                  fontsize=14)
-        plt.xlabel("Left Voltage $V_l$ (V)", fontsize=12)
-        plt.ylabel("Steady-State Current I L->R", fontsize=12)
-        plt.grid(True)
-        plt.tight_layout()
-
-        plot_path = output_dir / f"IV_plot_grad_{m}.png"
-        plt.savefig(plot_path)
-        plt.close()  # Vital: close the figure to free up memory
-
-    print(f"All {len(results)} plots saved in {output_dir}/")
-
-
-# ==========================================
-# Main Execution Block
-# ==========================================
 if __name__ == '__main__':
-    date_ = datetime.datetime.now()
-    run_name_flat = date_.strftime("%Y%m%d_%Hh%Mm%Ss")
+    base_folder = Path(__file__).parent.absolute()
+    checkpoint_dir = base_folder / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    job_id = os.environ.get("SLURM_JOB_ID", "local_run")
-    # Define output folder via pathlib
-    output_folder = Path(__file__).parent / f"SingleIsleTP_Job{job_id}__{run_name_flat}"
-    output_folder.mkdir(parents=True, exist_ok=True)
-    print(f"Saving outputs to folder: {output_folder.absolute()}")
-
+    # Simulation Constraints
+    N_states = 120  # Make sure this matches your physical truncation needs
     T0 = 0.001
-    N_states = 120
     num_points = 101
     V_vals = np.linspace(0, 4, num_points)
-
-    # Range of multipliers: 0 to 19 (inclusive) -> 20 total gradients
     num_of_grads = 20
 
-    #export params
-    params_path = output_folder / "parameters.txt"
-    with open(params_path, "w") as f:
-        # Global variables
-        f.write(f"e :  {e}\n")
-        f.write(f"Vr :  {Vr}\n")
-        f.write(f"Cl :  {Cl}\n")
-        f.write(f"Cr :  {Cr}\n")
-        f.write(f"Rl :  {Rl}\n")
-        f.write(f"Rr :  {Rr}\n")
-        f.write(f"Rg :  {Rg}\n")
-        f.write(f"Cg :  {Cg}\n")
-        f.write(f"Cs :  {Cs}\n")
-        # Run-specific variables
-        f.write(f"T0 :  {T0}\n")
-        f.write(f"N_states :  {N_states}\n")
-        f.write(f"num_points :  {num_points}\n")
-        f.write(f"num_of_grads :  {num_of_grads}\n")
-        f.write(f"job_id :  {job_id}\n")
-    print(f"Parameters saved to {params_path}")
+    # Slurm chunk routing slicing parameters (for parallel jobs spanning multiple nodes)
+    chunk_id = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    num_chunks = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
-    # Prepare the partial function
-    loaded_state_function = partial(
-        worker_simulate_gradient,
-        V_vals=V_vals,
-        N_states=N_states,
-        T0=T0
-    )
+    all_tasks = []
+    for m in range(num_of_grads):
+        for v_idx, V in enumerate(V_vals):
+            all_tasks.append((m, v_idx, V, N_states, T0, checkpoint_dir))
 
-    print(f"Initializing ProcessPoolExecutor...")
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        actual_workers = executor._max_workers
-        print(f"Running pool with {actual_workers} workers", flush=True)
+    # Slice tasks for the specific node running this script
+    chunk_size = len(all_tasks) // num_chunks
+    start_idx = chunk_id * chunk_size
+    end_idx = (chunk_id + 1) * chunk_size if chunk_id < (num_chunks - 1) else len(all_tasks)
+    my_tasks = all_tasks[start_idx:end_idx]
 
-        # Execute the map!
-        results_list = list(executor.map(loaded_state_function, range(num_of_grads)))
+    # --- Logging Block ---
+    import datetime
 
-    # Process the outputs
-    export_and_plot(results_list, output_folder, V_vals, T0)
-    print("Execution complete.")
+    timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    param_filename = base_folder / f"parameters_DPS{DPS}_chunk{chunk_id}_{timestamp_str}.txt"
+    with open(param_filename, mode='w', encoding='utf-8') as pf:
+        pf.write(f"--- Exact Diagonalization Execution Log (Chunk {chunk_id}/{num_chunks}) ---\n")
+        pf.write(f"Global Precision (DPS) : {DPS}\n")
+        pf.write(f"ProcessPool Workers    : {num_workers}\n")
+        pf.write(f"Total Tasks in Chunk   : {len(my_tasks)}\n")
+        pf.write(f"N_states               : {N_states}\n")
+        pf.write(f"T0                     : {T0}\n")
+        pf.write(f"Cg                     : {Cg}\n")
+        pf.write(f"Ec                     : {float(Ec):.5e}\n")
+        pf.write(f"D_gap                  : {float(D_gap):.5e}\n")
+
+    print(f"Slicing Task Group: processing tasks {start_idx} to {end_idx} on Pool.", flush=True)
+    with multiprocessing.Pool(processes=num_workers) as pool:
+        pool.map(worker_single_point, my_tasks)
+
+    print("Slice complete.", flush=True)
