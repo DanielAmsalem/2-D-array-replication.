@@ -1,11 +1,11 @@
 import os
 
-ratio = 2
+ratio = 3 / 2
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = int(total_cpus / ratio)
+num_workers = max(int(total_cpus / ratio), 80)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
 from concurrent.futures import ProcessPoolExecutor
@@ -22,6 +22,7 @@ from preparation import (
     validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
+    update_init_Cg_Rg
 )
 import curve_plotter
 from dataclasses import asdict
@@ -30,54 +31,115 @@ import csv
 import math
 import time
 
+#######
+Cg = 5
+Cg_list = [2, 5, 10, 20, 50]
+######
+
 '''
-THIS main_TPmeas where the mid point is fixed T = T0 + 3*0.55*T0 = 0.00265
-maximum total gradient across grid allowed is therefore |ΔT| =3.3T0
+THIS main_TPmeas where the mid point is fixed T = constT * T0
+maximum total gradient across grid allowed is governed by max_std_coeff
 '''
 
 
-def main(import_export: IMPORT_EXPORT, run_name) -> None:
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
     # RUN TYPE
     flip = False
-    print(f"flip = {flip}", flush=True)
-    first_run = False  ######################################
+    first_run = False
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
 
     # FIXED PARAMETERS
-    loop_count = max(num_workers, 100)
+    V_capture = 4
+    if Cg in Cg_list:
+        if Cg == 20:
+            pos_energy_boundT0 = 0.02
+            neg_energy_boundT0 = -0.07
+        elif Cg == 50:
+            pos_energy_boundT0 = 0.03
+            neg_energy_boundT0 = -0.05
+        elif Cg == 10:
+            pos_energy_boundT0 = -0.01
+            neg_energy_boundT0 = -0.11
+        elif Cg == 5:
+            pos_energy_boundT0 = -0.02
+            neg_energy_boundT0 = -0.18
+        elif Cg == 2:
+            pos_energy_boundT0 = -0.12
+            neg_energy_boundT0 = -0.37
+        else:
+            raise ValueError("what")
+    else:
+        raise ValueError("Cg must be in Cg_list")
+
+    # EXPERIMENT PARAMETERS
+    loop_count = max(num_workers, 1000)
+    repetition = 0
+
+    ######## CHANGABLES ###############
+    last_repetition_to_do = 20
+    repetition_list = list(range(11, 20))
+    T0_unitless = 0.001
+    gap_ratio = 0
+    mean_Rg = 100
+    stdR = 2
+    sig = 0.05
+    ###################################
+    ########### FIX MIDDLE############# max std coefficient (max_std = max_std_coeff * T0)
+    constT = 2.2
+    max_std_coeff = 0.4
+    ###################################
+
+    # MESSAGES
+    print(f"############# MAIN PARAMETERS ##################")
+    print(f"flip = {flip}", flush=True)
     print(f"loop max: {loop_count}", flush=True)
+    print(f"gap_ratio = {gap_ratio}", flush=True)
+    print(f"Cg = {Cg}")
+    print(f"stdR = {stdR}")
+    print(f"sig = {sig}")
+    print(f"repeating for dT=n*max_std/20, n = {repetition_list}", flush=True)
+    print(f"############# INITZIALIZING GRID ##################")
     if loop_count != 1:
         plot_ongoing_voltage_map = False
-    T0_unitless = 0.001
-    constT = 3.1  # the average temperature is T0_untiless*constT ######################################
-    repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
-    last_repetition_to_do = 20  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = list(range(12, 20))  ######################################
-    print(f"repeating for dT=n*Tstd/maxTstd, n = {repetition_list}", flush=True)
-    V_capture = 4
-    null_path_name = import_export.export_path / f"64bit_table_triplets_T0_31e-4.npz"  ######################################
-    print(f"null_path_name is {null_path_name}", flush=True)
-    pos_energy_boundT0 = 0.1  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
-    neg_energy_boundT0 = -0.2  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
+
+    # Dynamically generated base null path including constT
+    constT_str = str(constT).replace('.', '_')
+    null_path_name = (import_export.export_path /
+                      f"64bit_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
     # choose a specific run
-    run_to_get_init_from = "20251207_17h43m26s"
+    run_to_get_init_from = "20260606_22h05m04s"
     results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
         json_txt = infile.read_text()
         raw_fields = orjson.loads(json_txt)
+
         # recreate old init state
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
+
+        # if old init has inappropriate variables
         init = F.swap_in_init("flip", flip, init)
+        if init.T0 != T0_unitless:
+            print("T0 is different in reference file or Temperature units != 1. switching.")
+            init = F.swap_in_init("T0", T0_unitless, init)
+            print(f"T0 is now {init.T0}")
+
+        # different Cg or Rg
+        if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
+            print(f"Mismatch in Cg or Rg from past run. Updating physics matrices...", flush=True)
+            init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
+            print(f"Successfully updated Cg to {init.Cg[0]} and Rg to {init.Rg[0]}. New Ec = {init.Ec}", flush=True)
+
         print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
     else:
         # create new initial state
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y)
+        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
+                                     Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
         print("CREATED NEW INIT FILE")
 
     ### report init state to report file
@@ -99,7 +161,7 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
                                        results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
 
-    if first_run and not validate_table_triplets_file(null_path_name, init, [init.T0 * constT]):
+    if not validate_table_triplets_file(null_path_name, init, [init.T0 * constT]) and first_run:
         table_triplets = prepare_table_triplets(init, [init.T0 * constT],
                                                 pos_energy_bound=pos_energy_boundT0,
                                                 neg_energy_bound=neg_energy_boundT0,
@@ -123,7 +185,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0 * constT] * init.row_num
-    expected_err = 0.01 * (init.row_num - 1) * np.sqrt(max(T) / init.T0)
+    expected_err = F.calc_expected_dist_std(T, init.T0)
+    print("############# RUN VIRTUAL EXPERIMENT ##################", flush=True)
 
     if first_run:
         t0 = time.time()
@@ -146,7 +209,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 repetition=0,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,
-                plot_ongoing_voltage_map=plot_ongoing_voltage_map
+                plot_ongoing_voltage_map=plot_ongoing_voltage_map,
+                gap_ratio=gap_ratio,
             )
 
             results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
@@ -176,10 +240,26 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    T_std=0,
                                    t0=t0,
                                    results_path=import_export.results_dir_path,
-                                   tot_error_count=err)
+                                   tot_error_count=err,
+                                   gap_ratio=gap_ratio,
+                                   )
 
     else:
         print("skipped first run")
+
+    ### get bounds for dE for each temp from csv table
+    bounds_dict = {}
+    with open(import_export.csv_table_path) as f:
+        for row in csv.reader(f):
+            if row and row[0].strip().lstrip('-').isdigit():
+                if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
+                    rep_idx = int(row[0])
+                    bounds_dict[rep_idx] = {
+                        "neg": float(row[1]),
+                        "pos": float(row[2])
+                    }
+                else:
+                    continue
 
     ### run thermopower until I(V)<0
     current_at_V0 = True
@@ -194,9 +274,13 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             print(f"repetition {repetition} was skipped")
             continue
 
-        # new temperature profile. max T_std is 0.7*T0 for row_num=7
+        if repetition not in bounds_dict:
+            print(f"repetition {repetition} missing from bounds table, skipped")
+            continue
+
+        # NEW TEMPERATURE PROFILE LOGIC: Fixed Middle
         T_mid = constT * init.T0
-        max_std = 0.7 * init.T0  ######################################
+        max_std = max_std_coeff * init.T0
         T_std = repetition * max_std / 20
         first_site_T = T_mid - ((init.row_num - init.row_num % 2) / 2) * T_std
         T_list_to_compute = [first_site_T + i * T_std for i in range(init.row_num)]
@@ -219,6 +303,8 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
             T = T_list_to_compute
             if flip:
                 T = np.flip(T_list_to_compute)
+            expected_err = F.calc_expected_dist_std(T, init.T0)
+            print(expected_err, flush=True)
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -229,13 +315,14 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                 table_T=table_T,
                 flip=flip,
                 T=T,
-                expected_error=expected_err * np.sqrt(max(T) / init.T0),
-                pos_energy_bound=float(0.1),
-                neg_energy_bound=float(-0.2),
+                expected_error=expected_err,
+                pos_energy_bound=bounds_dict[repetition]["pos"],
+                neg_energy_bound=bounds_dict[repetition]["neg"],
                 repetition=repetition,
                 capture_heatmap_at_idx=V_capture_idx,
                 periodic_y=periodic_y,
-                plot_ongoing_voltage_map=plot_ongoing_voltage_map
+                plot_ongoing_voltage_map=plot_ongoing_voltage_map,
+                gap_ratio=gap_ratio,
             )
 
             results: list[SteadyStateResult] = list(
@@ -261,12 +348,13 @@ def main(import_export: IMPORT_EXPORT, run_name) -> None:
                                    filename=run_name,
                                    repetition=repetition,
                                    T=T,
-                                   expected_error=expected_err * np.sqrt(max(T) / init.T0),
+                                   expected_error=expected_err,
                                    loop_count=init.loop_count,
                                    T_std=T_std,
                                    t0=t0,
                                    results_path=import_export.results_dir_path,
-                                   tot_error_count=err)
+                                   tot_error_count=err,
+                                   gap_ratio=gap_ratio)
 
 
 if __name__ == "__main__":
@@ -283,10 +371,12 @@ if __name__ == "__main__":
         IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tmid_3_1_std{n}_20.npz" for n in
-                                              range(20)],
-            csv_table_path=MP_COMPUTE_PATH / f"tmp",
+            prepare_table_triplets_file_list=[EXPORT_PATH /
+                                              f"64bit_table_triplets_Tmid_2_2_std{n}_20_Cg_{Cg}.npz" for n in
+                                              range(501)],
+            csv_table_path=MP_COMPUTE_PATH / f"table_Cg{Cg}.csv",
             results_dir_path=RESULTS_DIR_PATH
         ),
-        run_name=run_name_flat
+        run_name=run_name_flat,
+        mean_Cg=Cg
     )

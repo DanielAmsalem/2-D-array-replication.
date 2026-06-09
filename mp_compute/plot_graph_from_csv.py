@@ -11,8 +11,16 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
 run_names = [
-    "20260607_14h34m28s"
 ]
+
+if not run_names:
+    print("No specific runs provided. Searching for all 'results_*' directories...")
+    # .glob searches for patterns in the directory
+    for dir_path in Path(__file__).parent.parent.glob("results_*"):
+        if dir_path.is_dir():
+            # Extract the run name by removing 'results_' from the folder name
+            extracted_name = dir_path.name.replace("results_", "")
+            run_names.append(extracted_name)
 
 for run_name in run_names:
     print(f"=== Processing run: {run_name} ===")

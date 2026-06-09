@@ -28,7 +28,7 @@ Cr = 1
 Rl = 1
 Rr = 10
 Rg = 1000 * (Cl + Cr)
-Cg = 10 * (Cl + Cr)
+Cg = 5 * (Cl + Cr)
 Cs = Cg + Cl + Cr
 
 
@@ -42,22 +42,6 @@ def integrand(T, dE, Ec):
         gauss = gauss / sqrt(np.pi * 4 * Ec * T)
         bose_mean = E / (1 - exp(-E / T))
         return bose_mean * gauss
-
-    return conv
-
-
-def qs_integrand(T, dE, Ec, D):
-    def conv(E, Etag):
-        n_E = dos(E, D)
-        if n_E == 0: return 0
-
-        n_Etag = dos(Etag - dE, D)
-        if n_Etag == 0: return 0
-
-        gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
-        gauss = gauss / sqrt(np.pi * 4 * Ec * T)
-
-        return n_E * n_Etag * f(E, T) * (1 - f(Etag - dE, T)) * gauss
 
     return conv
 
@@ -81,10 +65,9 @@ def dos(E, D):
 
 
 def Gamma(w, T, Rt, mu=0.5 / Cg):
-    D = 0.2 * mu
-    mp.dps = 50
-    func = qs_integrand(T, w, mu, D)
-    absval = abs(D)
+    mp.dps = 40
+    func = integrand(T, w, mu)
+    absval = abs(w)
 
     # Calculate the exact physical width of the Gaussian spike
     sigma = mp.sqrt(2 * mu * T)
@@ -209,7 +192,7 @@ if __name__ == '__main__':
         gamma_chunk = all_gamma_results[i * chunk_size: (i + 1) * chunk_size]
         plt.plot(w_values, gamma_chunk, linewidth=2, label=f'T = {T}')
 
-    plt.title(r"Gamma vs w, $\Delta = 0.2*E_c$")
+    plt.title(r"Gamma vs w, $\Delta = 0$")
     plt.xlabel("w")
     plt.ylabel("Gamma")
 
@@ -219,7 +202,7 @@ if __name__ == '__main__':
     plt.tight_layout()
 
     # Save output to disk
-    filename = str(datetime.datetime.now()) + "_mp_dps50.png"
+    filename = str(datetime.datetime.now()) + "_mp_dps40.png"
     output_file = DIR / filename
     plt.savefig(fname=output_file, dpi=2100, bbox_inches="tight")
     print(f"Plot saved successfully to {output_file}", flush=True)
