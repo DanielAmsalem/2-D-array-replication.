@@ -4,9 +4,9 @@ import matplotlib.cm as cm
 import numpy as np
 
 # Load the data
-max_diff_list = [0]
+max_diff_list = [6,20]
 for diff in max_diff_list:
-    file_path = f'IV_data_SC_nonfixed.csv'
+    file_path = f'IV_data_all_grads_{diff}T0.CSV'
     df = pd.read_csv(file_path)
 
     # Create a new DataFrame containing only rows where Vl (V) <= 1

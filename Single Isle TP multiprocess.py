@@ -1,11 +1,13 @@
 import os
 import sys
 import gc
+import math
 import numpy as np
 from mpmath import mp, exp, sqrt
 import mpmath
 import multiprocessing
 from pathlib import Path
+import datetime
 from scipy.linalg import eig
 
 # --- Cluster Environment Configurations ---
@@ -20,6 +22,8 @@ print(f"Worker number set to {num_workers} for {total_cpus} CPUs", flush=True)
 # --- Parameters ---
 DPS = 50  # Global precision parameter
 mp.dps = DPS
+
+N_states = 120  # Global state truncation
 Cg_val = 5
 
 # System physics variables
@@ -30,11 +34,10 @@ Cr = 0.01
 Rl = 10
 Rr = 1
 Rg = 100 * Rl
-Cg = 10
+Cg = 5
 Cs = Cg + Cl + Cr
 Ec = mp.mpf(str((e ** 2) / (2 * Cg)))
 D_gap = mp.mpf('2') * Ec  # Superconducting gap Delta
-
 
 
 # ============================================================================
@@ -52,10 +55,8 @@ def W(n, qn, Vl, dn, side):
     """
     if side == "left":
         voltage = Vl
-        capacitance = Cl
     elif side == "right":
         voltage = Vr
-        capacitance = Cr
     else:
         raise ValueError("Invalid side specified. Use 'left' or 'right'.")
 
@@ -68,12 +69,13 @@ def W(n, qn, Vl, dn, side):
 # MASTER INTEGRATION ALGORITHMS
 # ============================================================================
 
-def Gamma_cp(dE, T, Ec, Rt):
+def Gamma_cp(dE, T, Ec_val, Rt):
     """Cooper pair transition rate calculation using local Ambegaokar-Baratoff Ej."""
     # Convert inputs strictly to 50-dps mpmath objects
     dE_mp = mp.mpf(str(dE))
     T_mp = mp.mpf(str(T))
     Rt_mp = mp.mpf(str(Rt))
+    Ec_mp = mp.mpf(str(Ec_val))
 
     # Ej = (hbar/2eRt)(pi*gap/2e)*tanh
     # set h=1, e=1 -> hbar = 1/2pi
@@ -82,8 +84,8 @@ def Gamma_cp(dE, T, Ec, Rt):
     Ej = tanh_val * D_gap / (mp.mpf('8') * Rt_mp)
 
     # Calculate P(E) Gaussian broadening
-    gauss = mp.exp(-((dE_mp + Ec) ** 2) / (mp.mpf('4') * Ec * T_mp))
-    gauss = gauss / mp.sqrt(mp.pi * mp.mpf('4') * Ec * T_mp)
+    gauss = mp.exp(-((dE_mp + Ec_mp) ** 2) / (mp.mpf('4') * Ec_mp * T_mp))
+    gauss = gauss / mp.sqrt(mp.pi * mp.mpf('4') * Ec_mp * T_mp)
 
     return float(gauss * Ej * Ej * mp.pi)
 
@@ -106,7 +108,7 @@ def f(x, t):
     return mp.mpf('1') / (mp.mpf('1') + expon)
 
 
-def qp_integrand(T, dE, Ec, D):
+def qp_integrand(T, dE, Ec_val, D):
     def conv(E, Etag):
         n_E = dos(E, D)
         if n_E == mp.mpf('0'):
@@ -116,8 +118,8 @@ def qp_integrand(T, dE, Ec, D):
         if n_Etag == mp.mpf('0'):
             return mp.mpf('0')
 
-        gauss = exp(-((E - Etag - Ec) ** 2) / (4 * Ec * T))
-        gauss = gauss / sqrt(mp.pi * 4 * Ec * T)
+        gauss = exp(-((E - Etag - Ec_val) ** 2) / (4 * Ec_val * T))
+        gauss = gauss / sqrt(mp.pi * 4 * Ec_val * T)
 
         return n_E * n_Etag * f(E, T) * (mp.mpf('1') - f(Etag - dE, T)) * gauss
 
@@ -168,7 +170,6 @@ def _calc_segments_gapped_master(args, dps):
             res = mp.quad(func_quadrant, [0, theta_max], [0, theta_max], method='gauss-legendre')
             probability += res
 
-        # Apply standard (1 / (e^2 R_T)) multiplier for standard quasiparticles
         rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
         return float(rate)
 
@@ -205,13 +206,8 @@ def _calc_segments_gapped_master(args, dps):
                 peak_center = E - Ec_val
 
                 dynamic_limits = [
-                    -mp.inf,
-                    mp.mpf(val - D_val),
-                    mp.mpf(val),
-                    mp.mpf(val + D_val),
-                    peak_center - bracket_width,
-                    peak_center + bracket_width,
-                    mp.inf
+                    -mp.inf, mp.mpf(val - D_val), mp.mpf(val), mp.mpf(val + D_val),
+                    peak_center - bracket_width, peak_center + bracket_width, mp.inf
                 ]
 
                 sorted_Etag_limits = sorted(list(set(dynamic_limits)))
@@ -250,12 +246,8 @@ def _calc_segments_gapped_master(args, dps):
                     prob_inner += mp.quad(inner_near_Etag, [0, theta1_max], method='gauss-legendre')
 
                 dynamic_limits_far = [
-                    -mp.inf,
-                    val - D_val - eps,
-                    val + D_val + eps,
-                    peak_center - bracket_width,
-                    peak_center + bracket_width,
-                    mp.inf
+                    -mp.inf, val - D_val - eps, val + D_val + eps,
+                             peak_center - bracket_width, peak_center + bracket_width, mp.inf
                 ]
 
                 sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
@@ -274,17 +266,13 @@ def _calc_segments_gapped_master(args, dps):
 
                     def inner_far_Etag(Etag):
                         n_Etag = dos(Etag - val, D_val)
-                        if n_Etag == mp.mpf('0'):
-                            return mp.mpf('0')
+                        if n_Etag == mp.mpf('0'): return mp.mpf('0')
                         gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-                        if gauss_arg < -200:
-                            return mp.mpf('0')
+                        if gauss_arg < -200: return mp.mpf('0')
                         gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
-                        f_E = f(E, temp)
-                        f_Etag_w = f(Etag - val, temp)
 
                         measure_E = mp.fabs(E)
-                        return measure_E * n_Etag * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+                        return measure_E * n_Etag * f(E, temp) * (mp.mpf('1') - f(Etag - val, temp)) * gauss
 
                     prob_inner += mp.quad(inner_far_Etag, [a, b], method='tanh-sinh')
 
@@ -300,7 +288,6 @@ def _calc_segments_gapped_master(args, dps):
 
 def Gamma(dE, T, resistance):
     """Wrapper to map exact diag Gamma calls to the new master integrator."""
-    # Ensure dps state is maintained inside the multiprocessing worker
     mp.dps = DPS
     args = [str(dE), str(T), str(Ec), str(D_gap), '1e-10', str(resistance)]
     return _calc_segments_gapped_master(args, DPS)
@@ -370,13 +357,13 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
 
 
 def worker_single_point(task_args):
-    m, v_idx, V, N_states, T0, cp_dir = task_args
+    m, v_idx, V, N_states_task, T0, cp_dir = task_args
     T_left = T0
     T_dot = T0 + 10 * m * T0
     T_right = T0 + 20 * m * T0
 
     print(f"Worker computing grad {m}, Vl = {V:.3f} V...", flush=True)
-    I = calculate_current(V, N=N_states, T_l=T_left, T_r=T_right, Tdot=T_dot)
+    I = calculate_current(V, N=N_states_task, T_l=T_left, T_r=T_right, Tdot=T_dot)
 
     cp_path = Path(cp_dir) / f"grad_{m}_vidx_{v_idx}.npy"
     np.save(cp_path, I)
@@ -395,34 +382,44 @@ if __name__ == '__main__':
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Simulation Constraints
-    N_states = 120  # Make sure this matches your physical truncation needs
     T0 = 0.001
     num_points = 101
     V_vals = np.linspace(0, 4, num_points)
     num_of_grads = 20
-
-    # Slurm chunk routing slicing parameters (for parallel jobs spanning multiple nodes)
-    chunk_id = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    num_chunks = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
     all_tasks = []
     for m in range(num_of_grads):
         for v_idx, V in enumerate(V_vals):
             all_tasks.append((m, v_idx, V, N_states, T0, checkpoint_dir))
 
-    # Slice tasks for the specific node running this script
-    chunk_size = len(all_tasks) // num_chunks
-    start_idx = chunk_id * chunk_size
-    end_idx = (chunk_id + 1) * chunk_size if chunk_id < (num_chunks - 1) else len(all_tasks)
-    my_tasks = all_tasks[start_idx:end_idx]
+    total_tasks = len(all_tasks)
+
+    # Slurm chunk routing slicing parameters
+    try:
+        raw_chunk_id = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+        num_chunks = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    except ValueError:
+        raw_chunk_id = 0
+        num_chunks = 1
+
+    # BULLETPROOF LOGIC: Force bounds
+    num_chunks = max(1, num_chunks)
+    chunk_id = max(0, min(raw_chunk_id, num_chunks - 1))
+
+    # --- PERFECT SLICING VIA NUMPY ---
+    split_tasks = np.array_split(all_tasks, num_chunks)
+    my_tasks = split_tasks[chunk_id].tolist()
+
+    # Calculate actual indices for logging purposes
+    start_idx = sum(len(split_tasks[i]) for i in range(chunk_id))
+    end_idx = start_idx + len(my_tasks)
 
     # --- Logging Block ---
-    import datetime
-
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     param_filename = base_folder / f"parameters_DPS{DPS}_chunk{chunk_id}_{timestamp_str}.txt"
     with open(param_filename, mode='w', encoding='utf-8') as pf:
-        pf.write(f"--- Exact Diagonalization Execution Log (Chunk {chunk_id}/{num_chunks}) ---\n")
+        pf.write(f"--- Exact Diagonalization Execution Log ---\n")
+        pf.write(f"Chunk ID               : {chunk_id} (of {num_chunks} total chunks)\n")
         pf.write(f"Global Precision (DPS) : {DPS}\n")
         pf.write(f"ProcessPool Workers    : {num_workers}\n")
         pf.write(f"Total Tasks in Chunk   : {len(my_tasks)}\n")
@@ -432,8 +429,12 @@ if __name__ == '__main__':
         pf.write(f"Ec                     : {float(Ec):.5e}\n")
         pf.write(f"D_gap                  : {float(D_gap):.5e}\n")
 
-    print(f"Slicing Task Group: processing tasks {start_idx} to {end_idx} on Pool.", flush=True)
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        pool.map(worker_single_point, my_tasks)
+    print(f"Slicing Task Group: processing tasks {start_idx} to {end_idx} (Total: {len(my_tasks)}) on Pool.",
+          flush=True)
 
-    print("Slice complete.", flush=True)
+    if len(my_tasks) > 0:
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            pool.map(worker_single_point, my_tasks)
+        print("Slice complete.", flush=True)
+    else:
+        print("ERROR: Slice resulted in 0 tasks. Check your array geometry.", flush=True)

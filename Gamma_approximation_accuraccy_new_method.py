@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 # --- Parameters ---
 DPS = 50  # Global precision parameter
-Cg = 50
+Cg = 5
 
 
 def qp_integrand(T, dE, Ec, D):
