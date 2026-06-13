@@ -10,36 +10,56 @@ from pathlib import Path
 from collections import defaultdict
 
 
-def exact_poly_vth(v_arr, i_arr, degree=3, threshold=1e-6):
+def calc_threshold_snr_interpolated(I, V):
     """
-    Extracts the highly precise Vth using an exact polynomial interpolation
-    around the first point that breaches the threshold.
+    Calculates Vth using the Continuous Signal-to-Noise Ratio (SNR) Breakout method.
+    It finds the interpolated voltage at 2x and 4x the noise floor and returns the midpoint.
     """
-    mask = i_arr > threshold
-    if not mask.any():
-        return np.nan
-    idx = np.argmax(mask)
-
-    # Define exact nodes based on polynomial degree
-    if degree == 1:
-        indices = [idx - 1, idx]
-    elif degree == 3:
-        indices = [idx - 1, idx, idx + 1, idx + 2]
-    else:
+    if len(I) < 10:
         return np.nan
 
-    # Ensure indices stay within array bounds
-    indices = [i for i in indices if 0 <= i < len(i_arr)]
-    if len(indices) != degree + 1:
+    # 1. Define baseline noise and error from the sub-threshold flat region
+    I_baseline = np.mean(I[:10])
+    I_err = np.std(I[:10])
+
+    # Fallback: if the simulation is 'too perfect' and std is 0, use an observed floor
+    if I_err < 1e-12:
+        I_err = 1e-10
+
+        # 2. Define the exact targets based on the paper's logic
+    target_small = I_baseline + 2 * I_err
+    target_big = I_baseline + 4 * I_err
+
+    # Helper function to find the exact continuous V for a target I
+    def find_crossing_V(target_I):
+        mask = I > target_I
+        if not mask.any():
+            return np.nan
+
+        idx = np.argmax(mask)  # First index where I > target_I
+        if idx == 0:
+            return V[0]
+
+        # Linearly interpolate between the point just before and just after the crossing
+        v_before, v_after = V[idx - 1], V[idx]
+        i_before, i_after = I[idx - 1], I[idx]
+
+        if i_after == i_before:
+            return v_before
+
+        slope = (i_after - i_before) / (v_after - v_before)
+        v_exact = v_before + (target_I - i_before) / slope
+        return v_exact
+
+    # 3. Calculate the continuous small and big voltages
+    small_V = find_crossing_V(target_small)
+    big_V = find_crossing_V(target_big)
+
+    if np.isnan(small_V) or np.isnan(big_V):
         return np.nan
 
-    v_sub = v_arr[indices]
-    i_sub = i_arr[indices]
-
-    # Exact fit mapping I to Vl, extracting the root at I=0
-    coeffs = np.polyfit(i_sub, v_sub, degree)
-    poly = np.poly1d(coeffs)
-    return poly(0)
+    # 4. Return the midpoint threshold
+    return (small_V + big_V) / 2.0
 
 
 def parse_params(filepath):
@@ -68,8 +88,6 @@ def parse_params(filepath):
         t_vals = [float(x) for x in match_T.group(1).split(',')]
         params['T_left'] = t_vals[0]
         params['T_right'] = t_vals[-1]
-
-        # Define gradT strictly as T_right - T_left
         params['dT'] = params['T_right'] - params['T_left']
     else:
         params['dT'] = 0.0
@@ -77,9 +95,10 @@ def parse_params(filepath):
     return params
 
 
-def read_forward_sweep(csv_path):
+def read_sweeps(csv_path):
     """
-    Safely reads V and I vectors from the CSV file and isolates the forward sweep.
+    Reads V and I vectors, isolating both the forward (Up) and backward (Down) sweeps.
+    Reverses the Down sweep so it can be parsed from 0 -> Vmax by the SNR algorithm.
     """
     v_col, i_col = [], []
     with open(csv_path, 'r') as f:
@@ -93,31 +112,37 @@ def read_forward_sweep(csv_path):
                 v_col.append(v)
                 i_col.append(i)
             except ValueError:
-                pass  # Skip non-numeric headers
+                pass
 
     if not v_col:
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), np.array([]), np.array([])
 
-    # Isolate forward sweep (up to max voltage)
+    # Find the peak voltage index
     idx_max = v_col.index(max(v_col))
-    v_forward = np.array(v_col[:idx_max + 1])
-    i_forward = np.array(i_col[:idx_max + 1])
 
-    return v_forward, i_forward
+    # Isolate forward sweep (0 -> Vmax)
+    v_up = np.array(v_col[:idx_max + 1])
+    i_up = np.array(i_col[:idx_max + 1])
+
+    # Isolate backward sweep (Vmax -> 0) and flip to (0 -> Vmax)
+    v_down_raw = np.array(v_col[idx_max:])
+    i_down_raw = np.array(i_col[idx_max:])
+
+    v_down = np.flip(v_down_raw)
+    i_down = np.flip(i_down_raw)
+
+    return v_up, i_up, v_down, i_down
 
 
 def main():
     base_dir = Path(__file__).parent.parent
-
     output_dir = base_dir / "Thermopower_Analysis"
     output_dir.mkdir(exist_ok=True)
 
-    # Dictionary to hold grouped data based on physical parameters
-    # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries mapping rep, dT, Vth
+    # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
     print("Scanning for results directories...")
-    # Find all generated results folders
     for directory in base_dir.glob("results_*"):
         if not directory.is_dir():
             continue
@@ -128,51 +153,43 @@ def main():
         for csv_path in directory.glob("*.csv"):
             name = csv_path.name
 
-            # Extract repetition index
             match_rep = re.search(r"rep(\d+)", name)
             if not match_rep:
                 continue
             rep = int(match_rep.group(1))
 
-            # Locate the exact corresponding parameter file
             param_file = directory / f"parameters_{run_name}_rep{rep}.txt"
             if not param_file.exists():
-                # Fallback search if exact name slightly varies
                 param_files = list(directory.glob(f"*rep{rep}*.txt"))
                 if param_files:
                     param_file = param_files[0]
                 else:
-                    print(f"Warning: No parameter file found for {name}. Skipping...")
+                    print(f"Warning: No param file found for {name}. Skipping...")
                     continue
 
-            # Parse parameters to establish physical properties and dT
             params = parse_params(param_file)
             sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'])
 
-            # Retrieve the forward IV trace
-            v_forward, i_forward = read_forward_sweep(csv_path)
-            if len(v_forward) == 0:
+            # Extract both sweeps
+            v_up, i_up, v_down, i_down = read_sweeps(csv_path)
+            if len(v_up) == 0:
                 continue
 
-            # Extract high-precision Vth
-            # Fallback to linear if cubic throws NaN (for very sharp features)
-            vth_cubic = exact_poly_vth(v_forward, i_forward, degree=3, threshold=1e-6)
-            if np.isnan(vth_cubic):
-                vth = exact_poly_vth(v_forward, i_forward, degree=1, threshold=1e-6)
-            else:
-                vth = vth_cubic
+            # Apply SNR Algorithm to both sweeps
+            vth_up = calc_threshold_snr_interpolated(i_up, v_up)
+            vth_down = calc_threshold_snr_interpolated(i_down, v_down)
 
             system_groups[sys_key].append({
                 'Run_Name': run_name,
                 'Repetition': rep,
                 'Delta_T': params['dT'],
-                'Vth': vth
+                'Vth_up': vth_up,
+                'Vth_down': vth_down
             })
 
-    # Consolidate and evaluate logic for each uniquely identified physical system
+    # Process and Plot for each unique physical system
     for sys_key, data in system_groups.items():
         if len(data) < 2:
-            print(f"Skipping System {sys_key} (Insufficient data points)")
             continue
 
         Cg, stdR, sig, T0 = sys_key
@@ -180,67 +197,75 @@ def main():
         sys_dir = output_dir / sys_folder_name
         sys_dir.mkdir(exist_ok=True)
 
-        # Sort entirely by the actual physical gradient Delta T (cross-directory safe)
+        # Sort by actual physical gradient
         data = sorted(data, key=lambda x: x['Delta_T'])
 
-        # Aggregate arrays
         dTs = np.array([d['Delta_T'] for d in data])
-        Vths = np.array([d['Vth'] for d in data])
+        Vth_up = np.array([d['Vth_up'] for d in data])
+        Vth_down = np.array([d['Vth_down'] for d in data])
 
-        # Remove stray NaNs
-        valid_mask = ~np.isnan(Vths)
+        # Filter NaNs ensuring arrays stay perfectly parallel
+        valid_mask = ~np.isnan(Vth_up) & ~np.isnan(Vth_down)
         dTs = dTs[valid_mask]
-        Vths = Vths[valid_mask]
+        Vth_up = Vth_up[valid_mask]
+        Vth_down = Vth_down[valid_mask]
 
         if len(dTs) < 2:
             continue
 
         # -----------------------------------------------------
-        # Dynamic Thermopower Derivative: S(T) = -dVth / d(dT)
+        # Dynamic Thermopower Derivative
         # -----------------------------------------------------
-        dVths = np.diff(Vths)
+        dVth_up = np.diff(Vth_up)
+        dVth_down = np.diff(Vth_down)
         ddTs = np.diff(dTs)
 
-        # Protect against duplicate gradients dividing by zero
         nonzero_dT = ddTs != 0
-        S = -dVths[nonzero_dT] / ddTs[nonzero_dT]
+        S_up = -dVth_up[nonzero_dT] / ddTs[nonzero_dT]
+        S_down = -dVth_down[nonzero_dT] / ddTs[nonzero_dT]
 
-        # Anchor the derivative securely to the step
         S_dT = dTs[1:][nonzero_dT]
 
-        # Export unified CSV log of the calculations
+        # Export CSV
         export_csv_path = sys_dir / "aggregated_thermopower_results.csv"
         with open(export_csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["Delta_T", "Vth", "S(T)"])
+            writer.writerow(["Delta_T", "Vth_Up", "Vth_Down", "S_Up", "S_Down"])
             for idx, dt_val in enumerate(dTs):
-                s_val = S[idx - 1] if idx > 0 and nonzero_dT[idx - 1] else np.nan
-                writer.writerow([dt_val, Vths[idx], s_val])
+                s_u = S_up[idx - 1] if idx > 0 and nonzero_dT[idx - 1] else np.nan
+                s_d = S_down[idx - 1] if idx > 0 and nonzero_dT[idx - 1] else np.nan
+                writer.writerow([dt_val, Vth_up[idx], Vth_down[idx], s_u, s_d])
 
-        # --- Graph 1: Threshold Voltage (Vth) vs Gradient ---
+        # --- Graph 1: Threshold Voltage (Up vs Down) ---
         plt.figure(figsize=(10, 6))
-        plt.plot(dTs, Vths, marker='o', linestyle='-', color='dodgerblue', linewidth=2, markersize=7)
+        plt.plot(dTs, Vth_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='Sweep Up')
+        plt.plot(dTs, Vth_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
         plt.xlabel('Total Temperature Gradient $\\Delta T = T_{right} - T_{left}$ (K)', fontsize=12)
-        plt.ylabel('Extrapolated Threshold Voltage $V_{th}$ (V)', fontsize=12)
-        plt.title(f'Threshold Voltage vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $sig={sig}$, $T_0={T0}$', fontsize=14)
+        plt.ylabel('Threshold Voltage $V_{th}$ (V) [SNR Breakout]', fontsize=12)
+        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $sig={sig}$, $T_0={T0}$',
+                  fontsize=14)
+        plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
-        plt.savefig(sys_dir / 'Vth_vs_Gradient.png', dpi=300)
+        plt.savefig(sys_dir / 'Vth_vs_Gradient_Hysteresis.png', dpi=300)
         plt.close()
 
-        # --- Graph 2: Thermopower S(T) vs Gradient ---
+        # --- Graph 2: Thermopower S(T) (Up vs Down) ---
         plt.figure(figsize=(10, 6))
-        plt.plot(S_dT, S, marker='s', linestyle='-', color='crimson', linewidth=2, markersize=7)
-        plt.axhline(0, color='black', linestyle='--', alpha=0.7)
+        plt.plot(S_dT, S_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='S(T) Up')
+        plt.plot(S_dT, S_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
+        plt.axhline(0, color='black', linestyle='-', alpha=0.8)
         plt.xlabel('Total Temperature Gradient $\\Delta T$ (K)', fontsize=12)
         plt.ylabel('Thermopower $S(T) = -dV_{th} / d(\\Delta T)$ (V/K)', fontsize=12)
-        plt.title(f'Thermopower $S(T)$ vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $sig={sig}$, $T_0={T0}$', fontsize=14)
+        plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $sig={sig}$, $T_0={T0}$',
+                  fontsize=14)
+        plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
-        plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient.png', dpi=300)
+        plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis.png', dpi=300)
         plt.close()
 
-        print(f"Exported data and generated graphs in: {sys_dir}")
+        print(f"Exported data and generated dual-sweep graphs in: {sys_dir}")
 
     print("\nBatch Thermopower processing complete.")
 
