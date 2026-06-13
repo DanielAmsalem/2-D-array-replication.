@@ -10,55 +10,48 @@ from pathlib import Path
 from collections import defaultdict
 
 
-def calc_threshold_snr_interpolated(I, V):
+def calc_threshold_snr_interpolated(I, IErr, V):
     """
     Calculates Vth using the Continuous Signal-to-Noise Ratio (SNR) Breakout method.
-    It finds the interpolated voltage at 2x and 4x the noise floor and returns the midpoint.
+    Finds the interpolated voltage where the signal dynamically breaks out of
+    2x and 4x the simulation's specific error array (IErr).
     """
-    if len(I) < 10:
+    if len(I) < 2:
         return np.nan
 
-    # 1. Define baseline noise and error from the sub-threshold flat region
-    I_baseline = np.mean(I[:10])
-    I_err = np.std(I[:10])
+    def find_crossing_V(multiplier):
+        # We look for the exact point where I overtakes multiplier * IErr
+        diff = I - (multiplier * IErr)
+        mask = diff > 0
 
-    # Fallback: if the simulation is 'too perfect' and std is 0, use an observed floor
-    if I_err < 1e-12:
-        I_err = 1e-10
-
-        # 2. Define the exact targets based on the paper's logic
-    target_small = I_baseline + 2 * I_err
-    target_big = I_baseline + 4 * I_err
-
-    # Helper function to find the exact continuous V for a target I
-    def find_crossing_V(target_I):
-        mask = I > target_I
         if not mask.any():
             return np.nan
 
-        idx = np.argmax(mask)  # First index where I > target_I
+        idx = np.argmax(mask)  # First index where current breaks the noise multiplier
+
         if idx == 0:
             return V[0]
 
         # Linearly interpolate between the point just before and just after the crossing
         v_before, v_after = V[idx - 1], V[idx]
-        i_before, i_after = I[idx - 1], I[idx]
+        diff_before, diff_after = diff[idx - 1], diff[idx]
 
-        if i_after == i_before:
+        # 0 = diff_before + (diff_after - diff_before) * (v_exact - v_before) / (v_after - v_before)
+        slope = (diff_after - diff_before) / (v_after - v_before)
+        if slope == 0:
             return v_before
 
-        slope = (i_after - i_before) / (v_after - v_before)
-        v_exact = v_before + (target_I - i_before) / slope
+        v_exact = v_before - (diff_before / slope)
         return v_exact
 
-    # 3. Calculate the continuous small and big voltages
-    small_V = find_crossing_V(target_small)
-    big_V = find_crossing_V(target_big)
+    # Find the continuous small and big breakout voltages
+    small_V = find_crossing_V(2.0)
+    big_V = find_crossing_V(4.0)
 
     if np.isnan(small_V) or np.isnan(big_V):
         return np.nan
 
-    # 4. Return the midpoint threshold
+    # Return the exact continuous midpoint threshold
     return (small_V + big_V) / 2.0
 
 
@@ -97,41 +90,44 @@ def parse_params(filepath):
 
 def read_sweeps(csv_path):
     """
-    Reads V and I vectors, isolating both the forward (Up) and backward (Down) sweeps.
-    Reverses the Down sweep so it can be parsed from 0 -> Vmax by the SNR algorithm.
+    Reads V, I, and I_err (row[2]) vectors, isolating both the forward (Up)
+    and backward (Down) sweeps. Reverses the Down sweep so the SNR
+    algorithm evaluates it forward from 0 -> Vmax.
     """
-    v_col, i_col = [], []
+    v_col, i_col, ierr_col = [], [], []
     with open(csv_path, 'r') as f:
         reader = csv.reader(f)
         for row in reader:
-            if len(row) < 2:
+            if len(row) < 3:
                 continue
             try:
                 v = float(row[0])
                 i = float(row[1])
+                ierr = float(row[2])
                 v_col.append(v)
                 i_col.append(i)
+                ierr_col.append(ierr)
             except ValueError:
                 pass
 
     if not v_col:
-        return np.array([]), np.array([]), np.array([]), np.array([])
+        empty = np.array([])
+        return empty, empty, empty, empty, empty, empty
 
-    # Find the peak voltage index
+    # Find the peak voltage index to split the arrays
     idx_max = v_col.index(max(v_col))
 
     # Isolate forward sweep (0 -> Vmax)
     v_up = np.array(v_col[:idx_max + 1])
     i_up = np.array(i_col[:idx_max + 1])
+    ierr_up = np.array(ierr_col[:idx_max + 1])
 
-    # Isolate backward sweep (Vmax -> 0) and flip to (0 -> Vmax)
-    v_down_raw = np.array(v_col[idx_max:])
-    i_down_raw = np.array(i_col[idx_max:])
+    # Isolate backward sweep (Vmax -> 0) and flip to (0 -> Vmax) for SNR math
+    v_down = np.flip(np.array(v_col[idx_max:]))
+    i_down = np.flip(np.array(i_col[idx_max:]))
+    ierr_down = np.flip(np.array(ierr_col[idx_max:]))
 
-    v_down = np.flip(v_down_raw)
-    i_down = np.flip(i_down_raw)
-
-    return v_up, i_up, v_down, i_down
+    return v_up, i_up, ierr_up, v_down, i_down, ierr_down
 
 
 def main():
@@ -153,6 +149,7 @@ def main():
         for csv_path in directory.glob("*.csv"):
             name = csv_path.name
 
+            # Extract repetition index
             match_rep = re.search(r"rep(\d+)", name)
             if not match_rep:
                 continue
@@ -160,6 +157,7 @@ def main():
 
             param_file = directory / f"parameters_{run_name}_rep{rep}.txt"
             if not param_file.exists():
+                # Fallback search if exact name slightly varies
                 param_files = list(directory.glob(f"*rep{rep}*.txt"))
                 if param_files:
                     param_file = param_files[0]
@@ -170,14 +168,14 @@ def main():
             params = parse_params(param_file)
             sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'])
 
-            # Extract both sweeps
-            v_up, i_up, v_down, i_down = read_sweeps(csv_path)
+            # Extract both sweeps including the dynamic IErr array
+            v_up, i_up, ierr_up, v_down, i_down, ierr_down = read_sweeps(csv_path)
             if len(v_up) == 0:
                 continue
 
-            # Apply SNR Algorithm to both sweeps
-            vth_up = calc_threshold_snr_interpolated(i_up, v_up)
-            vth_down = calc_threshold_snr_interpolated(i_down, v_down)
+            # Apply dynamic SNR Algorithm to both sweeps utilizing the specific IErr
+            vth_up = calc_threshold_snr_interpolated(i_up, ierr_up, v_up)
+            vth_down = calc_threshold_snr_interpolated(i_down, ierr_down, v_down)
 
             system_groups[sys_key].append({
                 'Run_Name': run_name,
@@ -197,7 +195,7 @@ def main():
         sys_dir = output_dir / sys_folder_name
         sys_dir.mkdir(exist_ok=True)
 
-        # Sort by actual physical gradient
+        # Sort by actual physical gradient (dT) to handle uneven rep jumps safely
         data = sorted(data, key=lambda x: x['Delta_T'])
 
         dTs = np.array([d['Delta_T'] for d in data])
@@ -211,22 +209,24 @@ def main():
         Vth_down = Vth_down[valid_mask]
 
         if len(dTs) < 2:
+            print(f"Skipping {sys_folder_name} - Not enough valid threshold data.")
             continue
 
         # -----------------------------------------------------
-        # Dynamic Thermopower Derivative
+        # Dynamic Thermopower Derivative: S = -dVth / d(DeltaT)
         # -----------------------------------------------------
         dVth_up = np.diff(Vth_up)
         dVth_down = np.diff(Vth_down)
         ddTs = np.diff(dTs)
 
+        # Protect against duplicate gradients dividing by zero
         nonzero_dT = ddTs != 0
         S_up = -dVth_up[nonzero_dT] / ddTs[nonzero_dT]
         S_down = -dVth_down[nonzero_dT] / ddTs[nonzero_dT]
 
         S_dT = dTs[1:][nonzero_dT]
 
-        # Export CSV
+        # Export Unified CSV
         export_csv_path = sys_dir / "aggregated_thermopower_results.csv"
         with open(export_csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -242,7 +242,7 @@ def main():
         plt.plot(dTs, Vth_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
         plt.xlabel('Total Temperature Gradient $\\Delta T = T_{right} - T_{left}$ (K)', fontsize=12)
         plt.ylabel('Threshold Voltage $V_{th}$ (V) [SNR Breakout]', fontsize=12)
-        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $sig={sig}$, $T_0={T0}$',
+        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
                   fontsize=14)
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
@@ -257,7 +257,7 @@ def main():
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
         plt.xlabel('Total Temperature Gradient $\\Delta T$ (K)', fontsize=12)
         plt.ylabel('Thermopower $S(T) = -dV_{th} / d(\\Delta T)$ (V/K)', fontsize=12)
-        plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $sig={sig}$, $T_0={T0}$',
+        plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
                   fontsize=14)
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
