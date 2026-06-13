@@ -101,12 +101,9 @@ def read_sweeps(csv_path):
             if len(row) < 3:
                 continue
             try:
-                v = float(row[0])
-                i = float(row[1])
-                ierr = float(row[2])
-                v_col.append(v)
-                i_col.append(i)
-                ierr_col.append(ierr)
+                v_col.append(float(row[0]))
+                i_col.append(float(row[1]))
+                ierr_col.append(float(row[2]))
             except ValueError:
                 pass
 
@@ -130,8 +127,67 @@ def read_sweeps(csv_path):
     return v_up, i_up, ierr_up, v_down, i_down, ierr_down
 
 
-def main():
-    base_dir = Path(__file__).parent.parent
+def run_scanner_mode(base_dir, ivs_txt_path):
+    """
+    MODE 1: Rapidly scans folders for duplicates and maps the physical runs.
+    Outputs the log to IVs.txt.
+    """
+    print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...")
+
+    # catalog structure: catalog[(stdR, sig, T0)][Cg] = {'counts': {rep: count}, 'folders': set()}
+    catalog = defaultdict(lambda: defaultdict(lambda: {'counts': defaultdict(int), 'folders': set()}))
+
+    for directory in base_dir.glob("results_*"):
+        if not directory.is_dir(): continue
+        run_name = directory.name.replace("results_", "")
+
+        for csv_path in directory.glob("*.csv"):
+            name = csv_path.name
+            match_rep = re.search(r"rep(\d+)", name)
+            if not match_rep: continue
+            rep = int(match_rep.group(1))
+
+            param_file = directory / f"parameters_{run_name}_rep{rep}.txt"
+            if not param_file.exists():
+                param_files = list(directory.glob(f"*rep{rep}*.txt"))
+                if param_files:
+                    param_file = param_files[0]
+                else:
+                    continue
+
+            params = parse_params(param_file)
+            stdR, sig, T0, Cg = params['stdR'], params['sig'], params['T0'], params['Cg']
+
+            catalog[(stdR, sig, T0)][Cg]['counts'][rep] += 1
+            catalog[(stdR, sig, T0)][Cg]['folders'].add(f"results_{run_name}")
+
+    # Generate the IVs.txt report
+    with open(ivs_txt_path, 'w') as f:
+        for (stdR, sig, T0), cg_data in catalog.items():
+            f.write(f"----- StdR={stdR} ; sig={sig} ; T0={T0} ---------\n")
+
+            for Cg, stats in cg_data.items():
+                rep_counts = stats['counts']
+                all_runs = sorted(list(rep_counts.keys()))
+                multiples = sorted([r for r, count in rep_counts.items() if count > 1])
+                folders = sorted(list(stats['folders']))
+
+                f.write(f"Cg : {Cg} with runs {all_runs}\n")
+                f.write(f"runs with multiples : {multiples}\n")
+                f.write(f"folders relevant : {', '.join(folders)}\n\n")
+
+            f.write("-------------------------------------------\n")
+
+    print(f"\n[DONE] Scan complete. Diagnostic file created at:\n{ivs_txt_path.absolute()}")
+    print("Please review it, delete multiple runs/folders as needed, delete IVs.txt, and run this script again.")
+
+
+def run_analysis_mode(base_dir):
+    """
+    MODE 2: Full physical extraction, plotting, and S(T) differentiation.
+    """
+    print("[IVs.txt FOUND] -> Clean data assumed. Initializing Analysis Mode...")
+
     output_dir = base_dir / "Thermopower_Analysis"
     output_dir.mkdir(exist_ok=True)
 
@@ -268,6 +324,16 @@ def main():
         print(f"Exported data and generated dual-sweep graphs in: {sys_dir}")
 
     print("\nBatch Thermopower processing complete.")
+
+
+def main():
+    base_dir = Path(__file__).parent.parent
+    ivs_txt_path = base_dir / "IVs.txt"
+
+    if not ivs_txt_path.exists():
+        run_scanner_mode(base_dir, ivs_txt_path)
+    else:
+        run_analysis_mode(base_dir)
 
 
 if __name__ == '__main__':
