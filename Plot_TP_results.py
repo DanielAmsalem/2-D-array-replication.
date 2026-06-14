@@ -132,7 +132,7 @@ def run_scanner_mode(base_dir, ivs_txt_path):
     MODE 1: Rapidly scans folders for duplicates and maps the physical runs.
     Outputs the log to IVs.txt.
     """
-    print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...")
+    print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...",flush=True)
 
     # catalog structure: catalog[(stdR, sig, T0)][Cg] = {'counts': {rep: count}, 'folders': set()}
     catalog = defaultdict(lambda: defaultdict(lambda: {'counts': defaultdict(int), 'folders': set()}))
@@ -194,13 +194,13 @@ def run_analysis_mode(base_dir):
     # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
-    print("Scanning for results directories...")
+    print("Scanning for results directories...",flush=True)
     for directory in base_dir.glob("results_*"):
         if not directory.is_dir():
             continue
 
         run_name = directory.name.replace("results_", "")
-        print(f"Processing run batch: {run_name}")
+        print(f"Processing run batch: {run_name}",flush=True)
 
         for csv_path in directory.glob("*.csv"):
             name = csv_path.name
@@ -265,7 +265,7 @@ def run_analysis_mode(base_dir):
         Vth_down = Vth_down[valid_mask]
 
         if len(dTs) < 2:
-            print(f"Skipping {sys_folder_name} - Not enough valid threshold data.")
+            print(f"Skipping {sys_folder_name} - Not enough valid threshold data.",flush=True)
             continue
 
         # -----------------------------------------------------
@@ -279,7 +279,6 @@ def run_analysis_mode(base_dir):
         nonzero_dT = ddTs != 0
         S_up = -dVth_up[nonzero_dT] / ddTs[nonzero_dT]
         S_down = -dVth_down[nonzero_dT] / ddTs[nonzero_dT]
-
         S_dT = dTs[1:][nonzero_dT]
 
         # Export Unified CSV
@@ -321,13 +320,13 @@ def run_analysis_mode(base_dir):
         plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis.png', dpi=300)
         plt.close()
 
-        print(f"Exported data and generated dual-sweep graphs in: {sys_dir}")
+        print(f"Exported data and generated dual-sweep graphs in: {sys_dir}", flush=True)
 
     print("\nBatch Thermopower processing complete.")
 
 
 def main():
-    base_dir = Path(__file__).parent.parent
+    base_dir = Path(__file__).parent.absolute()
     ivs_txt_path = base_dir / "IVs.txt"
 
     if not ivs_txt_path.exists():
