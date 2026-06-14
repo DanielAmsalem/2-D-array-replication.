@@ -8,19 +8,24 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 from collections import defaultdict
-from scipy.signal import savgol_filter
+import warnings
 
-poly_order = 6
+poly_order = 3
 print(f"poly order = {poly_order}", flush=True)
+
 
 def calc_threshold_snr_interpolated(I, IErr, V):
     """
     Calculates Vth using the Continuous Signal-to-Noise Ratio (SNR) Breakout method.
     Finds the interpolated voltage where the signal dynamically breaks out of
     2x and 4x the simulation's specific error array (IErr).
+
+    Returns:
+        v_th: The midpoint voltage between the 2x and 4x thresholds.
+        v_err: The uncertainty, defined as half the voltage gap between the thresholds.
     """
     if len(I) < 2:
-        return np.nan
+        return np.nan, np.nan
 
     def find_crossing_V(multiplier):
         # We look for the exact point where I overtakes multiplier * IErr
@@ -52,10 +57,13 @@ def calc_threshold_snr_interpolated(I, IErr, V):
     big_V = find_crossing_V(4.0)
 
     if np.isnan(small_V) or np.isnan(big_V):
-        return np.nan
+        return np.nan, np.nan
 
-    # Return the exact continuous midpoint threshold
-    return (small_V + big_V) / 2.0
+    # Return the exact continuous midpoint threshold and its mathematical uncertainty
+    v_th = (small_V + big_V) / 2.0
+    v_err = abs(big_V - small_V) / 2.0  # Error is half the gap width
+
+    return v_th, v_err
 
 
 def parse_params(filepath):
@@ -213,7 +221,7 @@ def run_analysis_mode(base_dir):
     """
     print("[IVs.txt FOUND] -> Clean data assumed. Initializing Analysis Mode...")
 
-    output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_savgol_deg{poly_order}"
+    output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_weighted_deg{poly_order}"
     output_dir.mkdir(exist_ok=True)
 
     # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries
@@ -260,15 +268,18 @@ def run_analysis_mode(base_dir):
                 continue
 
             # Apply dynamic SNR Algorithm to both sweeps utilizing the specific IErr
-            vth_up = calc_threshold_snr_interpolated(i_up, ierr_up, v_up)
-            vth_down = calc_threshold_snr_interpolated(i_down, ierr_down, v_down)
+            # Extract both Vth AND the dynamic uncertainty margin (err)
+            vth_up, err_up = calc_threshold_snr_interpolated(i_up, ierr_up, v_up)
+            vth_down, err_down = calc_threshold_snr_interpolated(i_down, ierr_down, v_down)
 
             system_groups[sys_key].append({
                 'Run_Name': run_name,
                 'Repetition': rep,
                 'Delta_T': params['dT'],
                 'Vth_up': vth_up,
-                'Vth_down': vth_down
+                'err_up': err_up,
+                'Vth_down': vth_down,
+                'err_down': err_down
             })
 
     # Process and Plot for each unique physical system
@@ -287,54 +298,126 @@ def run_analysis_mode(base_dir):
         dTs = np.array([d['Delta_T'] for d in data])
         Vth_up = np.array([d['Vth_up'] for d in data])
         Vth_down = np.array([d['Vth_down'] for d in data])
+        err_up = np.array([d['err_up'] for d in data])
+        err_down = np.array([d['err_down'] for d in data])
 
         # Filter NaNs ensuring arrays stay perfectly parallel
         valid_mask = ~np.isnan(Vth_up) & ~np.isnan(Vth_down)
         dTs = dTs[valid_mask]
         Vth_up = Vth_up[valid_mask]
         Vth_down = Vth_down[valid_mask]
+        err_up = err_up[valid_mask]
+        err_down = err_down[valid_mask]
 
-        if len(dTs) < 4:  # Savitzky-Golay generally needs at least a few points
+        if len(dTs) < 4:
             print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
             continue
 
         # -----------------------------------------------------
-        # Dynamic Thermopower Derivative using Savitzky-Golay
+        # Dynamic Thermopower Derivative: Weighted Sliding Fit
         # -----------------------------------------------------
-        # The window size must be an odd number. We dynamically size it based on data length.
-        window_length = min(5, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
+        # Dynamically size the window based on data length and poly_order
+        min_window = poly_order + 1
+        if min_window % 2 == 0: min_window += 1
 
-        if window_length > poly_order:
-            # We must divide the resulting derivative by the average dx step size
-            # Using delta specifies the spacing explicitly for savgol_filter
-            avg_dx = np.mean(np.diff(dTs))
-            if avg_dx == 0:
-                avg_dx = 1e-6  # fallback prevent division by zero
+        window_length = min(15, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
+        if window_length < min_window:
+            window_length = min_window if min_window <= len(dTs) else (len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
 
-            S_up = -savgol_filter(Vth_up, window_length=window_length, polyorder=poly_order, deriv=1, delta=avg_dx)
-            S_down = -savgol_filter(Vth_down, window_length=window_length, polyorder=poly_order, deriv=1, delta=avg_dx)
-            S_dT = dTs  # Sav-Gol returns an array of the identical length
+        half_window = window_length // 2
+
+        # Function to perform a weighted local derivative
+        def weighted_sliding_derivative(x, y, y_err, window, deg=2):
+            derivs = np.zeros_like(y)
+            hw = window // 2
+            n = len(x)
+
+            for i in range(n):
+                # Determine window bounds (handling edges)
+                start = max(0, i - hw)
+                end = min(n, i + hw + 1)
+
+                # If near the edge, expand the window in the other direction to maintain size
+                if end - start < window:
+                    if start == 0:
+                        end = min(n, window)
+                    elif end == n:
+                        start = max(0, n - window)
+
+                x_win = x[start:end]
+                y_win = y[start:end]
+                err_win = y_err[start:end]
+
+                # Prevent division by zero if error is perfectly zero
+                err_win = np.where(err_win == 0, 1e-12, err_win)
+
+                # Weights are 1 / variance
+                weights = 1.0 / (err_win ** 2)
+
+                # Fit polynomial: y = ax^2 + bx + c
+                # Note: polyfit returns coefficients highest-power first [a, b, c]
+                # Ensure degree is strictly less than number of points
+                current_deg = min(deg, len(x_win) - 1)
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore', np.RankWarning)
+                    coeffs = np.polyfit(x_win, y_win, current_deg, w=weights)
+
+                # Analytical derivative: dy/dx = 2ax + b
+                p_deriv = np.polyder(coeffs)
+
+                # Evaluate derivative at the target point x[i]
+                derivs[i] = np.polyval(p_deriv, x[i])
+
+            return derivs
+
+        # Only perform the fit if we have enough points
+        if len(dTs) >= 3:
+            # Thermopower is the negative derivative: S = -dV/dT
+            S_up = -weighted_sliding_derivative(dTs, Vth_up, err_up, window=window_length, deg=poly_order)
+            S_down = -weighted_sliding_derivative(dTs, Vth_down, err_down, window=window_length, deg=poly_order)
+            S_dT = dTs
+
+            # Standard error propagation for subtraction across standard temperature steps
+            dT_steps = np.diff(dTs)
+            dT_steps = np.append(dT_steps, dT_steps[-1])
+            S_err_up = np.sqrt(err_up ** 2 + np.roll(err_up, shift=1) ** 2) / dT_steps
+            S_err_down = np.sqrt(err_down ** 2 + np.roll(err_down, shift=1) ** 2) / dT_steps
+            S_err_up[0], S_err_down[0] = S_err_up[1], S_err_down[1]  # fallback for the first point boundary
         else:
-            # Fallback to standard gradient if there are too few points for Sav-Gol
+            # Fallback to standard gradient if there are too few points
             S_up = -np.gradient(Vth_up, dTs)
             S_down = -np.gradient(Vth_down, dTs)
             S_dT = dTs
+
+            dT_steps = np.diff(dTs)
+            dT_steps = np.append(dT_steps, dT_steps[-1])
+            S_err_up = np.sqrt(err_up ** 2 + np.roll(err_up, shift=1) ** 2) / dT_steps
+            S_err_down = np.sqrt(err_down ** 2 + np.roll(err_down, shift=1) ** 2) / dT_steps
+            S_err_up[0], S_err_down[0] = S_err_up[1], S_err_down[1]
 
         # Export Unified CSV
         export_csv_path = sys_dir / "aggregated_thermopower_results.csv"
         with open(export_csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["Delta_T", "Vth_Up", "Vth_Down", "S_Up", "S_Down"])
+            writer.writerow(["Delta_T", "Vth_Up", "Vth_Down", "S_Up", "S_Down", "S_err_up", "S_err_down"])
             # Arrays are perfectly aligned in length now, no index shifting needed
             for idx, dt_val in enumerate(dTs):
-                writer.writerow([dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx]])
+                writer.writerow(
+                    [dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx], S_err_up[idx], S_err_down[idx]])
 
         # --- Graph 1: Threshold Voltage (Up vs Down) ---
         plt.figure(figsize=(10, 6))
-        plt.plot(dTs, Vth_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='Sweep Up')
-        plt.plot(dTs, Vth_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
-        plt.xlabel('Total Temperature Gradient $\\Delta T = T_{right} - T_{left}$ (K)', fontsize=12)
-        plt.ylabel('Threshold Voltage $V_{th}$ (V) [SNR Breakout]', fontsize=12)
+
+        # Plot Vth with error bars corresponding to the width of the SNR breakout region
+        plt.errorbar(dTs, Vth_up, yerr=err_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2,
+                     label='Sweep Up', capsize=3)
+        plt.errorbar(dTs, Vth_down, yerr=err_down, marker='s', linestyle='--', color='crimson', linewidth=2,
+                     label='Sweep Down', capsize=3)
+
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / k_B \langle C \rangle$)',
+                   fontsize=12)
+        plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
         plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
                   fontsize=14)
         plt.legend()
@@ -345,11 +428,18 @@ def run_analysis_mode(base_dir):
 
         # --- Graph 2: Thermopower S(T) (Up vs Down) ---
         plt.figure(figsize=(10, 6))
+
+        # Plot S(T) with a shaded confidence interval derived from the propagated error
         plt.plot(S_dT, S_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='S(T) Up')
+        plt.fill_between(S_dT, S_up - S_err_up, S_up + S_err_up, color='dodgerblue', alpha=0.2)
+
         plt.plot(S_dT, S_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
+        plt.fill_between(S_dT, S_down - S_err_down, S_down + S_err_down, color='crimson', alpha=0.2)
+
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel('Total Temperature Gradient $\\Delta T$ (K)', fontsize=12)
-        plt.ylabel('Thermopower $S(T) = -dV_{th} / d(\\Delta T)$ (V/K)', fontsize=12)
+
+        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / k_B \langle C \rangle$)', fontsize=12)
+        plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
         plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
                   fontsize=14)
         plt.legend()
