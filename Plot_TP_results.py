@@ -127,12 +127,20 @@ def read_sweeps(csv_path):
     return v_up, i_up, ierr_up, v_down, i_down, ierr_down
 
 
+# Folders that should be completely skipped by the script
+ignored_folders = {
+    "20251207_17h43m26s",
+    "20260605_19h36m00s",
+    "20260606_22h05m04s"
+}
+
+
 def run_scanner_mode(base_dir, ivs_txt_path):
     """
     MODE 1: Rapidly scans folders for duplicates and maps the physical runs.
     Outputs the log to IVs.txt.
     """
-    print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...",flush=True)
+    print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...", flush=True)
 
     # catalog structure: catalog[(stdR, sig, T0)][Cg] = {'counts': {rep: count}, 'folders': set()}
     catalog = defaultdict(lambda: defaultdict(lambda: {'counts': defaultdict(int), 'folders': set()}))
@@ -140,6 +148,10 @@ def run_scanner_mode(base_dir, ivs_txt_path):
     for directory in base_dir.glob("results_*"):
         if not directory.is_dir(): continue
         run_name = directory.name.replace("results_", "")
+
+        # Skip explicitly ignored folders
+        if run_name in ignored_folders:
+            continue
 
         for csv_path in directory.glob("*.csv"):
             name = csv_path.name
@@ -194,13 +206,18 @@ def run_analysis_mode(base_dir):
     # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
-    print("Scanning for results directories...",flush=True)
+    print("Scanning for results directories...", flush=True)
     for directory in base_dir.glob("results_*"):
         if not directory.is_dir():
             continue
 
         run_name = directory.name.replace("results_", "")
-        print(f"Processing run batch: {run_name}",flush=True)
+
+        # Skip explicitly ignored folders
+        if run_name in ignored_folders:
+            continue
+
+        print(f"Processing run batch: {run_name}", flush=True)
 
         for csv_path in directory.glob("*.csv"):
             name = csv_path.name
@@ -265,7 +282,7 @@ def run_analysis_mode(base_dir):
         Vth_down = Vth_down[valid_mask]
 
         if len(dTs) < 2:
-            print(f"Skipping {sys_folder_name} - Not enough valid threshold data.",flush=True)
+            print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
             continue
 
         # -----------------------------------------------------
