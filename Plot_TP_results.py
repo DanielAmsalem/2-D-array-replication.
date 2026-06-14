@@ -8,7 +8,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 from collections import defaultdict
+from scipy.signal import savgol_filter
 
+poly_order = 6
+print(f"poly order = {poly_order}", flush=True)
 
 def calc_threshold_snr_interpolated(I, IErr, V):
     """
@@ -210,7 +213,7 @@ def run_analysis_mode(base_dir):
     """
     print("[IVs.txt FOUND] -> Clean data assumed. Initializing Analysis Mode...")
 
-    output_dir = base_dir / "Thermopower_Analysis"
+    output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_savgol_deg{poly_order}"
     output_dir.mkdir(exist_ok=True)
 
     # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries
@@ -291,32 +294,40 @@ def run_analysis_mode(base_dir):
         Vth_up = Vth_up[valid_mask]
         Vth_down = Vth_down[valid_mask]
 
-        if len(dTs) < 2:
+        if len(dTs) < 4:  # Savitzky-Golay generally needs at least a few points
             print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
             continue
 
         # -----------------------------------------------------
-        # Dynamic Thermopower Derivative: S = -dVth / d(DeltaT)
+        # Dynamic Thermopower Derivative using Savitzky-Golay
         # -----------------------------------------------------
-        dVth_up = np.diff(Vth_up)
-        dVth_down = np.diff(Vth_down)
-        ddTs = np.diff(dTs)
+        # The window size must be an odd number. We dynamically size it based on data length.
+        window_length = min(5, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
 
-        # Protect against duplicate gradients dividing by zero
-        nonzero_dT = ddTs != 0
-        S_up = -dVth_up[nonzero_dT] / ddTs[nonzero_dT]
-        S_down = -dVth_down[nonzero_dT] / ddTs[nonzero_dT]
-        S_dT = dTs[1:][nonzero_dT]
+        if window_length > poly_order:
+            # We must divide the resulting derivative by the average dx step size
+            # Using delta specifies the spacing explicitly for savgol_filter
+            avg_dx = np.mean(np.diff(dTs))
+            if avg_dx == 0:
+                avg_dx = 1e-6  # fallback prevent division by zero
+
+            S_up = -savgol_filter(Vth_up, window_length=window_length, polyorder=poly_order, deriv=1, delta=avg_dx)
+            S_down = -savgol_filter(Vth_down, window_length=window_length, polyorder=poly_order, deriv=1, delta=avg_dx)
+            S_dT = dTs  # Sav-Gol returns an array of the identical length
+        else:
+            # Fallback to standard gradient if there are too few points for Sav-Gol
+            S_up = -np.gradient(Vth_up, dTs)
+            S_down = -np.gradient(Vth_down, dTs)
+            S_dT = dTs
 
         # Export Unified CSV
         export_csv_path = sys_dir / "aggregated_thermopower_results.csv"
         with open(export_csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["Delta_T", "Vth_Up", "Vth_Down", "S_Up", "S_Down"])
+            # Arrays are perfectly aligned in length now, no index shifting needed
             for idx, dt_val in enumerate(dTs):
-                s_u = S_up[idx - 1] if idx > 0 and nonzero_dT[idx - 1] else np.nan
-                s_d = S_down[idx - 1] if idx > 0 and nonzero_dT[idx - 1] else np.nan
-                writer.writerow([dt_val, Vth_up[idx], Vth_down[idx], s_u, s_d])
+                writer.writerow([dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx]])
 
         # --- Graph 1: Threshold Voltage (Up vs Down) ---
         plt.figure(figsize=(10, 6))
