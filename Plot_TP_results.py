@@ -142,8 +142,8 @@ def run_scanner_mode(base_dir, ivs_txt_path):
     """
     print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...", flush=True)
 
-    # catalog structure: catalog[(stdR, sig, T0)][Cg] = {'counts': {rep: count}, 'folders': set()}
-    catalog = defaultdict(lambda: defaultdict(lambda: {'counts': defaultdict(int), 'folders': set()}))
+    # catalog structure: catalog[(stdR, sig, T0)][Cg][rep] = [folder1, folder2, ...]
+    catalog = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     for directory in base_dir.glob("results_*"):
         if not directory.is_dir(): continue
@@ -170,23 +170,33 @@ def run_scanner_mode(base_dir, ivs_txt_path):
             params = parse_params(param_file)
             stdR, sig, T0, Cg = params['stdR'], params['sig'], params['T0'], params['Cg']
 
-            catalog[(stdR, sig, T0)][Cg]['counts'][rep] += 1
-            catalog[(stdR, sig, T0)][Cg]['folders'].add(f"results_{run_name}")
+            # Track exactly which folder this rep came from
+            catalog[(stdR, sig, T0)][Cg][rep].append(f"results_{run_name}")
 
     # Generate the IVs.txt report
     with open(ivs_txt_path, 'w') as f:
         for (stdR, sig, T0), cg_data in catalog.items():
             f.write(f"----- StdR={stdR} ; sig={sig} ; T0={T0} ---------\n")
 
-            for Cg, stats in cg_data.items():
-                rep_counts = stats['counts']
-                all_runs = sorted(list(rep_counts.keys()))
-                multiples = sorted([r for r, count in rep_counts.items() if count > 1])
-                folders = sorted(list(stats['folders']))
+            for Cg, rep_dict in cg_data.items():
+                all_runs = sorted(list(rep_dict.keys()))
+
+                multiples = []
+                relevant_folders = set()
+
+                # Check for reps that exist in more than one folder
+                for rep, folders in rep_dict.items():
+                    if len(folders) > 1:
+                        multiples.append(rep)
+                        relevant_folders.update(folders)
+
+                multiples = sorted(multiples)
+                folders_sorted = sorted(list(relevant_folders))
+                folders_str = ', '.join(folders_sorted) if folders_sorted else 'None'
 
                 f.write(f"Cg : {Cg} with runs {all_runs}\n")
                 f.write(f"runs with multiples : {multiples}\n")
-                f.write(f"folders relevant : {', '.join(folders)}\n\n")
+                f.write(f"folders relevant : {folders_str}\n\n")
 
             f.write("-------------------------------------------\n")
 
