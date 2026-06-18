@@ -46,7 +46,7 @@ if match:
     Cg = int(match.group(5))
 
     repetition_list = list(range(x, last_rep, jumps))
-    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, repetition_list={repetition_list}, Cg={Cg}", flush=True)
+    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, x={x}, last_rep={last_rep}, jumps={jumps}, Cg={Cg}", flush=True)
 
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
