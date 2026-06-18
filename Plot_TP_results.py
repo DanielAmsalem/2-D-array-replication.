@@ -3,14 +3,15 @@ import csv
 import re
 import numpy as np
 import matplotlib
+import warnings
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 from collections import defaultdict
-import warnings
+from scipy.signal import savgol_filter
 
-poly_order = 3
+poly_order = 4
 print(f"poly order = {poly_order}", flush=True)
 
 
@@ -320,7 +321,7 @@ def run_analysis_mode(base_dir):
         min_window = poly_order + 1
         if min_window % 2 == 0: min_window += 1
 
-        window_length = min(15, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
+        window_length = min(6, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
         if window_length < min_window:
             window_length = min_window if min_window <= len(dTs) else (len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
 
@@ -355,7 +356,6 @@ def run_analysis_mode(base_dir):
                 weights = 1.0 / (err_win ** 2)
 
                 # Fit polynomial: y = ax^2 + bx + c
-                # Note: polyfit returns coefficients highest-power first [a, b, c]
                 # Ensure degree is strictly less than number of points
                 current_deg = min(deg, len(x_win) - 1)
 
@@ -406,10 +406,10 @@ def run_analysis_mode(base_dir):
                 writer.writerow(
                     [dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx], S_err_up[idx], S_err_down[idx]])
 
-        # --- Graph 1: Threshold Voltage (Up vs Down) ---
+        # ==========================================================
+        # GRAPH 1A: Threshold Voltage (Up vs Down) - WITH ERROR BARS
+        # ==========================================================
         plt.figure(figsize=(10, 6))
-
-        # Plot Vth with error bars corresponding to the width of the SNR breakout region
         plt.errorbar(dTs, Vth_up, yerr=err_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2,
                      label='Sweep Up', capsize=3)
         plt.errorbar(dTs, Vth_down, yerr=err_down, marker='s', linestyle='--', color='crimson', linewidth=2,
@@ -423,13 +423,31 @@ def run_analysis_mode(base_dir):
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
-        plt.savefig(sys_dir / 'Vth_vs_Gradient_Hysteresis.png', dpi=300)
+        plt.savefig(sys_dir / 'Vth_vs_Gradient_Hysteresis_with_error.png', dpi=300)
         plt.close()
 
-        # --- Graph 2: Thermopower S(T) (Up vs Down) ---
+        # ==========================================================
+        # GRAPH 1B: Threshold Voltage (Up vs Down) - NO ERROR BARS
+        # ==========================================================
         plt.figure(figsize=(10, 6))
+        plt.plot(dTs, Vth_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='Sweep Up')
+        plt.plot(dTs, Vth_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
 
-        # Plot S(T) with a shaded confidence interval derived from the propagated error
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / k_B \langle C \rangle$)',
+                   fontsize=12)
+        plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
+        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
+                  fontsize=14)
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(sys_dir / 'Vth_vs_Gradient_Hysteresis_no_error.png', dpi=300)
+        plt.close()
+
+        # ==========================================================
+        # GRAPH 2A: Thermopower S(T) (Up vs Down) - WITH ERROR BANDS
+        # ==========================================================
+        plt.figure(figsize=(10, 6))
         plt.plot(S_dT, S_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='S(T) Up')
         plt.fill_between(S_dT, S_up - S_err_up, S_up + S_err_up, color='dodgerblue', alpha=0.2)
 
@@ -437,7 +455,6 @@ def run_analysis_mode(base_dir):
         plt.fill_between(S_dT, S_down - S_err_down, S_down + S_err_down, color='crimson', alpha=0.2)
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-
         plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / k_B \langle C \rangle$)', fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
         plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
@@ -445,7 +462,25 @@ def run_analysis_mode(base_dir):
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
-        plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis.png', dpi=300)
+        plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis_with_error.png', dpi=300)
+        plt.close()
+
+        # ==========================================================
+        # GRAPH 2B: Thermopower S(T) (Up vs Down) - NO ERROR BANDS
+        # ==========================================================
+        plt.figure(figsize=(10, 6))
+        plt.plot(S_dT, S_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='S(T) Up')
+        plt.plot(S_dT, S_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
+
+        plt.axhline(0, color='black', linestyle='-', alpha=0.8)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / k_B \langle C \rangle$)', fontsize=12)
+        plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
+        plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
+                  fontsize=14)
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis_no_error.png', dpi=300)
         plt.close()
 
         print(f"Exported data and generated dual-sweep graphs in: {sys_dir}", flush=True)
