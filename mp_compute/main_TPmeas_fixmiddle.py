@@ -1,6 +1,6 @@
 import os
 
-ratio = 3 / 2
+ratio = 10 / 8
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -30,22 +30,41 @@ import orjson
 import csv
 import math
 import time
+import re
 
-#######
-Cg = 5
-Cg_list = [2, 5, 10, 20, 50]
-######
+####### slurm parameter parsing from job name ######
+job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Cg2')
+pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Tmid(\d+)_(\d+)_Cg(\d+)"
+match = re.search(pattern, job_name)
 
-'''
-THIS main_TPmeas where the mid point is fixed T = constT * T0
-maximum total gradient across grid allowed is governed by max_std_coeff
-'''
+if match:
+    # match.group(1) will be 'Reverse' or 'Reverse_' if it exists, otherwise None
+    is_reverse = match.group(1) is not None
+    x = int(match.group(2))
+    last_rep = int(match.group(3))
+    jumps = int(match.group(4))
+    Tmid_units = int(match.group(5))
+    Tmid_tenths = int(match.group(6))
+    Cg = int(match.group(7))
+
+    repetition_list = list(range(x, last_rep, jumps))
+    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, repetition_list={repetition_list}, Cg={Cg}, "
+          f"Tmid={Tmid_units + Tmid_tenths/10}", flush=True)
+
+else:
+    raise NameError(f"Job Name is improperly formatted : {job_name}")
+
+Cg_list = [2]
+##############################################################
 
 
-def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     # RUN TYPE
-    flip = False
+    flip = is_reverse
     first_run = False
+    if first_rep == 0:
+        first_run = True
+        first_rep = 1
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
@@ -75,11 +94,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
 
     # EXPERIMENT PARAMETERS
     loop_count = max(num_workers, 1000)
-    repetition = 0
+    repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
-    last_repetition_to_do = 20
-    repetition_list = list(range(11, 20))
+    last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = list(range(first_rep, last_rep, jumps))
     T0_unitless = 0.001
     gap_ratio = 0
     mean_Rg = 100
@@ -110,7 +129,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
                       f"64bit_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
     # choose a specific run
-    run_to_get_init_from = "20260606_22h05m04s"
+    run_to_get_init_from = "20260606_22h05m04s"  # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ; sig = 0.05, stdR =2 "20260606_22h05m04s"
     results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
@@ -378,5 +397,6 @@ if __name__ == "__main__":
             results_dir_path=RESULTS_DIR_PATH
         ),
         run_name=run_name_flat,
-        mean_Cg=Cg
+        mean_Cg=Cg,
+        first_rep=x
     )
