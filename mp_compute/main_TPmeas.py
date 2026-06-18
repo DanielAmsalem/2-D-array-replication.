@@ -1,11 +1,11 @@
 import os
 
-ratio = 2
+ratio = 3 / 2
 os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = int(total_cpus / ratio)
+num_workers = max(int(total_cpus / ratio), 80)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
 from concurrent.futures import ProcessPoolExecutor
@@ -30,19 +30,38 @@ import orjson
 import csv
 import math
 import time
+import re
 
-#######
-Cg = 2
+####### slurm parameter parsing from job name ######
+job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Cg2')
+pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Cg(\d+)"
+match = re.search(pattern, job_name)
+
+if match:
+    # match.group(1) will be 'Reverse' or 'Reverse_' if it exists, otherwise None
+    is_reverse = match.group(1) is not None
+    x = int(match.group(2))
+    last_rep = int(match.group(3))
+    jumps = int(match.group(4))
+    Cg = int(match.group(5))
+
+    repetition_list = list(range(x, last_rep, jumps))
+    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, repetition_list={repetition_list}, Cg={Cg}", flush=True)
+
+else:
+    raise NameError(f"Job Name is improperly formatted : {job_name}")
+
 Cg_list = [2, 5, 10, 20, 50]
+##############################################################
 
 
-######
-
-
-def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     # RUN TYPE
-    flip = False
-    first_run = True  #############################
+    flip = is_reverse
+    first_run = False
+    if first_rep == 0:
+        first_run = True
+        first_rep = 1
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
@@ -69,13 +88,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg) -> None:
             raise ValueError("what")
     else:
         raise ValueError("Cg must be in Cg_list")
+
     # EXPERIMENT PARAMETERS
-    loop_count = max(num_workers, 100)
+    loop_count = max(num_workers, 1000)
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
-    last_repetition_to_do = 1  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = [7]
+    last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
+    repetition_list = list(range(first_rep, last_rep, jumps))
     T0_unitless = 0.001
     gap_ratio = 0
     mean_Rg = 100
@@ -366,5 +386,6 @@ if __name__ == "__main__":
             results_dir_path=RESULTS_DIR_PATH
         ),
         run_name=run_name_flat,
-        mean_Cg=Cg
+        mean_Cg=Cg,
+        first_rep=x
     )

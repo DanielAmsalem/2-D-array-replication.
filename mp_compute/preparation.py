@@ -266,7 +266,7 @@ def _calc_segments(args):
     """
     val, temp, Ec = args
 
-    mp.dps = 50
+    mp.dps = 40
 
     func = F.integrand(temp, val, Ec)
     absval = abs(val + Ec)
@@ -320,8 +320,7 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # executor.map handles distributing the tasks and guarantees
         # the results are yielded in the original submission order.
-        # chunksize groups tasks to reduce communication overhead.
-        results = executor.map(_calc_segments, tasks, chunksize=10)
+        results = executor.map(_calc_segments, tasks)
 
         for result_row in results:
             rows.append(result_row)
@@ -333,6 +332,7 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
 
 def _calc_segments_gapped_master(args, dps):
     """
+    2D INTEGRATION METHOD
     Master top-level worker function to calculate segmented probabilities for quasiparticles in 2D.
     """
     val = mp.mpf(args[0])
@@ -501,7 +501,7 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     Orchestrates the calculation of Gapped Gamma integrals over the SLURM CPU pool.
     Returns a standard Nx4 float array for downstream validation/saving.
     """
-    DPS = 50
+    DPS = 40
     mp.dps = DPS
 
     Ec_mp = mp.mpf(str(init_state.Ec))  # Assuming init_state holds standard Ec

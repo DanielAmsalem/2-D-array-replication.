@@ -396,7 +396,7 @@ def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
 
 
 def Gamma_cp(dE, T, Ec, gap, Rt):
-    tanh = np.tanh(gap / (2 * T))
+    tanh = mp.tanh(gap / (2 * T))
     # Ej = (hbar/2eRt)(pi*gap/2e)*tanh
     # set h=1 -> hbar = 1/2pi
     # Ej = tanh * gap/8Rt

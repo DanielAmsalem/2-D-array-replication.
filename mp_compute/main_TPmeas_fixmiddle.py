@@ -44,12 +44,13 @@ if match:
     last_rep = int(match.group(3))
     jumps = int(match.group(4))
     Tmid_units = int(match.group(5))
-    Tmid_tenths = int(match.group(6))
+    Tmid_pastdigit = int(match.group(6))
+    Tmid = Tmid_units + Tmid_pastdigit/(10**len(str(Tmid_pastdigit)))
     Cg = int(match.group(7))
 
     repetition_list = list(range(x, last_rep, jumps))
     print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, repetition_list={repetition_list}, Cg={Cg}, "
-          f"Tmid={Tmid_units + Tmid_tenths/10}", flush=True)
+          f"Tmid={Tmid_units + Tmid_pastdigit / 10}", flush=True)
 
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
@@ -105,9 +106,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     stdR = 2
     sig = 0.05
     ###################################
-    ########### FIX MIDDLE############# max std coefficient (max_std = max_std_coeff * T0)
-    constT = 2.2
-    max_std_coeff = 0.4
+    ########### FIX MIDDLE ############
+    constT = Tmid
     ###################################
 
     # MESSAGES
@@ -299,7 +299,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
         # NEW TEMPERATURE PROFILE LOGIC: Fixed Middle
         T_mid = constT * init.T0
-        max_std = max_std_coeff * init.T0
+        # the maximum difference in temps between islands is when Tleft = T0:
+        max_std = 2 * (T_mid-init.T0) / ((init.row_num-1) % 2)
         T_std = repetition * max_std / 20
         first_site_T = T_mid - ((init.row_num - init.row_num % 2) / 2) * T_std
         T_list_to_compute = [first_site_T + i * T_std for i in range(init.row_num)]

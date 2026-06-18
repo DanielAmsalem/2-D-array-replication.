@@ -53,6 +53,11 @@ where for each position the appropriate bounds for dE calc are given
 '''
 
 EXPORT_PATH = Path(__file__).parent.parent.parent / "export"
+Tconst_units = int(re.search(r"Tmid(\d+)_(\d+)", filename).group(1))
+Tconst_pastdigit = int(re.search(r"Tmid(\d+)_(\d+)", filename).group(2))
+Tconst = Tconst_units + Tconst_pastdigit / (10**len(str(Tconst_pastdigit)))
+print(f"Tconst is {Tconst}", flush=True)
+CSV_PATH = Path(__file__).parent.parent / f"table_Tmid{Tconst_units}_{Tconst_pastdigit}_Cg{Cg}.csv"
 t0 = time.time()
 
 
@@ -65,9 +70,23 @@ def main(export: IMPORT_EXPORT, constT_unitless, iteration) -> None:
     # for Tmid runs neg,pos are constants
     neg = None
     pos = None
+    with open(CSV_PATH) as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:  # skip empty rows
+                continue
+            try:
+                row_iter = int(row[0])
+            except ValueError:
+                continue  # skip headers or non-numeric first columns
+
+            if row_iter == iteration:
+                neg = float(row[1])
+                pos = float(row[2])
+                break  # Stop searching once the correct row is found
 
     if neg is None or pos is None:
-        raise ValueError(f"integration limits not well defined for Tmid")
+        raise ValueError(f"Iteration {iteration} was not found in table.csv")
 
     ### prep tables
     init = prepare_initial_state(loop_count=loop_count,
@@ -95,13 +114,10 @@ def main(export: IMPORT_EXPORT, constT_unitless, iteration) -> None:
 
 if __name__ == "__main__":
     iter_name = re.search(r"Tstd(\d+)", filename).group(1)
-    Tconst_units = int(re.search(r"Tmid(\d+)_(\d+)", filename).group(1))
-    Tconst_tenths = int(re.search(r"Tmid(\d+)_(\d+)", filename).group(2))
-    Tconst = Tconst_units + Tconst_tenths/10
     main(
         IMPORT_EXPORT(
             plot_results=True,
-            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tmid{Tconst_units}_{Tconst_tenths}_"
+            prepare_table_triplets_file_list=[EXPORT_PATH / f"64bit_table_triplets_Tmid{Tconst_units}_{Tconst_pastdigit}_"
                                                             f"Tstd{iter_name}_20_Cg_{Cg}.npz"],
             # these are not relevant here
             csv_table_path=EXPORT_PATH / "tmp",
@@ -109,5 +125,5 @@ if __name__ == "__main__":
             results_dir_path=EXPORT_PATH / "tmp",
         ),
         constT_unitless=Tconst,
-        iteration = int(iter_name)
+        iteration=int(iter_name)
     )
