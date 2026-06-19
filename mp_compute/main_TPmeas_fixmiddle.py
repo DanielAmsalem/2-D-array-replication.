@@ -45,7 +45,7 @@ if match:
     jumps = int(match.group(4))
     Tmid_units = int(match.group(5))
     Tmid_pastdigit = int(match.group(6))
-    Tmid = Tmid_units + Tmid_pastdigit/(10**len(str(Tmid_pastdigit)))
+    Tmid = Tmid_units + Tmid_pastdigit / (10 ** len(str(Tmid_pastdigit)))
     Cg = int(match.group(7))
 
     repetition_list = list(range(x, last_rep, jumps))
@@ -55,7 +55,9 @@ if match:
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
 
-Cg_list = [2]
+Cg_list = [2, 10]
+
+
 ##############################################################
 
 
@@ -69,37 +71,34 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     rep_json = True
     periodic_y = True  # periodic boundary conditions in y-axis
     plot_ongoing_voltage_map = False
+    V_capture = 4
 
     # FIXED PARAMETERS
-    V_capture = 4
     if Cg in Cg_list:
-        if Cg == 20:
-            pos_energy_boundT0 = 0.02
-            neg_energy_boundT0 = -0.07
-        elif Cg == 50:
-            pos_energy_boundT0 = 0.03
-            neg_energy_boundT0 = -0.05
-        elif Cg == 10:
-            pos_energy_boundT0 = -0.01
-            neg_energy_boundT0 = -0.11
-        elif Cg == 5:
-            pos_energy_boundT0 = -0.02
-            neg_energy_boundT0 = -0.18
-        elif Cg == 2:
-            pos_energy_boundT0 = -0.12
-            neg_energy_boundT0 = -0.37
-        else:
-            raise ValueError("what")
+        # import from csv table
+        with open(import_export.csv_table_path) as f:
+            for row in csv.reader(f):
+                if row and row[0].strip().lstrip('-').isdigit():
+                    if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
+                        if int(row[0]) == 0:
+                            pos_energy_boundT0 = float(row[2])
+                            neg_energy_boundT0 = float(row[1])
+                            print(f"T0 pos : {pos_energy_boundT0}, T0 neg : {neg_energy_boundT0}", flush=True)
+                            break
+
+                        continue
     else:
         raise ValueError("Cg must be in Cg_list")
 
     # EXPERIMENT PARAMETERS
-    loop_count = max(num_workers, 1000)
+    loop_count = max(num_workers, 960)
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
     last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
     repetition_list = list(range(first_rep, last_rep, jumps))
+    if last_rep == 20:
+        repetition_list += [20]
     T0_unitless = 0.001
     gap_ratio = 0
     mean_Rg = 100
@@ -123,7 +122,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     if loop_count != 1:
         plot_ongoing_voltage_map = False
 
-    # Dynamically generated base null path including constT
+    # base null path for new constT
     constT_str = str(constT).replace('.', '_')
     null_path_name = (import_export.export_path /
                       f"64bit_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
@@ -300,10 +299,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
         # NEW TEMPERATURE PROFILE LOGIC: Fixed Middle
         T_mid = constT * init.T0
         # the maximum difference in temps between islands is when Tleft = T0:
-        max_std = 2 * (T_mid-init.T0) / ((init.row_num-1) % 2)
+        max_std = 2 * (T_mid - init.T0) / (init.row_num - init.row_num % 2)
         T_std = repetition * max_std / 20
         first_site_T = T_mid - ((init.row_num - init.row_num % 2) / 2) * T_std
         T_list_to_compute = [first_site_T + i * T_std for i in range(init.row_num)]
+        print(f"T list : {T_list_to_compute}", flush=True)
 
         ### check if there is valid table for new dT
         if not validate_table_triplets_file(import_export.prepare_table_triplets_file_list[repetition],
@@ -392,7 +392,8 @@ if __name__ == "__main__":
             plot_results=True,
             export_path=EXPORT_PATH,
             prepare_table_triplets_file_list=[EXPORT_PATH /
-                                              f"64bit_table_triplets_Tmid_2_2_std{n}_20_Cg_{Cg}.npz" for n in
+                                              f"64bit_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
+                                              for n in
                                               range(501)],
             csv_table_path=MP_COMPUTE_PATH / f"table_Cg{Cg}.csv",
             results_dir_path=RESULTS_DIR_PATH
