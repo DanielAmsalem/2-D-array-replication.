@@ -17,6 +17,7 @@ from pathlib import Path
 import datetime
 import time
 import sys
+import numpy as np
 
 # 1. Get the path to the parent directory (mp_compute)
 # __file__ is the script, .parent is table_computers, .parent.parent is mp_compute
@@ -104,6 +105,8 @@ def main(export: IMPORT_EXPORT, constT_unitless, iteration) -> None:
     T_std = iteration * max_std / 20
     first_site_T = T_mid - ((init.row_num - init.row_num % 2) / 2) * T_std
     T_list_to_compute = [first_site_T + i * T_std for i in range(init.row_num)]
+    print(f"T_list_to_compute = {T_list_to_compute}")
+    print(f"in units of T0 : {np.array(T_list_to_compute)/init.T0}", flush=True)
     table_triplets = prepare_table_triplets(init,
                                             T_list_to_compute,
                                             pos_energy_bound=pos,
