@@ -1,10 +1,10 @@
-import decimal
 import os
 import csv
 import re
 import numpy as np
 import matplotlib
 import warnings
+import decimal
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -93,13 +93,14 @@ def parse_params(filepath):
     # Extract temperatures to find the total gradient delta T
     match_T = re.search(r'T\s*:\s*\[(.*?)\]', content)
     if match_T:
-        t_vals = [float(x) for x in match_T.group(1).split(',')]
+        # Replaced commas with spaces to securely split by whitespace
+        t_vals = [float(x) for x in match_T.group(1).replace(',', ' ').split()]
         params['T_left'] = t_vals[0]
         params['T_right'] = t_vals[-1]
         params['T_mid'] = t_vals[len(t_vals) // 2]
 
-        # Enforce absolute value of dT
-        params['dT'] = abs(params['T_right'] - params['T_left'])
+        # Exact directional gradient (will naturally be negative if flip=True)
+        params['dT'] = params['T_right'] - params['T_left']
     else:
         raise NameError(f"{filepath} has a corrupted T list")
 
@@ -192,13 +193,13 @@ ignored_folders = {
 
 def run_scanner_mode(base_dir, ivs_txt_path):
     """
-    MODE 1: Rapidly scans folders for duplicates and maps the physical runs.
+    MODE 1: scans folders for duplicates and maps the physical runs.
     Outputs the log to IVs.txt.
     """
     print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...", flush=True)
 
-    # catalog structure: catalog[(stdR, sig, T0, flip, midfix, Tmid)][Cg][rep] = [folder1, folder2, ...]
-    catalog = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    # catalog structure: catalog[(stdR, sig, T0, midfix, Tmid)][Cg][flip][rep] = [folder1, folder2, ...]
+    catalog = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
     corrupted_folders = []
 
     for directory in base_dir.glob("results_*"):
@@ -231,8 +232,8 @@ def run_scanner_mode(base_dir, ivs_txt_path):
             params = parse_params(param_file)
             stdR, sig, T0, Cg, flip = params['stdR'], params['sig'], params['T0'], params['Cg'], params['flip']
 
-            # Track exactly which folder this rep came from
-            catalog[(stdR, sig, T0, flip, midfix, Tmid)][Cg][rep].append(f"results_{run_name}")
+            # Track folder strictly grouped by physics parameters and separated internally by flip
+            catalog[(stdR, sig, T0, midfix, Tmid)][Cg][flip][rep].append(f"results_{run_name}")
 
     # Generate the IVs.txt report
     with open(ivs_txt_path, 'w') as f:
@@ -243,27 +244,28 @@ def run_scanner_mode(base_dir, ivs_txt_path):
                 f.write(f"results_{cf}\n")
             f.write("=============================================\n\n")
 
-        for (stdR, sig, T0, flip, midfix, Tmid), cg_data in catalog.items():
-            f.write(
-                f"----- StdR={stdR} ; sig={sig} ; T0={T0} ; flip={flip} ; midfix={midfix} ; Tmid={Tmid} ---------\n")
+        for (stdR, sig, T0, midfix, Tmid), cg_data in catalog.items():
+            f.write(f"----- StdR={stdR} ; sig={sig} ; T0={T0} ; midfix={midfix} ; Tmid={Tmid} ---------\n")
 
-            for Cg, rep_dict in cg_data.items():
-                all_runs = sorted(list(rep_dict.keys()))
-
+            for Cg, flip_dict in cg_data.items():
                 multiples = []
                 relevant_folders = set()
 
-                # Check for reps that exist in more than one folder
-                for rep, folders in rep_dict.items():
-                    if len(folders) > 1:
-                        multiples.append(rep)
-                        relevant_folders.update(folders)
+                for flip_val in [True, False]:
+                    if flip_val in flip_dict:
+                        rep_dict = flip_dict[flip_val]
+                        all_runs = sorted(list(rep_dict.keys()))
+                        f.write(f"Cg : {Cg}, flip={flip_val}, with runs {all_runs}\n")
+
+                        for rep, folders in rep_dict.items():
+                            if len(folders) > 1:
+                                multiples.append(f"rep{rep}(flip={flip_val})")
+                                relevant_folders.update(folders)
 
                 multiples = sorted(multiples)
                 folders_sorted = sorted(list(relevant_folders))
                 folders_str = ', '.join(folders_sorted) if folders_sorted else 'None'
 
-                f.write(f"Cg : {Cg} with runs {all_runs}\n")
                 f.write(f"runs with multiples : {multiples}\n")
                 f.write(f"folders relevant : {folders_str}\n\n")
 
@@ -282,7 +284,7 @@ def run_analysis_mode(base_dir):
     output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_savgol"
     output_dir.mkdir(exist_ok=True)
 
-    # Key: (Cg, stdR, sig, T0, midfix, flip) -> Value: list of dictionaries
+    # Key: (Cg, stdR, sig, T0, midfix) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
     print("Scanning for results directories...", flush=True)
@@ -306,7 +308,7 @@ def run_analysis_mode(base_dir):
         for csv_path in directory.glob("*.csv"):
             name = csv_path.name
 
-            # Extract repetition index
+            # repetition index matches the gradient size
             match_rep = re.search(r"rep(\d+)", name)
             if not match_rep:
                 continue
@@ -318,7 +320,7 @@ def run_analysis_mode(base_dir):
                 continue
 
             params = parse_params(param_file)
-            sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'], params['flip'], midfix, Tmid)
+            sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'], midfix, Tmid)
 
             # Extract both sweeps including the dynamic IErr array
             v_up, i_up, ierr_up, v_down, i_down, ierr_down = read_sweeps(csv_path)
@@ -345,21 +347,21 @@ def run_analysis_mode(base_dir):
         if len(data) < 2:
             continue
 
-        Cg, stdR, sig, T0, flip, midfix, Tmid = sys_key
+        Cg, stdR, sig, T0, midfix, Tmid = sys_key
 
-        # Name the specific physical setup precisely
-        sys_folder_name = f"System_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}_flip{flip}"
+        sys_folder_name = f"System_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}"
         if midfix:
             Tmid_ratio = Tmid / T0
             Tmid_units = int(Tmid_ratio)
             decimal_part = decimal.Decimal(str(Tmid_ratio - Tmid_units))
-            Tmid_pastdigits = int(str(decimal_part).replace('0.', ''))
+            decimal_str = str(decimal_part).replace('0.', '')
+            Tmid_pastdigits = int(decimal_str) if decimal_str else 0
             sys_folder_name += f"_Tmid{Tmid_units}_{Tmid_pastdigits}"
 
         sys_dir = output_dir / sys_folder_name
         sys_dir.mkdir(exist_ok=True)
 
-        # Sort by actual physical gradient (dT) to handle uneven rep jumps safely
+        # Sort dynamically maps data from most negative (flip=True) to most positive (flip=False)
         data = sorted(data, key=lambda x: x['Delta_T'])
 
         dTs = np.array([d['Delta_T'] for d in data])
@@ -376,13 +378,22 @@ def run_analysis_mode(base_dir):
         err_up = err_up[valid_mask]
         err_down = err_down[valid_mask]
 
-        # REMOVE THE NOISY TAIL (Remove the last point)
+        # REMOVE THE NOISY TAILS
+        # Because we merged the flips, extreme positive gradient is at index [-1],
+        # and extreme negative gradient is at index [0]. We drop them both to be safe.
         if len(dTs) > 0:
-            dTs = dTs[:-1]
-            Vth_up = Vth_up[:-1]
-            Vth_down = Vth_down[:-1]
-            err_up = err_up[:-1]
-            err_down = err_down[:-1]
+            if dTs[-1] > 0:
+                dTs = dTs[:-1]
+                Vth_up = Vth_up[:-1]
+                Vth_down = Vth_down[:-1]
+                err_up = err_up[:-1]
+                err_down = err_down[:-1]
+            if len(dTs) > 0 and dTs[0] < 0:
+                dTs = dTs[1:]
+                Vth_up = Vth_up[1:]
+                Vth_down = Vth_down[1:]
+                err_up = err_up[1:]
+                err_down = err_down[1:]
 
         if len(dTs) < 4:
             print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
@@ -392,9 +403,10 @@ def run_analysis_mode(base_dir):
         # Dynamic Thermopower Derivative using Savitzky-Golay
         # -----------------------------------------------------
         min_window = poly_order + 1
-        if min_window % 2 == 0: min_window += 1
+        if min_window % 2 == 0:
+            min_window += 1
 
-        # 5 or 7 are safe odd maximums.
+        # need odd number for savgol
         max_window = 7
         window_length = min(max_window, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
         if window_length < min_window:
@@ -438,8 +450,8 @@ def run_analysis_mode(base_dir):
                 writer.writerow(
                     [dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx], S_err_up[idx], S_err_down[idx]])
 
-        # Create precise title based on physics configuration
-        title_str = f"Cg={Cg}, stdR={stdR}, $\\sigma$={sig}, T0={T0}, flip={flip}"
+        # Create unified title without 'flip' label
+        title_str = f"Cg={Cg}, stdR={stdR}, $\\sigma$={sig}, T0={T0}"
         if midfix:
             title_str += f", Tmid={Tmid}"
 
@@ -452,11 +464,9 @@ def run_analysis_mode(base_dir):
         plt.errorbar(dTs, Vth_down, yerr=err_down, marker='s', linestyle='--', color='crimson', linewidth=2,
                      label='Sweep Down', capsize=3)
 
-        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / k_B \langle C \rangle$)',
-                   fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
         plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
-        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
-                  fontsize=14)
+        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
@@ -470,8 +480,7 @@ def run_analysis_mode(base_dir):
         plt.plot(dTs, Vth_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='Sweep Up')
         plt.plot(dTs, Vth_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
 
-        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / k_B \langle C \rangle$)',
-                   fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
         plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
         plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
@@ -491,7 +500,7 @@ def run_analysis_mode(base_dir):
         plt.fill_between(S_dT, S_down - S_err_down, S_down + S_err_down, color='crimson', alpha=0.2)
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
         plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
@@ -508,7 +517,7 @@ def run_analysis_mode(base_dir):
         plt.plot(S_dT, S_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
         plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
