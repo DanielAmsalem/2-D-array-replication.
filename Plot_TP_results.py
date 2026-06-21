@@ -13,7 +13,9 @@ from collections import defaultdict
 from scipy.signal import savgol_filter
 
 poly_order = 4
+max_grad = 0.025  # The absolute maximum gradient to include in the zoomed-in graphs
 print(f"poly order = {poly_order}", flush=True)
+print(f"max grad limit = {max_grad}", flush=True)
 
 
 def calc_threshold_snr_interpolated(I, IErr, V):
@@ -370,30 +372,13 @@ def run_analysis_mode(base_dir):
         err_up = np.array([d['err_up'] for d in data])
         err_down = np.array([d['err_down'] for d in data])
 
-        # Filter NaNs ensuring arrays stay perfectly parallel
+        # Filter NaNs ensuring arrays stay parallel
         valid_mask = ~np.isnan(Vth_up) & ~np.isnan(Vth_down)
         dTs = dTs[valid_mask]
         Vth_up = Vth_up[valid_mask]
         Vth_down = Vth_down[valid_mask]
         err_up = err_up[valid_mask]
         err_down = err_down[valid_mask]
-
-        # REMOVE THE NOISY TAILS
-        # Because we merged the flips, extreme positive gradient is at index [-1],
-        # and extreme negative gradient is at index [0]. We drop them both to be safe.
-        if len(dTs) > 0:
-            if dTs[-1] > 0:
-                dTs = dTs[:-1]
-                Vth_up = Vth_up[:-1]
-                Vth_down = Vth_down[:-1]
-                err_up = err_up[:-1]
-                err_down = err_down[:-1]
-            if len(dTs) > 0 and dTs[0] < 0:
-                dTs = dTs[1:]
-                Vth_up = Vth_up[1:]
-                Vth_down = Vth_down[1:]
-                err_up = err_up[1:]
-                err_down = err_down[1:]
 
         if len(dTs) < 4:
             print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
@@ -441,7 +426,33 @@ def run_analysis_mode(base_dir):
             S_err_down = np.sqrt(err_down ** 2 + np.roll(err_down, shift=1) ** 2) / dT_steps
             S_err_up[0], S_err_down[0] = S_err_up[1], S_err_down[1]
 
-        # Export Unified CSV
+        # REMOVE THE NOISY TAILS AFTER SAVGOL CALCULATION
+        # Because we merged the flips, extreme positive gradient is at index [-1],
+        # and extreme negative gradient is at index [0]. We drop them both to be safe.
+        if len(dTs) > 0:
+            if dTs[-1] > 0:
+                dTs = dTs[:-1]
+                Vth_up = Vth_up[:-1]
+                Vth_down = Vth_down[:-1]
+                err_up = err_up[:-1]
+                err_down = err_down[:-1]
+                S_dT = S_dT[:-1]
+                S_up = S_up[:-1]
+                S_down = S_down[:-1]
+                S_err_up = S_err_up[:-1]
+                S_err_down = S_err_down[:-1]
+            if len(dTs) > 0 and dTs[0] < 0:
+                dTs = dTs[1:]
+                Vth_up = Vth_up[1:]
+                Vth_down = Vth_down[1:]
+                err_up = err_up[1:]
+                err_down = err_down[1:]
+                S_dT = S_dT[1:]
+                S_up = S_up[1:]
+                S_down = S_down[1:]
+                S_err_up = S_err_up[1:]
+                S_err_down = S_err_down[1:]
+
         export_csv_path = sys_dir / "aggregated_thermopower_results.csv"
         with open(export_csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -464,7 +475,8 @@ def run_analysis_mode(base_dir):
         plt.errorbar(dTs, Vth_down, yerr=err_down, marker='s', linestyle='--', color='crimson', linewidth=2,
                      label='Sweep Down', capsize=3)
 
-        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                   fontsize=12)
         plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
         plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
@@ -480,7 +492,8 @@ def run_analysis_mode(base_dir):
         plt.plot(dTs, Vth_up, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='Sweep Up')
         plt.plot(dTs, Vth_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
 
-        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                   fontsize=12)
         plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
         plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
@@ -500,7 +513,8 @@ def run_analysis_mode(base_dir):
         plt.fill_between(S_dT, S_down - S_err_down, S_down + S_err_down, color='crimson', alpha=0.2)
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                   fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
         plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
@@ -517,7 +531,8 @@ def run_analysis_mode(base_dir):
         plt.plot(S_dT, S_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                   fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
         plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
@@ -525,6 +540,97 @@ def run_analysis_mode(base_dir):
         plt.tight_layout()
         plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis_no_error.png', dpi=300)
         plt.close()
+
+        # ==========================================================
+        # ADDITIONAL GRAPHS: Truncated by max_grad
+        # ==========================================================
+        grad_mask = np.abs(dTs) <= max_grad
+
+        if np.sum(grad_mask) >= 2:
+            dTs_z = dTs[grad_mask]
+            Vth_up_z = Vth_up[grad_mask]
+            Vth_down_z = Vth_down[grad_mask]
+            err_up_z = err_up[grad_mask]
+            err_down_z = err_down[grad_mask]
+
+            S_dT_z = S_dT[grad_mask]
+            S_up_z = S_up[grad_mask]
+            S_down_z = S_down[grad_mask]
+            S_err_up_z = S_err_up[grad_mask]
+            S_err_down_z = S_err_down[grad_mask]
+
+            title_str_zoomed = title_str + f"\n(|$\\Delta T| \\leq {max_grad}$)"
+
+            # --- Zoomed GRAPH 1A ---
+            plt.figure(figsize=(10, 6))
+            plt.errorbar(dTs_z, Vth_up_z, yerr=err_up_z, marker='o', linestyle='-', color='dodgerblue', linewidth=2,
+                         label='Sweep Up', capsize=3)
+            plt.errorbar(dTs_z, Vth_down_z, yerr=err_down_z, marker='s', linestyle='--', color='crimson', linewidth=2,
+                         label='Sweep Down', capsize=3)
+
+            plt.xlabel(
+                r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                fontsize=12)
+            plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
+            plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str_zoomed}', fontsize=14)
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(sys_dir / 'Vth_vs_Gradient_Hysteresis_with_error_zoomed.png', dpi=300)
+            plt.close()
+
+            # --- Zoomed GRAPH 1B ---
+            plt.figure(figsize=(10, 6))
+            plt.plot(dTs_z, Vth_up_z, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='Sweep Up')
+            plt.plot(dTs_z, Vth_down_z, marker='s', linestyle='--', color='crimson', linewidth=2, label='Sweep Down')
+
+            plt.xlabel(
+                r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                fontsize=12)
+            plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
+            plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str_zoomed}', fontsize=14)
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(sys_dir / 'Vth_vs_Gradient_Hysteresis_no_error_zoomed.png', dpi=300)
+            plt.close()
+
+            # --- Zoomed GRAPH 2A ---
+            plt.figure(figsize=(10, 6))
+            plt.plot(S_dT_z, S_up_z, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='S(T) Up')
+            plt.fill_between(S_dT_z, S_up_z - S_err_up_z, S_up_z + S_err_up_z, color='dodgerblue', alpha=0.2)
+
+            plt.plot(S_dT_z, S_down_z, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
+            plt.fill_between(S_dT_z, S_down_z - S_err_down_z, S_down_z + S_err_down_z, color='crimson', alpha=0.2)
+
+            plt.axhline(0, color='black', linestyle='-', alpha=0.8)
+            plt.xlabel(
+                r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                fontsize=12)
+            plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
+            plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str_zoomed}', fontsize=14)
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis_with_error_zoomed.png', dpi=300)
+            plt.close()
+
+            # --- Zoomed GRAPH 2B ---
+            plt.figure(figsize=(10, 6))
+            plt.plot(S_dT_z, S_up_z, marker='o', linestyle='-', color='dodgerblue', linewidth=2, label='S(T) Up')
+            plt.plot(S_dT_z, S_down_z, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
+
+            plt.axhline(0, color='black', linestyle='-', alpha=0.8)
+            plt.xlabel(
+                r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / (k_B \langle C \rangle)$)',
+                fontsize=12)
+            plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
+            plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str_zoomed}', fontsize=14)
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(sys_dir / 'Thermopower_S_vs_Gradient_Hysteresis_no_error_zoomed.png', dpi=300)
+            plt.close()
 
         print(f"Exported data and generated dual-sweep graphs in: {sys_dir}", flush=True)
 

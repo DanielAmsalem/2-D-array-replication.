@@ -69,7 +69,7 @@ for run_name in run_names:
                 t_string = match.group(1)
 
                 # split by comma
-                t_values = [float(val.strip()) for val in t_string.split(",")]
+                t_values = [float(val.strip()) for val in t_string.replace(',', ' ').split()]
 
                 if t_values:
                     t_first = t_values[0]
@@ -99,23 +99,32 @@ for run_name in run_names:
         I_column = [row[1] for row in rows]
         idx_max = V_column.index(max(V_column))
 
-        # build I vectors from data
+        # 1. Your existing code to build the full arrays
         I_vec_forward = np.array([float(I) for I in I_column[0:idx_max + 1]])
         I_vec_backward = np.flip([float(I) for I in I_column[idx_max:]])
-
-        # build V vector
         Vleft = np.array([float(V) for V in V_column[0:idx_max + 1]])
+
+        # 2. Define your cutoff
+        Vcutoff = 0 # Change this to whatever your cutoff voltage is
+
+        # 3. Create a boolean mask (an array of True/False values)
+        mask = Vleft > Vcutoff
+
+        # 4. Apply the mask to filter the arrays
+        Vleft_plot = Vleft[mask]
+        I_vec_forward_plot = I_vec_forward[mask]
+        I_vec_backward_plot = I_vec_backward[mask]
 
         fig = plt.figure()
         plt.plot(
-            Vleft,
-            I_vec_forward,
+            Vleft_plot,
+            I_vec_forward_plot,
             label="increasing",
             color="red",
         )
         plt.plot(
-            Vleft,
-            I_vec_backward,
+            Vleft_plot,
+            I_vec_backward_plot,
             label="decreasing",
             color="blue",
         )

@@ -74,21 +74,31 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     V_capture = 4
 
     # FIXED PARAMETERS
+    pos_energy_boundT0 = None
+    neg_energy_boundT0 = None
+
     if Cg in Cg_list:
         # import from csv table
-        with open(import_export.csv_table_path) as f:
+        with open(import_export.csv_table_path, encoding='utf-8-sig') as f:
             for row in csv.reader(f):
-                if row and row[0].strip().lstrip('-').isdigit():
-                    if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
-                        if int(row[0]) == 0:
-                            pos_energy_boundT0 = float(row[2])
-                            neg_energy_boundT0 = float(row[1])
-                            print(f"T0 pos : {pos_energy_boundT0}, T0 neg : {neg_energy_boundT0}", flush=True)
-                            break
-
+                if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
+                    try:
+                        rep_idx = int(row[0].strip())
+                    except ValueError:
                         continue
+
+                    if rep_idx == 0:
+                        pos_energy_boundT0 = float(row[2].strip())
+                        neg_energy_boundT0 = float(row[1].strip())
+                        print(f"T0 pos : {pos_energy_boundT0}, T0 neg : {neg_energy_boundT0}", flush=True)
+                        break
     else:
-        raise ValueError("Cg must be in Cg_list")
+        raise ValueError(f"Cg ({Cg}) must be in Cg_list ({Cg_list})")
+
+    # VERIFICATION CHECK
+    if pos_energy_boundT0 is None or neg_energy_boundT0 is None:
+        raise ValueError(
+            f"Failed to find n=0 bounds in the CSV table located at {import_export.csv_table_path}. Please check your CSV contents.")
 
     # EXPERIMENT PARAMETERS
     loop_count = max(num_workers, 960)
@@ -267,16 +277,16 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
     ### get bounds for dE for each temp from csv table
     bounds_dict = {}
-    with open(import_export.csv_table_path) as f:
+    with open(import_export.csv_table_path, encoding='utf-8-sig') as f:
         for row in csv.reader(f):
-            if row and row[0].strip().lstrip('-').isdigit():
-                if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
-                    rep_idx = int(row[0])
+            if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
+                try:
+                    rep_idx = int(row[0].strip())
                     bounds_dict[rep_idx] = {
-                        "neg": float(row[1]),
-                        "pos": float(row[2])
+                        "neg": float(row[1].strip()),
+                        "pos": float(row[2].strip())
                     }
-                else:
+                except ValueError:
                     continue
 
     ### run thermopower until I(V)<0
@@ -395,7 +405,7 @@ if __name__ == "__main__":
                                               f"64bit_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
                                               for n in
                                               range(501)],
-            csv_table_path=MP_COMPUTE_PATH / f"table_Cg{Cg}.csv",
+            csv_table_path=MP_COMPUTE_PATH / f"table_Tmid{Tmid_units}_{Tmid_pastdigit}_Cg{Cg}.csv",
             results_dir_path=RESULTS_DIR_PATH
         ),
         run_name=run_name_flat,
