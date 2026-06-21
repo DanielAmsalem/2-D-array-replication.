@@ -1,3 +1,4 @@
+import decimal
 import os
 import csv
 import re
@@ -62,7 +63,7 @@ def calc_threshold_snr_interpolated(I, IErr, V):
 
     # Return the exact continuous midpoint threshold and its mathematical uncertainty
     v_th = (small_V + big_V) / 2.0
-    v_err = abs(big_V - small_V) / 2.0  # Error is half the gap width
+    v_err = abs(big_V - small_V) / 2.0
 
     return v_th, v_err
 
@@ -81,11 +82,13 @@ def parse_params(filepath):
     match_stdR = re.search(r'stdR \(exponent\)\s*:\s*([\d.]+)', content)
     match_sig = re.search(r'sig \(normal\)\s*:\s*([\d.]+)', content)
     match_T0 = re.search(r'T0\s*:\s*([\d.]+)', content)
+    match_flip = re.search(r'flip\s*:\s*(True|False)', content)
 
     params['Cg'] = float(match_Cg.group(1)) if match_Cg else 0.0
     params['stdR'] = float(match_stdR.group(1)) if match_stdR else 0.0
     params['sig'] = float(match_sig.group(1)) if match_sig else 0.0
     params['T0'] = float(match_T0.group(1)) if match_T0 else 0.001
+    params['flip'] = True if (match_flip and match_flip.group(1) == 'True') else False
 
     # Extract temperatures to find the total gradient delta T
     match_T = re.search(r'T\s*:\s*\[(.*?)\]', content)
@@ -93,11 +96,51 @@ def parse_params(filepath):
         t_vals = [float(x) for x in match_T.group(1).split(',')]
         params['T_left'] = t_vals[0]
         params['T_right'] = t_vals[-1]
-        params['dT'] = params['T_right'] - params['T_left']
+        params['T_mid'] = t_vals[len(t_vals) // 2]
+
+        # Enforce absolute value of dT
+        params['dT'] = abs(params['T_right'] - params['T_left'])
     else:
-        params['dT'] = 0.0
+        raise NameError(f"{filepath} has a corrupted T list")
 
     return params
+
+
+def get_folder_midfix_info(directory, run_name):
+    """
+    Evaluates up to two parameter files in a folder to determine if the run is
+    a midfix physical setup or a standard T0-anchored setup.
+    Returns: (midfix: bool, Tmid: float/None, is_corrupted: bool)
+    """
+    param_files = list(directory.glob(f"parameters_{run_name}_rep*.txt"))
+    if not param_files:
+        param_files = [f for f in directory.glob("*.txt") if "parameters" in f.name and "rep" in f.name]
+
+    if not param_files:
+        return False, None, False
+
+    parsed_params = [parse_params(f) for f in param_files[:2]]
+
+    if len(parsed_params) == 1:
+        p = parsed_params[0]
+        if abs(p['T_left'] - p['T0']) < 1e-6 or abs(p['T_right'] - p['T0']) < 1e-6:
+            return False, None, False
+        else:
+            return True, p['T_mid'], False
+
+    p1, p2 = parsed_params[0], parsed_params[1]
+
+    # Condition 1: Tleft=T0 in both OR Tright=T0 in both (Standard)
+    if (abs(p1['T_left'] - p1['T0']) < 1e-6 and abs(p2['T_left'] - p2['T0']) < 1e-6) or \
+            (abs(p1['T_right'] - p1['T0']) < 1e-6 and abs(p2['T_right'] - p2['T0']) < 1e-6):
+        return False, None, False
+
+    # Condition 2: Middle entry is identical in both (Midfix)
+    if abs(p1['T_mid'] - p2['T_mid']) < 1e-6:
+        return True, p1['T_mid'], False
+
+    # ELSE corrupted
+    return False, None, True
 
 
 def read_sweeps(csv_path):
@@ -154,8 +197,9 @@ def run_scanner_mode(base_dir, ivs_txt_path):
     """
     print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...", flush=True)
 
-    # catalog structure: catalog[(stdR, sig, T0)][Cg][rep] = [folder1, folder2, ...]
+    # catalog structure: catalog[(stdR, sig, T0, flip, midfix, Tmid)][Cg][rep] = [folder1, folder2, ...]
     catalog = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    corrupted_folders = []
 
     for directory in base_dir.glob("results_*"):
         if not directory.is_dir(): continue
@@ -163,6 +207,11 @@ def run_scanner_mode(base_dir, ivs_txt_path):
 
         # Skip explicitly ignored folders
         if run_name in ignored_folders:
+            continue
+
+        midfix, Tmid, is_corrupted = get_folder_midfix_info(directory, run_name)
+        if is_corrupted:
+            corrupted_folders.append(run_name)
             continue
 
         for csv_path in directory.glob("*.csv"):
@@ -180,15 +229,23 @@ def run_scanner_mode(base_dir, ivs_txt_path):
                     continue
 
             params = parse_params(param_file)
-            stdR, sig, T0, Cg = params['stdR'], params['sig'], params['T0'], params['Cg']
+            stdR, sig, T0, Cg, flip = params['stdR'], params['sig'], params['T0'], params['Cg'], params['flip']
 
             # Track exactly which folder this rep came from
-            catalog[(stdR, sig, T0)][Cg][rep].append(f"results_{run_name}")
+            catalog[(stdR, sig, T0, flip, midfix, Tmid)][Cg][rep].append(f"results_{run_name}")
 
     # Generate the IVs.txt report
     with open(ivs_txt_path, 'w') as f:
-        for (stdR, sig, T0), cg_data in catalog.items():
-            f.write(f"----- StdR={stdR} ; sig={sig} ; T0={T0} ---------\n")
+        # Log corrupted runs clearly at the top of the IVs.txt output
+        if corrupted_folders:
+            f.write("===== CORRUPTED FOLDERS (INSPECT THESE) =====\n")
+            for cf in corrupted_folders:
+                f.write(f"results_{cf}\n")
+            f.write("=============================================\n\n")
+
+        for (stdR, sig, T0, flip, midfix, Tmid), cg_data in catalog.items():
+            f.write(
+                f"----- StdR={stdR} ; sig={sig} ; T0={T0} ; flip={flip} ; midfix={midfix} ; Tmid={Tmid} ---------\n")
 
             for Cg, rep_dict in cg_data.items():
                 all_runs = sorted(list(rep_dict.keys()))
@@ -222,10 +279,10 @@ def run_analysis_mode(base_dir):
     """
     print("[IVs.txt FOUND] -> Clean data assumed. Initializing Analysis Mode...")
 
-    output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_weighted_deg{poly_order}"
+    output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_savgol"
     output_dir.mkdir(exist_ok=True)
 
-    # Key: (Cg, stdR, sig, T0) -> Value: list of dictionaries
+    # Key: (Cg, stdR, sig, T0, midfix, flip) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
     print("Scanning for results directories...", flush=True)
@@ -237,6 +294,11 @@ def run_analysis_mode(base_dir):
 
         # Skip explicitly ignored folders
         if run_name in ignored_folders:
+            continue
+
+        midfix, Tmid, is_corrupted = get_folder_midfix_info(directory, run_name)
+        if is_corrupted:
+            print(f"Skipping corrupted folder: {run_name}", flush=True)
             continue
 
         print(f"Processing run batch: {run_name}", flush=True)
@@ -252,16 +314,11 @@ def run_analysis_mode(base_dir):
 
             param_file = directory / f"parameters_{run_name}_rep{rep}.txt"
             if not param_file.exists():
-                # Fallback search if exact name slightly varies
-                param_files = list(directory.glob(f"*rep{rep}*.txt"))
-                if param_files:
-                    param_file = param_files[0]
-                else:
-                    print(f"Warning: No param file found for {name}. Skipping...")
-                    continue
+                print(f"Warning: No param file found for {name}. Skipping...")
+                continue
 
             params = parse_params(param_file)
-            sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'])
+            sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'], params['flip'], midfix, Tmid)
 
             # Extract both sweeps including the dynamic IErr array
             v_up, i_up, ierr_up, v_down, i_down, ierr_down = read_sweeps(csv_path)
@@ -288,8 +345,17 @@ def run_analysis_mode(base_dir):
         if len(data) < 2:
             continue
 
-        Cg, stdR, sig, T0 = sys_key
-        sys_folder_name = f"System_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}"
+        Cg, stdR, sig, T0, flip, midfix, Tmid = sys_key
+
+        # Name the specific physical setup precisely
+        sys_folder_name = f"System_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}_flip{flip}"
+        if midfix:
+            Tmid_ratio = Tmid / T0
+            Tmid_units = int(Tmid_ratio)
+            decimal_part = decimal.Decimal(str(Tmid_ratio - Tmid_units))
+            Tmid_pastdigits = int(str(decimal_part).replace('0.', ''))
+            sys_folder_name += f"_Tmid{Tmid_units}_{Tmid_pastdigits}"
+
         sys_dir = output_dir / sys_folder_name
         sys_dir.mkdir(exist_ok=True)
 
@@ -310,7 +376,7 @@ def run_analysis_mode(base_dir):
         err_up = err_up[valid_mask]
         err_down = err_down[valid_mask]
 
-        # --- RE-INTEGRATED: Remove the last noisy point ---
+        # REMOVE THE NOISY TAIL (Remove the last point)
         if len(dTs) > 0:
             dTs = dTs[:-1]
             Vth_up = Vth_up[:-1]
@@ -318,7 +384,7 @@ def run_analysis_mode(base_dir):
             err_up = err_up[:-1]
             err_down = err_down[:-1]
 
-        if len(dTs) < 4:  # Sav-Gol needs at least a few points
+        if len(dTs) < 4:
             print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
             continue
 
@@ -372,6 +438,11 @@ def run_analysis_mode(base_dir):
                 writer.writerow(
                     [dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx], S_err_up[idx], S_err_down[idx]])
 
+        # Create precise title based on physics configuration
+        title_str = f"Cg={Cg}, stdR={stdR}, $\\sigma$={sig}, T0={T0}, flip={flip}"
+        if midfix:
+            title_str += f", Tmid={Tmid}"
+
         # ==========================================================
         # GRAPH 1A: Threshold Voltage (Up vs Down) - WITH ERROR BARS
         # ==========================================================
@@ -402,8 +473,7 @@ def run_analysis_mode(base_dir):
         plt.xlabel(r'Total Temperature Gradient $\Delta T = T_{right} - T_{left}$ ($e^2 / k_B \langle C \rangle$)',
                    fontsize=12)
         plt.ylabel(r'Threshold Voltage $V_{th}$ ($e / \langle C \rangle$) [SNR Breakout]', fontsize=12)
-        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
-                  fontsize=14)
+        plt.title(f'Threshold Voltage Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
@@ -421,10 +491,9 @@ def run_analysis_mode(base_dir):
         plt.fill_between(S_dT, S_down - S_err_down, S_down + S_err_down, color='crimson', alpha=0.2)
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / k_B \langle C \rangle$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
-        plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
-                  fontsize=14)
+        plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
@@ -439,10 +508,9 @@ def run_analysis_mode(base_dir):
         plt.plot(S_dT, S_down, marker='s', linestyle='--', color='crimson', linewidth=2, label='S(T) Down')
 
         plt.axhline(0, color='black', linestyle='-', alpha=0.8)
-        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / k_B \langle C \rangle$)', fontsize=12)
+        plt.xlabel(r'Total Temperature Gradient $\Delta T$ ($e^2 / (k_B \langle C \rangle)$)', fontsize=12)
         plt.ylabel(r'Thermopower $S(T) = -dV_{th} / d(\Delta T)$ ($k_B / e$)', fontsize=12)
-        plt.title(f'Thermopower Hysteresis vs. Gradient\n$C_g={Cg}$, $stdR={stdR}$, $\\sigma={sig}$, $T_0={T0}$',
-                  fontsize=14)
+        plt.title(f'Thermopower Hysteresis vs. Gradient\n{title_str}', fontsize=14)
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
