@@ -310,72 +310,39 @@ def run_analysis_mode(base_dir):
         err_up = err_up[valid_mask]
         err_down = err_down[valid_mask]
 
-        if len(dTs) < 4:
+        # --- RE-INTEGRATED: Remove the last noisy point ---
+        if len(dTs) > 0:
+            dTs = dTs[:-1]
+            Vth_up = Vth_up[:-1]
+            Vth_down = Vth_down[:-1]
+            err_up = err_up[:-1]
+            err_down = err_down[:-1]
+
+        if len(dTs) < 4:  # Sav-Gol needs at least a few points
             print(f"Skipping {sys_folder_name} - Not enough valid threshold data.", flush=True)
             continue
 
         # -----------------------------------------------------
-        # Dynamic Thermopower Derivative: Weighted Sliding Fit
+        # Dynamic Thermopower Derivative using Savitzky-Golay
         # -----------------------------------------------------
-        # Dynamically size the window based on data length and poly_order
         min_window = poly_order + 1
         if min_window % 2 == 0: min_window += 1
 
-        window_length = min(6, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
+        # 5 or 7 are safe odd maximums.
+        max_window = 7
+        window_length = min(max_window, len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
         if window_length < min_window:
             window_length = min_window if min_window <= len(dTs) else (len(dTs) if len(dTs) % 2 != 0 else len(dTs) - 1)
 
-        half_window = window_length // 2
+        # Only perform the fit if we have enough points and a valid odd window
+        if window_length > poly_order and window_length % 2 != 0:
+            avg_dx = np.mean(np.diff(dTs))
+            # Fallback if step is perfectly 0 to avoid division by zero
+            if avg_dx == 0:
+                avg_dx = 1e-6
 
-        # Function to perform a weighted local derivative
-        def weighted_sliding_derivative(x, y, y_err, window, deg=2):
-            derivs = np.zeros_like(y)
-            hw = window // 2
-            n = len(x)
-
-            for i in range(n):
-                # Determine window bounds (handling edges)
-                start = max(0, i - hw)
-                end = min(n, i + hw + 1)
-
-                # If near the edge, expand the window in the other direction to maintain size
-                if end - start < window:
-                    if start == 0:
-                        end = min(n, window)
-                    elif end == n:
-                        start = max(0, n - window)
-
-                x_win = x[start:end]
-                y_win = y[start:end]
-                err_win = y_err[start:end]
-
-                # Prevent division by zero if error is perfectly zero
-                err_win = np.where(err_win == 0, 1e-12, err_win)
-
-                # Weights are 1 / variance
-                weights = 1.0 / (err_win ** 2)
-
-                # Fit polynomial: y = ax^2 + bx + c
-                # Ensure degree is strictly less than number of points
-                current_deg = min(deg, len(x_win) - 1)
-
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', np.RankWarning)
-                    coeffs = np.polyfit(x_win, y_win, current_deg, w=weights)
-
-                # Analytical derivative: dy/dx = 2ax + b
-                p_deriv = np.polyder(coeffs)
-
-                # Evaluate derivative at the target point x[i]
-                derivs[i] = np.polyval(p_deriv, x[i])
-
-            return derivs
-
-        # Only perform the fit if we have enough points
-        if len(dTs) >= 3:
-            # Thermopower is the negative derivative: S = -dV/dT
-            S_up = -weighted_sliding_derivative(dTs, Vth_up, err_up, window=window_length, deg=poly_order)
-            S_down = -weighted_sliding_derivative(dTs, Vth_down, err_down, window=window_length, deg=poly_order)
+            S_up = -savgol_filter(Vth_up, window_length=window_length, polyorder=poly_order, deriv=1, delta=avg_dx)
+            S_down = -savgol_filter(Vth_down, window_length=window_length, polyorder=poly_order, deriv=1, delta=avg_dx)
             S_dT = dTs
 
             # Standard error propagation for subtraction across standard temperature steps
@@ -401,7 +368,6 @@ def run_analysis_mode(base_dir):
         with open(export_csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["Delta_T", "Vth_Up", "Vth_Down", "S_Up", "S_Down", "S_err_up", "S_err_down"])
-            # Arrays are perfectly aligned in length now, no index shifting needed
             for idx, dt_val in enumerate(dTs):
                 writer.writerow(
                     [dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx], S_err_up[idx], S_err_down[idx]])
