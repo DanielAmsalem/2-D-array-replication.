@@ -22,7 +22,6 @@ import csv
 import time
 from pathlib import Path
 
-
 # 1. Get the path to the parent directory (mp_compute)
 mp_compute_dir = Path(__file__).resolve().parent.parent
 
@@ -49,7 +48,7 @@ where for each position the appropriate bounds for dE calc are given
 EXPORT_PATH = Path(__file__).parent.parent.parent / "export"
 CSV_PATH = Path(__file__).parent.parent / f"gapped_table_Cg{Cg}.csv"
 t0 = time.time()
-gap_ratio = gap_ratio_int + gap_ratio_tenth/10
+gap_ratio = gap_ratio_int + gap_ratio_tenth / (10 ^ len(str(gap_ratio_tenth)))
 
 
 def main(export: IMPORT_EXPORT) -> None:

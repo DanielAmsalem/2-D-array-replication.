@@ -562,6 +562,7 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     mp.dps = 15
     return np.array(results, dtype=np.float64).reshape(-1, 4)
 
+
 def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
     table_val = table_triplets[:, 0]
     table_prob = table_triplets[:, 1]
