@@ -426,7 +426,7 @@ def Get_Steady_State(
                 scatter.set_array(n.reshape(-1))
                 plt.pause(0.001)
 
-            if k == 1:
+            if k == 1 and not loop_index % 5:
                 print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", flush=True)
 
             # define overall    rate vector, and a useful index
@@ -587,7 +587,7 @@ def Get_Steady_State(
                         not_in_steady_state = False
 
                 # steady state conditions
-                elif abs(dist_new) - expected_error < std < expected_error or abs(dist_new) < expected_error:
+                elif abs(dist_new) < expected_error:
                     steady_state_reps -= 1
                     if steady_state_reps <= 0:
                         steady_state_timer -= dt
