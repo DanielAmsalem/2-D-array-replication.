@@ -415,7 +415,7 @@ def Gamma_cp(dE, T, Ec, gap, Rt):
 
 
 def qp_integrand(T, dE, Ec, D):
-    """Master Quasi-particle Convolution Integrand."""
+    """Quasi-particle Convolution Integrand."""
 
     def conv(E, Etag):
         n_E = dos(E, D)
@@ -436,9 +436,9 @@ def qp_integrand(T, dE, Ec, D):
 
 def f(x, t):
     """Fermi-Dirac distribution strictly using mpmath for precision preservation."""
-    if x / t > mp.mpf('1e10'):
+    if x / t > mp.mpf('100'):
         return exp(-x / t)
-    if x / t < mp.mpf('-1e10'):
+    if x / t < mp.mpf('-100'):
         return mp.mpf('1')
     expon = exp(x / t)
     return mp.mpf('1') / (mp.mpf('1') + expon)
@@ -455,7 +455,7 @@ def dos(E, D):
 
 
 def calc_expected_dist_std(T_grad, T0):
-    #T should be unitless
+    # T should be unitless
     T = np.asarray(T_grad) / T0
 
     # T_array should be an N*N long list with entries [T0/T0...T0/T0,(T0+dT)/T0...(T0+dt/T0),...(T0+(N-1)dT)/T0]
