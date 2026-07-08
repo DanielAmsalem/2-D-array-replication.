@@ -10,58 +10,57 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 from collections import defaultdict
+from scipy.signal import find_peaks
 
 
-def calc_threshold_snr_interpolated(I, IErr, V):
+def average_diff(x, window_size=5):
+    if window_size < 5:
+        window_size = 5
+    if 2 * window_size > len(x):
+        window_size = len(x) // 2
+    if window_size == 0:
+        return np.diff(x)
+
+    def preper_kernel(X, window_size_padding):
+        kernel_padding = (1 / window_size_padding) * np.ones((2 * window_size_padding,))
+        kernel_padding[window_size_padding:] *= -1
+        padder = np.pad(X, window_size_padding - 1, 'edge')
+        return padder, kernel_padding
+
+    padded, kernel = preper_kernel(x, window_size)
+    result = np.convolve(padded, kernel, mode='valid')
+    return result
+
+
+def calculate_dynamic_threshold(diff_array, factor, absolute):
     """
-    Calculates Vth using the Continuous Signal-to-Noise Ratio (SNR) Breakout method.
-    Finds the interpolated voltage where the signal dynamically breaks out of
-    2x and 4x the simulation's specific error array (IErr).
-
-    Returns:
-        v_th: The midpoint voltage between the 2x and 4x thresholds.
-        v_err: The uncertainty, defined as half the voltage gap between the thresholds.
+    Calculates the adaptive noise threshold based on the standard deviation
+    of the smaller fluctuations in the derivative.
     """
-    if len(I) < 2:
-        return np.nan, np.nan
+    # Isolate 'small' noise (below the average derivative magnitude)
+    small_noise = diff_array[np.logical_and(diff_array > 0, diff_array < np.average(diff_array))]
 
-    def find_crossing_V(multiplier):
-        # We look for the exact point where I overtakes multiplier * IErr
-        diff = I - (multiplier * IErr)
-        mask = diff > 0
+    if len(small_noise) < 1:
+        return absolute
 
-        if not mask.any():
-            return np.nan
+    return max(factor * np.std(small_noise), absolute)
 
-        idx = np.argmax(mask)  # First index where current breaks the noise multiplier
 
-        if idx == 0:
-            return V[0]
+def find_first_jump_size(I_diff, threshold, diff_err):
+    """
+    Uses find_peaks to identify the first significant instability and returns
+    the magnitude of that jump.
+    """
+    # Find all peaks that exceed the threshold
+    peaks, properties = find_peaks(I_diff, height=threshold, prominence=0.5 * threshold)
 
-        # Linearly interpolate between the point just before and just after the crossing
-        v_before, v_after = V[idx - 1], V[idx]
-        diff_before, diff_after = diff[idx - 1], diff[idx]
+    if len(peaks) > 0:
+        first_peak_idx = peaks[0]
+        # get error
+        jump_size_error = diff_err[first_peak_idx]
+        return properties["peak_heights"][0], jump_size_error
 
-        # 0 = diff_before + (diff_after - diff_before) * (v_exact - v_before) / (v_after - v_before)
-        slope = (diff_after - diff_before) / (v_after - v_before)
-        if slope == 0:
-            return v_before
-
-        v_exact = v_before - (diff_before / slope)
-        return v_exact
-
-    # Find the continuous small and big breakout voltages
-    small_V = find_crossing_V(2.0)
-    big_V = find_crossing_V(4.0)
-
-    if np.isnan(small_V) or np.isnan(big_V):
-        return np.nan, np.nan
-
-    # Return the exact continuous midpoint threshold and its mathematical uncertainty
-    v_th = (small_V + big_V) / 2.0
-    v_err = abs(big_V - small_V) / 2.0
-
-    return v_th, v_err
+    return np.nan, np.nan
 
 
 def parse_params(filepath):
@@ -382,6 +381,11 @@ def run_analysis_mode(base_dir):
         if midfix:
             title_str += f", Tmid={Tmid}"
 
+        Volt_str = r"$\left [ \frac{e}{\langle C \rangle } \right ]$"
+        Amp_str = r"$\left [ \frac{e}{\langle R \rangle \langle C \rangle} \right ]$"
+        VdotA_str = r"$\left [ \frac{e^2}{\langle R \rangle \langle C \rangle ^2} \right ]$"
+        T_str = r"$\left [ \frac{e^2}{k_B \langle C \rangle} \right ]$"
+
         # Initialize the CSV writers for the extracted data points
         loop_area_path = sys_dir / "Loop_area.csv"
         first_jump_path = sys_dir / "First_jump.csv"
@@ -390,13 +394,13 @@ def run_analysis_mode(base_dir):
             writer_area = csv.writer(f_area)
             writer_jump = csv.writer(f_jump)
             writer_area.writerow(["Repetition", "Delta_T", "Loop_Area", "Error"])
-            writer_jump.writerow(["Repetition", "Delta_T", "First_Jump_Size_A"])
+            writer_jump.writerow(["Repetition", "Delta_T", "First_Jump_Size", "Err"])
 
             # Break the massive lists of curves into legible chunks of CHUNK_SIZE
             chunks = [data[i:i + CHUNK_SIZE] for i in range(0, len(data), CHUNK_SIZE)]
 
             for chunk in chunks:
-                k=0
+                k = 0
                 min_rep = min(d['Repetition'] for d in chunk)
                 max_rep = max(d['Repetition'] for d in chunk)
 
@@ -404,7 +408,7 @@ def run_analysis_mode(base_dir):
                 colormap = plt.cm.plasma
 
                 for idx, d in enumerate(chunk):
-                    vertical_offset = 0.2
+                    vertical_offset = 0.3
                     # Direct array extraction. V_up and V_down are identical per our parsing.
                     # We implement a safe truncation just in case an edge-case file dropped a single row.
                     min_len = min(len(d['V_up']), len(d['V_down']))
@@ -422,35 +426,40 @@ def run_analysis_mode(base_dir):
                     # Calculate precise Hysteresis Delta I through exact subtraction
                     i_diff = i_d - i_u
                     joint_error = np.sqrt(ierr_u ** 2 + ierr_d ** 2)
+                    dV = np.abs(np.mean(np.diff(v_u)))
 
                     # Extract the Loop Area (integration of the hysteresis via trapezoidal rule)
                     area = np.trapz(i_diff, v_u)
-                    writer_area.writerow([rep, dT, area, np.mean(joint_error)])
+                    dA = np.mean(joint_error) * dV
+                    writer_area.writerow([rep, dT, area, dA])
 
-                    # # Calculate the FIRST JUMP SIZE using the continuous SNR breakout formula
-                    # # The snippet returns the exact continuous voltage where breakout happens
-                    # jump_up_v, _ = calc_threshold_snr_interpolated(i_u, ierr_u, v_u)
-                    # jump_down_v, _ = calc_threshold_snr_interpolated(i_d, ierr_d, v_u)
-                    #
-                    # if not np.isnan(jump_v):
-                    #     # Find the actual current jump SIZE at that specific voltage breakout point
-                    #     jump_size_current = np.interp(jump_v, v_u, i_diff)
-                    # else:
-                    #     jump_size_current = np.nan
-                    #
-                    # writer_jump.writerow([rep, dT, jump_size_current])
+                    # Calculate first jump size
+                    # Kasirer uses this to identify 'spikes' in current change
+                    diff = average_diff(i_diff, window_size=5)
+
+                    # noise threshold for this specific run
+                    # 0.003 threshold is from thesis calc for single Isle
+                    # we have multiple isle which increases average noise, i went with 0.01
+                    thresh = calculate_dynamic_threshold(diff, factor=10, absolute=0.01)
+
+                    # Extract the size of the first jump
+                    jump_size, jump_err = find_first_jump_size(diff, thresh, joint_error)
+
+                    # 4. Save to your First_jump.csv
+                    writer_jump.writerow([rep, dT, jump_size, jump_err])
 
                     # Plot this specific loop onto the chunked graph
                     color = colormap(idx / max(1, len(chunk) - 1))
-                    i_diff_corrected = i_diff + k*vertical_offset
+                    i_diff_corrected = i_diff + k * vertical_offset
                     plt.errorbar(v_u, i_diff_corrected, yerr=joint_error, fmt='-',
-                                 label=f"Rep={rep}, $\\Delta T$={dT:.4g}", linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
-                    k+=1
+                                 label=f"Rep={rep}, $\\Delta T$={dT:.4g}", linewidth=1.5, capsize=3, elinewidth=1,
+                                 alpha=0.8)
+                    k += 1
 
                 # Format the graph
                 plt.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.7)
-                plt.xlabel('Voltage (V)', fontsize=12)
-                plt.ylabel(r'Hysteresis $\Delta I = I_{dec} - I_{inc}$ (A)', fontsize=12)
+                plt.xlabel('Voltage ' + Volt_str, fontsize=12)
+                plt.ylabel(r'Hysteresis $\Delta I = I_{dec} - I_{inc}$ ' + Amp_str, fontsize=12)
                 plt.title(f'Hysteresis vs. Voltage\n{title_str}', fontsize=14)
 
                 plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0., fontsize='small')
@@ -459,6 +468,60 @@ def run_analysis_mode(base_dir):
                 # Output Chunked Image
                 plt.savefig(sys_dir / f'Hyst_V_Curve_rep{min_rep}_{max_rep}.png', dpi=300, bbox_inches='tight')
                 plt.close()
+
+        # 1. Read the data back from the CSV we just populated
+        area_data = []
+        jump_data = []
+        with open(loop_area_path, 'r') as f_read, open(first_jump_path, 'r') as f_jump:
+            reader_loop = csv.reader(f_read)
+            reader_jump = csv.reader(f_jump)
+            next(reader_loop)  # Skip headers
+            next(reader_jump)
+            for row in reader_loop:
+                # row: [Repetition, Delta_T, Loop_Area, Area_Error]
+                area_data.append([float(row[1]), float(row[2]), float(row[3])])
+            for row in reader_jump:
+                # row: [Repetition, Delta_T, JumpSize, JumpError]
+                jump_data.append([float(row[1]), float(row[2]), float(row[3])])
+        area_data = np.array(area_data)
+        jump_data = np.array(jump_data)
+
+        # Sort by Delta_T (column 0) to ensure the line plot connects correctly
+        sort_idx_area = np.argsort(area_data[:, 0])
+        sorted_dT_area = area_data[sort_idx_area, 0]
+        sorted_area = area_data[sort_idx_area, 1]
+        sorted_dA = area_data[sort_idx_area, 2]
+
+        # Same for jump data
+        sort_idx_jump = np.argsort(jump_data[:, 0])
+        sorted_dT_jump = jump_data[sort_idx_jump, 0]
+        sorted_jump = jump_data[sort_idx_jump, 1]
+        sorted_dJ = jump_data[sort_idx_jump, 2]
+
+        # Plot Loop Area vs Delta_T
+        plt.figure(figsize=(10, 6))
+        plt.errorbar(sorted_dT_area, sorted_area, yerr=sorted_dA, fmt='-o',
+                     label='Loop Area', linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
+
+        plt.xlabel(r'Temperature Gradient $\Delta T$ ' + T_str, fontsize=12)
+        plt.ylabel(r'Hysteresis Loop Area ' + VdotA_str, fontsize=12)
+        plt.title(f'Hysteresis Loop Area vs. Gradient\n{title_str}', fontsize=14)
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.savefig(sys_dir / 'Loop_Area_vs_Gradient.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Plot Jump Size vs Delta_T
+        plt.figure(figsize=(10, 6))
+        plt.errorbar(sorted_dT_jump, sorted_jump, yerr=sorted_dJ, fmt='-o',
+                     label='Jump Size', linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
+        plt.xlabel(r'Temperature Gradient $\Delta T$ ' + T_str, fontsize=12)
+        plt.ylabel(r'Jump Size ' + Amp_str, fontsize=12)
+        plt.title(f'Jump Size vs. Gradient\n{title_str}', fontsize=14)
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.savefig(sys_dir / 'Jump_Size_vs_Gradient.png', dpi=300, bbox_inches='tight')
+        plt.close()
 
         print(f"Generated Hysteresis chunked graphs and CSV extracts in: {sys_dir}", flush=True)
 
