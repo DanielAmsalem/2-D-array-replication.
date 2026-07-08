@@ -389,7 +389,7 @@ def run_analysis_mode(base_dir):
         with open(loop_area_path, 'w', newline='') as f_area, open(first_jump_path, 'w', newline='') as f_jump:
             writer_area = csv.writer(f_area)
             writer_jump = csv.writer(f_jump)
-            writer_area.writerow(["Repetition", "Delta_T", "Loop_Area_Area"])
+            writer_area.writerow(["Repetition", "Delta_T", "Loop_Area", "Error"])
             writer_jump.writerow(["Repetition", "Delta_T", "First_Jump_Size_A"])
 
             # Break the massive lists of curves into legible chunks of CHUNK_SIZE
@@ -421,10 +421,11 @@ def run_analysis_mode(base_dir):
 
                     # Calculate precise Hysteresis Delta I through exact subtraction
                     i_diff = i_d - i_u
+                    joint_error = np.sqrt(ierr_u ** 2 + ierr_d ** 2)
 
                     # Extract the Loop Area (integration of the hysteresis via trapezoidal rule)
                     area = np.trapz(i_diff, v_u)
-                    writer_area.writerow([rep, dT, area])
+                    writer_area.writerow([rep, dT, area, np.mean(joint_error)])
 
                     # # Calculate the FIRST JUMP SIZE using the continuous SNR breakout formula
                     # # The snippet returns the exact continuous voltage where breakout happens
@@ -442,7 +443,6 @@ def run_analysis_mode(base_dir):
                     # Plot this specific loop onto the chunked graph
                     color = colormap(idx / max(1, len(chunk) - 1))
                     i_diff_corrected = i_diff + k*vertical_offset
-                    joint_error = np.sqrt(ierr_u**2 + ierr_d**2)
                     plt.errorbar(v_u, i_diff_corrected, yerr=joint_error, fmt='-',
                                  label=f"Rep={rep}, $\\Delta T$={dT:.4g}", linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
                     k+=1
