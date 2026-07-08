@@ -2,9 +2,11 @@ import os
 import csv
 import re
 import numpy as np
+import pandas as pd
 import matplotlib
 import warnings
 import decimal
+from scipy.signal import find_peaks
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -54,8 +56,7 @@ def find_jump_positions_and_first_jump_size(I_diff, threshold, diff_err):
     peaks, properties = find_peaks(I_diff, height=threshold, prominence=0.5 * threshold)
 
     if len(peaks) > 0:
-        # Filter the peaks array to keep ONLY the indices where I_diff is positive
-        # This acts exactly like your for-loop but is executed instantly in C
+        # Mask out any peaks that technically dropped below 0
         positive_peaks_mask = I_diff[peaks] > 0
 
         positive_peaks = peaks[positive_peaks_mask]
@@ -63,11 +64,12 @@ def find_jump_positions_and_first_jump_size(I_diff, threshold, diff_err):
 
         if len(positive_peaks) > 0:
             first_peak_idx = positive_peaks[0]
-            jump_size_error = diff_err[first_peak_idx]
+            first_jump_size_error = diff_err[first_peak_idx]
+            all_jump_size_error = diff_err[positive_peaks]
 
-            return positive_heights[0], jump_size_error, positive_peaks, positive_heights
+            return positive_heights[0], first_jump_size_error, positive_peaks, positive_heights, all_jump_size_error
 
-    return np.nan, np.nan, np.array([])
+    return np.nan, np.nan, np.array([]), np.array([]), np.array([])
 
 
 def parse_params(filepath):
@@ -184,12 +186,13 @@ def read_sweeps(csv_path):
     return v_up, i_up, ierr_up, v_down, i_down, ierr_down
 
 
-# Folders that should be completely skipped by the script
-ignored_folders = {
-    "20251207_17h43m26s",
-    "20260605_19h36m00s",
-    "20260606_22h05m04s"
-}
+ignored_folders = {"20251207_17h43m26s", "20260605_19h36m00s", "20260606_22h05m04s"}
+
+# Unified Unit Strings
+Volt_str = r"$\left[ \frac{e}{\langle C \rangle} \, \right]$"
+Amp_str = r"$\left[ \frac{e}{\langle R \rangle \langle C \rangle} \, \right]$"
+VdotA_str = r"$\left[ \frac{e^2}{\langle R \rangle \langle C \rangle ^2} \, \right]$"
+T_str = r"$\left[ \frac{e^2}{k_B \langle C \rangle} \, \right]$"
 
 
 def run_scanner_mode(base_dir, ivs_txt_path):
@@ -371,11 +374,7 @@ def run_analysis_mode(base_dir):
         sys_folder_name = f"System_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}"
         if midfix:
             Tmid_ratio = Tmid / T0
-            Tmid_units = int(Tmid_ratio)
-            decimal_part = decimal.Decimal(str(Tmid_ratio - Tmid_units))
-            decimal_str = str(decimal_part).replace('0.', '')
-            Tmid_pastdigits = int(decimal_str) if decimal_str else 0
-            sys_folder_name += f"_Tmid{Tmid_units}_{Tmid_pastdigits}"
+            sys_folder_name += f"_Tmid{int(Tmid_ratio)}_{int(str(decimal.Decimal(str(Tmid_ratio - int(Tmid_ratio)))).replace('0.', '')) or 0}"
 
         sys_dir = output_dir / sys_folder_name
         sys_dir.mkdir(exist_ok=True)
@@ -388,22 +387,22 @@ def run_analysis_mode(base_dir):
         if midfix:
             title_str += f", Tmid={Tmid}"
 
-        Volt_str = r"$\left [ \frac{e}{\langle C \rangle } \right ]$"
-        Amp_str = r"$\left [ \frac{e}{\langle R \rangle \langle C \rangle} \right ]$"
-        VdotA_str = r"$\left [ \frac{e^2}{\langle R \rangle \langle C \rangle ^2} \right ]$"
-        T_str = r"$\left [ \frac{e^2}{k_B \langle C \rangle} \right ]$"
-
-        # Initialize the CSV writers for the extracted data points
         loop_area_path = sys_dir / "Loop_area.csv"
         first_jump_path = sys_dir / "First_jump.csv"
+        all_jumps_path = sys_dir / "All_Jumps.csv"
 
-        with open(loop_area_path, 'w', newline='') as f_area, open(first_jump_path, 'w', newline='') as f_jump:
+        with open(loop_area_path, 'w', newline='') as f_area, \
+                open(first_jump_path, 'w', newline='') as f_jump, \
+                open(all_jumps_path, 'w', newline='') as f_all:
+
             writer_area = csv.writer(f_area)
             writer_jump = csv.writer(f_jump)
+            writer_all = csv.writer(f_all)
+
             writer_area.writerow(["Repetition", "Delta_T", "Loop_Area", "Error"])
             writer_jump.writerow(["Repetition", "Delta_T", "First_Jump_Size", "Err"])
+            writer_all.writerow(["Repetition", "Delta_T", "V_peak", "Jump_Size", "Jump_size_error"])
 
-            # Break the massive lists of curves into legible chunks of CHUNK_SIZE
             chunks = [data[i:i + CHUNK_SIZE] for i in range(0, len(data), CHUNK_SIZE)]
 
             for chunk in chunks:
@@ -423,25 +422,22 @@ def run_analysis_mode(base_dir):
                     v_u = d['V_up'][:min_len]
                     i_u = d['I_up'][:min_len]
                     ierr_u = d['IErr_up'][:min_len]
-
                     i_d = d['I_down'][:min_len]
                     ierr_d = d['IErr_down'][:min_len]
-
                     rep = d['Repetition']
                     dT = d['Delta_T']
 
-                    # Calculate precise Hysteresis Delta I through exact subtraction
+                    # Calculate Hysteresis Delta I
                     i_diff = i_d - i_u
                     joint_error = np.sqrt(ierr_u ** 2 + ierr_d ** 2)
                     dV = np.abs(np.mean(np.diff(v_u)))
 
-                    # Extract the Loop Area (integration of the hysteresis via trapezoidal rule)
+                    # Loop Area
                     area = np.trapz(i_diff, v_u)
                     dA = np.mean(joint_error) * dV
                     writer_area.writerow([rep, dT, area, dA])
 
-                    # Calculate first jump size
-                    # Kasirer uses this to identify 'spikes' in current change
+                    # Peak Finding
                     diff = average_diff(i_diff, window_size=5)
 
                     # noise threshold for this specific run
@@ -449,27 +445,33 @@ def run_analysis_mode(base_dir):
                     # we have multiple isles which increases average noise, I went with 0.01
                     thresh = calculate_dynamic_threshold(diff, factor=10, absolute=0.01)
 
-                    # Extract the size of the first jump
-                    jump_size, jump_err, jump_positions, jump_heights = find_jump_positions_and_first_jump_size(diff, thresh,
-                                                                                                  joint_error)
+                    # jump data
+                    first_jump_size, first_jump_err, jump_pos, jump_heights, height_errors = find_jump_positions_and_first_jump_size(
+                        diff, thresh, joint_error)
 
-                    # 4. Save to your First_jump.csv
-                    writer_jump.writerow([rep, dT, jump_size, jump_err])
+                    # Save First Jump
+                    writer_jump.writerow([rep, dT, first_jump_size, first_jump_err])
 
-                    # Plot this specific loop onto the chunked graph
+                    # Save ALL Jumps
+                    if len(jump_pos) > 0:
+                        v_peaks = v_u[jump_pos]
+                        for vp, hp, he in zip(v_peaks, jump_heights, height_errors):
+                            writer_all.writerow([rep, dT, vp, hp, he])
+
+                    # Plot Hysteresis Lines
                     color = colormap(idx / max(1, len(chunk) - 1))
-                    i_diff_corrected = i_diff + k * vertical_offset
+                    k_offset = k * vertical_offset
+                    i_diff_corrected = i_diff + k_offset
+                    plt.axhline(k_offset, color='black', linestyle='--', linewidth=1, alpha=0.7)
                     plt.errorbar(v_u, i_diff_corrected, yerr=joint_error, fmt='-',
                                  label=f"Rep={rep}, $\\Delta T$={dT:.4g}", linewidth=1.5, capsize=3, elinewidth=1,
                                  alpha=0.8)
                     k += 1
 
-                # Format the graph
-                plt.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.7)
+                # graphing Hysteresis for this chunk
                 plt.xlabel('Voltage ' + Volt_str, fontsize=12)
                 plt.ylabel(r'Hysteresis $\Delta I = I_{dec} - I_{inc}$ ' + Amp_str, fontsize=12)
                 plt.title(f'Hysteresis vs. Voltage\n{title_str}', fontsize=14)
-
                 plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0., fontsize='small')
                 plt.grid(True, linestyle='--', alpha=0.6)
 
@@ -477,59 +479,49 @@ def run_analysis_mode(base_dir):
                 plt.savefig(sys_dir / f'Hyst_V_Curve_rep{min_rep}_{max_rep}.png', dpi=300, bbox_inches='tight')
                 plt.close()
 
-        # 1. Read the data back from the CSV we just populated
-        area_data = []
-        jump_data = []
+        # ==========================================
+        # Post-Processing: Loop Area and First Jump
+        # ==========================================
+        area_data, jump_data = [], []
         with open(loop_area_path, 'r') as f_read, open(first_jump_path, 'r') as f_jump:
             reader_loop = csv.reader(f_read)
             reader_jump = csv.reader(f_jump)
-            next(reader_loop)  # Skip headers
-            next(reader_jump)
+            next(reader_loop, None)
+            next(reader_jump, None)
             for row in reader_loop:
-                # row: [Repetition, Delta_T, Loop_Area, Area_Error]
-                area_data.append([float(row[1]), float(row[2]), float(row[3])])
+                if row: area_data.append([float(row[1]), float(row[2]), float(row[3])])
             for row in reader_jump:
-                # row: [Repetition, Delta_T, JumpSize, JumpError]
-                jump_data.append([float(row[1]), float(row[2]), float(row[3])])
-        area_data = np.array(area_data)
-        jump_data = np.array(jump_data)
+                if row: jump_data.append([float(row[1]), float(row[2]), float(row[3])])
 
-        # Sort by Delta_T (column 0) to ensure the line plot connects correctly
-        sort_idx_area = np.argsort(area_data[:, 0])
-        sorted_dT_area = area_data[sort_idx_area, 0]
-        sorted_area = area_data[sort_idx_area, 1]
-        sorted_dA = area_data[sort_idx_area, 2]
+        if len(area_data) > 0 and len(jump_data) > 0:
+            area_data = np.array(area_data)
+            jump_data = np.array(jump_data)
 
-        # Same for jump data
-        sort_idx_jump = np.argsort(jump_data[:, 0])
-        sorted_dT_jump = jump_data[sort_idx_jump, 0]
-        sorted_jump = jump_data[sort_idx_jump, 1]
-        sorted_dJ = jump_data[sort_idx_jump, 2]
+            # Plot Area
+            sort_idx_area = np.argsort(area_data[:, 0])
+            # 0 : "Delta_T", 1 : "Loop_Area", 2 : "Error"
+            plt.figure(figsize=(10, 6))
+            plt.errorbar(area_data[sort_idx_area, 0], area_data[sort_idx_area, 1], yerr=area_data[sort_idx_area, 2],
+                         fmt='-o', label='Loop Area', linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
+            plt.xlabel(r'Temperature Gradient $\Delta T$ ' + T_str, fontsize=12)
+            plt.ylabel(r'Hysteresis Loop Area ' + VdotA_str, fontsize=12)
+            plt.title(f'Hysteresis Loop Area vs. Gradient\n{title_str}', fontsize=14)
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.savefig(sys_dir / 'Loop_Area_vs_Gradient.png', dpi=300, bbox_inches='tight')
+            plt.close()
 
-        # Plot Loop Area vs Delta_T
-        plt.figure(figsize=(10, 6))
-        plt.errorbar(sorted_dT_area, sorted_area, yerr=sorted_dA, fmt='-o',
-                     label='Loop Area', linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
-
-        plt.xlabel(r'Temperature Gradient $\Delta T$ ' + T_str, fontsize=12)
-        plt.ylabel(r'Hysteresis Loop Area ' + VdotA_str, fontsize=12)
-        plt.title(f'Hysteresis Loop Area vs. Gradient\n{title_str}', fontsize=14)
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.savefig(sys_dir / 'Loop_Area_vs_Gradient.png', dpi=300, bbox_inches='tight')
-        plt.close()
-
-        # Plot Jump Size vs Delta_T
-        plt.figure(figsize=(10, 6))
-        plt.errorbar(sorted_dT_jump, sorted_jump, yerr=sorted_dJ, fmt='-o',
-                     label='Jump Size', linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
-        plt.xlabel(r'Temperature Gradient $\Delta T$ ' + T_str, fontsize=12)
-        plt.ylabel(r'Jump Size ' + Amp_str, fontsize=12)
-        plt.title(f'Jump Size vs. Gradient\n{title_str}', fontsize=14)
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.savefig(sys_dir / 'Jump_Size_vs_Gradient.png', dpi=300, bbox_inches='tight')
-        plt.close()
+            # Plot Jump
+            sort_idx_jump = np.argsort(jump_data[:, 0])
+            # 0 : "Delta_T", 1 : "Jump_size", 2 : "Error"
+            plt.figure(figsize=(10, 6))
+            plt.errorbar(jump_data[sort_idx_jump, 0], jump_data[sort_idx_jump, 1], yerr=jump_data[sort_idx_jump, 2],
+                         fmt='-o', label='Jump Size', linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
+            plt.xlabel(r'Temperature Gradient $\Delta T$ ' + T_str, fontsize=12)
+            plt.ylabel(r'Jump Size ' + Amp_str, fontsize=12)
+            plt.title(f'Jump Size vs. Gradient\n{title_str}', fontsize=14)
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.savefig(sys_dir / 'Jump_Size_vs_Gradient.png', dpi=300, bbox_inches='tight')
+            plt.close()
 
         print(f"Generated Hysteresis chunked graphs and CSV extracts in: {sys_dir}", flush=True)
 
@@ -537,7 +529,6 @@ def run_analysis_mode(base_dir):
 
 
 def main():
-    # Explicitly set the base directory so it works securely regardless of where it is executed from
     base_dir = Path("/home/amsalda/SITresults/Thermopower_NormalMetal_compendium")
     ivs_txt_path = Path("/home/amsalda/IVs.txt")
 
