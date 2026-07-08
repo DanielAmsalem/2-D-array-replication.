@@ -46,21 +46,28 @@ def calculate_dynamic_threshold(diff_array, factor, absolute):
     return max(factor * np.std(small_noise), absolute)
 
 
-def find_first_jump_size(I_diff, threshold, diff_err):
+def find_jump_positions_and_first_jump_size(I_diff, threshold, diff_err):
     """
     Uses find_peaks to identify the first significant instability and returns
-    the magnitude of that jump.
+    the magnitude of that jump, its error, and all positive peak indices.
     """
-    # Find all peaks that exceed the threshold
     peaks, properties = find_peaks(I_diff, height=threshold, prominence=0.5 * threshold)
 
     if len(peaks) > 0:
-        first_peak_idx = peaks[0]
-        # get error
-        jump_size_error = diff_err[first_peak_idx]
-        return properties["peak_heights"][0], jump_size_error
+        # Filter the peaks array to keep ONLY the indices where I_diff is positive
+        # This acts exactly like your for-loop but is executed instantly in C
+        positive_peaks_mask = I_diff[peaks] > 0
 
-    return np.nan, np.nan
+        positive_peaks = peaks[positive_peaks_mask]
+        positive_heights = properties["peak_heights"][positive_peaks_mask]
+
+        if len(positive_peaks) > 0:
+            first_peak_idx = positive_peaks[0]
+            jump_size_error = diff_err[first_peak_idx]
+
+            return positive_heights[0], jump_size_error, positive_peaks, positive_heights
+
+    return np.nan, np.nan, np.array([])
 
 
 def parse_params(filepath):
@@ -439,11 +446,12 @@ def run_analysis_mode(base_dir):
 
                     # noise threshold for this specific run
                     # 0.003 threshold is from thesis calc for single Isle
-                    # we have multiple isle which increases average noise, i went with 0.01
+                    # we have multiple isles which increases average noise, I went with 0.01
                     thresh = calculate_dynamic_threshold(diff, factor=10, absolute=0.01)
 
                     # Extract the size of the first jump
-                    jump_size, jump_err = find_first_jump_size(diff, thresh, joint_error)
+                    jump_size, jump_err, jump_positions, jump_heights = find_jump_positions_and_first_jump_size(diff, thresh,
+                                                                                                  joint_error)
 
                     # 4. Save to your First_jump.csv
                     writer_jump.writerow([rep, dT, jump_size, jump_err])
