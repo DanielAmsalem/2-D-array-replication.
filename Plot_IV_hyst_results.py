@@ -12,6 +12,58 @@ from pathlib import Path
 from collections import defaultdict
 
 
+def calc_threshold_snr_interpolated(I, IErr, V):
+    """
+    Calculates Vth using the Continuous Signal-to-Noise Ratio (SNR) Breakout method.
+    Finds the interpolated voltage where the signal dynamically breaks out of
+    2x and 4x the simulation's specific error array (IErr).
+
+    Returns:
+        v_th: The midpoint voltage between the 2x and 4x thresholds.
+        v_err: The uncertainty, defined as half the voltage gap between the thresholds.
+    """
+    if len(I) < 2:
+        return np.nan, np.nan
+
+    def find_crossing_V(multiplier):
+        # We look for the exact point where I overtakes multiplier * IErr
+        diff = I - (multiplier * IErr)
+        mask = diff > 0
+
+        if not mask.any():
+            return np.nan
+
+        idx = np.argmax(mask)  # First index where current breaks the noise multiplier
+
+        if idx == 0:
+            return V[0]
+
+        # Linearly interpolate between the point just before and just after the crossing
+        v_before, v_after = V[idx - 1], V[idx]
+        diff_before, diff_after = diff[idx - 1], diff[idx]
+
+        # 0 = diff_before + (diff_after - diff_before) * (v_exact - v_before) / (v_after - v_before)
+        slope = (diff_after - diff_before) / (v_after - v_before)
+        if slope == 0:
+            return v_before
+
+        v_exact = v_before - (diff_before / slope)
+        return v_exact
+
+    # Find the continuous small and big breakout voltages
+    small_V = find_crossing_V(2.0)
+    big_V = find_crossing_V(4.0)
+
+    if np.isnan(small_V) or np.isnan(big_V):
+        return np.nan, np.nan
+
+    # Return the exact continuous midpoint threshold and its mathematical uncertainty
+    v_th = (small_V + big_V) / 2.0
+    v_err = abs(big_V - small_V) / 2.0
+
+    return v_th, v_err
+
+
 def parse_params(filepath):
     """
     Parses the parameters_{run_name}_rep{X}.txt files to establish the
@@ -91,8 +143,7 @@ def get_folder_midfix_info(directory, run_name):
 def read_sweeps(csv_path):
     """
     Reads V, I, and I_err (row[2]) vectors, isolating both the forward (Up)
-    and backward (Down) sweeps. Reverses the Down sweep so it is mapped
-    from 0 -> Vmax for easy interpolation.
+    and backward (Down) sweeps. Reverses the Down sweep so it is mappedn from 0 -> Vmax
     """
     v_col, i_col, ierr_col = [], [], []
     with open(csv_path, 'r') as f:
@@ -294,8 +345,10 @@ def run_analysis_mode(base_dir):
                 'Delta_T': params['dT'],
                 'V_up': v_up,
                 'I_up': i_up,
+                'IErr_up': ierr_up,
                 'V_down': v_down,
-                'I_down': i_down
+                'I_down': i_down,
+                'IErr_down': ierr_down
             })
 
     # Number of repetitions to put on a single output graph to avoid crowding
@@ -337,12 +390,13 @@ def run_analysis_mode(base_dir):
             writer_area = csv.writer(f_area)
             writer_jump = csv.writer(f_jump)
             writer_area.writerow(["Repetition", "Delta_T", "Loop_Area_Area"])
-            writer_jump.writerow(["Repetition", "Delta_T", "First_Jump_Voltage"])
+            writer_jump.writerow(["Repetition", "Delta_T", "First_Jump_Size_A"])
 
             # Break the massive lists of curves into legible chunks of CHUNK_SIZE
             chunks = [data[i:i + CHUNK_SIZE] for i in range(0, len(data), CHUNK_SIZE)]
 
             for chunk in chunks:
+                k=0
                 min_rep = min(d['Repetition'] for d in chunk)
                 max_rep = max(d['Repetition'] for d in chunk)
 
@@ -350,25 +404,48 @@ def run_analysis_mode(base_dir):
                 colormap = plt.cm.plasma
 
                 for idx, d in enumerate(chunk):
-                    v_u, i_u = d['V_up'], d['I_up']
-                    v_d, i_d = d['V_down'], d['I_down']
+                    vertical_offset = 0.2
+                    # Direct array extraction. V_up and V_down are identical per our parsing.
+                    # We implement a safe truncation just in case an edge-case file dropped a single row.
+                    min_len = min(len(d['V_up']), len(d['V_down']))
+
+                    v_u = d['V_up'][:min_len]
+                    i_u = d['I_up'][:min_len]
+                    ierr_u = d['IErr_up'][:min_len]
+
+                    i_d = d['I_down'][:min_len]
+                    ierr_d = d['IErr_down'][:min_len]
+
                     rep = d['Repetition']
                     dT = d['Delta_T']
 
-                    # Calculate precise Hysteresis Delta I
+                    # Calculate precise Hysteresis Delta I through exact subtraction
                     i_diff = i_d - i_u
 
                     # Extract the Loop Area (integration of the hysteresis via trapezoidal rule)
                     area = np.trapz(i_diff, v_u)
                     writer_area.writerow([rep, dT, area])
 
-                    # Extract the First Jump
-                    first_jump_v = max(i_diff)
-                    writer_jump.writerow([rep, dT, first_jump_v])
+                    # # Calculate the FIRST JUMP SIZE using the continuous SNR breakout formula
+                    # # The snippet returns the exact continuous voltage where breakout happens
+                    # jump_up_v, _ = calc_threshold_snr_interpolated(i_u, ierr_u, v_u)
+                    # jump_down_v, _ = calc_threshold_snr_interpolated(i_d, ierr_d, v_u)
+                    #
+                    # if not np.isnan(jump_v):
+                    #     # Find the actual current jump SIZE at that specific voltage breakout point
+                    #     jump_size_current = np.interp(jump_v, v_u, i_diff)
+                    # else:
+                    #     jump_size_current = np.nan
+                    #
+                    # writer_jump.writerow([rep, dT, jump_size_current])
 
                     # Plot this specific loop onto the chunked graph
                     color = colormap(idx / max(1, len(chunk) - 1))
-                    plt.plot(v_u, i_diff, color=color, linewidth=1.5, label=f"Rep={rep}, $\\Delta T$={dT:.4g}")
+                    i_diff_corrected = i_diff + k*vertical_offset
+                    joint_error = np.sqrt(ierr_u**2 + ierr_d**2)
+                    plt.errorbar(v_u, i_diff_corrected, yerr=joint_error, fmt='-',
+                                 label=f"Rep={rep}, $\\Delta T$={dT:.4g}", linewidth=1.5, capsize=3, elinewidth=1, alpha=0.8)
+                    k+=1
 
                 # Format the graph
                 plt.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.7)
@@ -391,7 +468,7 @@ def run_analysis_mode(base_dir):
 def main():
     # Explicitly set the base directory so it works securely regardless of where it is executed from
     base_dir = Path("/home/amsalda/SITresults/Thermopower_NormalMetal_compendium")
-    ivs_txt_path = base_dir / "IVs.txt"
+    ivs_txt_path = Path("/home/amsalda/IVs.txt")
 
     if not ivs_txt_path.exists():
         run_scanner_mode(base_dir, ivs_txt_path)
