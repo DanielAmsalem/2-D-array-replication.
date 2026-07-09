@@ -10,7 +10,11 @@ import Functions as F
 from define_objects import ExperimentInitialState
 
 import concurrent.futures
-
+import multiprocessing
+import os
+import json
+import tempfile
+import time
 
 def compute_distributed_R_matrices(
         stdR: float,
@@ -113,7 +117,7 @@ def compute_distributed_C_matrices(
     for i in near_left:
         Cix[i] = Cl[i // row_num][0]
     for i in near_right:
-        Cix[i] = Cr[i // row_num][0]
+        Cix[i] = Cr[i // row_num][-1] # used to be 0 instead of -1 but doesnt matter, when Vr=0 this never contributes.
 
     return Cix, compute_C_inverse(Ch, Cv, row_num, periodic_y), np.mean(all_Cs), np.mean(side_Cs), np.std(
         all_Cs), np.std(side_Cs)
@@ -260,21 +264,26 @@ def prepare_initial_state(loop_count: int, unitless_T0: float, flip: bool, perio
     )
 
 
-def _calc_segments(args):
+def _calc_segments(val_str, temp_str, Ec_str, dps):
     """
     Top-level worker function to calculate segmented probabilities.
     """
-    val, temp, Ec = args
+    mp.dps = dps
+    val = mp.mpf(val_str)
+    temp = mp.mpf(temp_str)
+    Ec = mp.mpf(Ec_str)
 
-    mp.dps = 40
+    printing = np.random.uniform(0, 1)
+    if printing < 0.01:  # print ~1 in a 100
+        print(f"START calculating w = {float(val):.3f} [T={float(temp)}]", flush=True)
 
     func = F.integrand(temp, val, Ec)
     absval = abs(val + Ec)
 
     # Updated limits using mpmath's infinity
-    limits = [-mp.inf, -absval, 0, absval, mp.inf]
+    limits = [-mp.inf, -absval, mp.mpf('0'), absval, mp.inf]
 
-    probability = 0
+    probability = mp.mpf('0')
 
     for i in range(len(limits) - 1):
         a = limits[i]
@@ -282,13 +291,15 @@ def _calc_segments(args):
 
         if a == -mp.inf:
             # (-inf, b] to [0, 1]
-            segment_prob = mp.quad(lambda t, b=b: func(b - t / (1 - t)) / ((1 - t) ** 2), [0, 1], method='tanh-sinh')
+            segment_prob = mp.quad(lambda t, b=b: func(b - t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2), [0, 1],
+                                   method='tanh-sinh')
         elif b == mp.inf:
             # [a, inf) to [0, 1]
-            segment_prob = mp.quad(lambda t, a=a: func(a + t / (1 - t)) / ((1 - t) ** 2), [0, 1], method='tanh-sinh')
+            segment_prob = mp.quad(lambda t, a=a: func(a + t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2), [0, 1],
+                                   method='tanh-sinh')
         else:
             w = b - a
-            if w < 1e-8:
+            if w < mp.mpf('1e-8'):
                 continue
 
             # [0, 1] limits for finite memory leak mapping
@@ -296,38 +307,65 @@ def _calc_segments(args):
 
         probability += segment_prob
 
-    return [val, float(probability.real), temp, Ec]
+    # Cast back to float for final lightweight array assembly
+    return [float(val), float(probability.real), float(temp), float(Ec)]
+
+
+def compute_gamma_worker_standard(val_str, temp_str, Ec_str, dps):
+    """Picklable wrapper for multiprocessing pool starmap."""
+    return _calc_segments(val_str, temp_str, Ec_str, dps)
 
 
 def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers):
-    print(pos_energy_bound, neg_energy_bound, init_state.resolution)
+    """
+    Orchestrates the calculation of standard Gamma integrals over the SLURM CPU pool.
+    Uses maxtasksperchild to force OS-level memory flushes, preventing
+    mpmath quadrature cache leaks over tens of thousands of tasks.
+    """
+    DPS = 40
+    mp.dps = DPS
+
+    print(f"Bounds: {pos_energy_bound}, {neg_energy_bound} | Res: {init_state.resolution}", flush=True)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
-    vals_to_calc = np.linspace(pos_energy_bound, neg_energy_bound, num=round(num_of_calc))
+    num_points = round(num_of_calc)
 
-    T_list_to_compute = np.array(expected_list)
-    print(f"computing for energies {pos_energy_bound} > dE > {neg_energy_bound}")
-    print(T_list_to_compute)
+    print(f"Computing for energies {pos_energy_bound} > dE > {neg_energy_bound}", flush=True)
+    print(np.array(expected_list))
 
-    # 1. Flatten the nested loops into a list of tasks
-    tasks = []
-    for val in vals_to_calc:
-        for temp in T_list_to_compute:
-            tasks.append((val, temp, init_state.Ec))
+    Ec_str = str(init_state.Ec)
 
-    rows = []
+    # 1. generate pure high-precision space mimicking np.linspace
+    w_start = mp.mpf(str(pos_energy_bound))
+    w_end = mp.mpf(str(neg_energy_bound))
 
-    # 2. Execute tasks in parallel using ProcessPoolExecutor
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # executor.map handles distributing the tasks and guarantees
-        # the results are yielded in the original submission order.
-        results = executor.map(_calc_segments, tasks)
+    if num_points > 1:
+        w_values_str = [str(w_start + mp.mpf(i) * (w_end - w_start) / mp.mpf(num_points - 1)) for i in
+                        range(num_points)]
+    else:
+        w_values_str = [str(w_start)]
 
-        for result_row in results:
-            rows.append(result_row)
+    # Flatten the nested loops into a list of tuples for starmap
+    task_args = []
+    for w_str in w_values_str:
+        for temp in expected_list:
+            task_args.append((w_str, str(temp), Ec_str, DPS))
 
-    # 3. Restore global precision for the main process and format the array
+    total_tasks = len(task_args)
+    print(f"Submitting {total_tasks} standard integral calculations to pool...", flush=True)
+
+    results = []
+
+    # execute tasks in parallel using OS-flushing multiprocessing pool
+    with multiprocessing.Pool(processes=max_workers, maxtasksperchild=10) as pool:
+        # pool.starmap unpacks the tuples and guarantees results are yielded in order
+        futures = pool.starmap(compute_gamma_worker_standard, task_args)
+
+        for result_row in futures:
+            results.append(result_row)
+
+    # 4. restore global precision for the main process and format the array
     mp.dps = 15
-    return np.array(rows, dtype=np.float64).reshape(-1, 4)
+    return np.array(results, dtype=np.float64).reshape(-1, 4)
 
 
 def _calc_segments_gapped_master(args, dps):
@@ -344,7 +382,9 @@ def _calc_segments_gapped_master(args, dps):
     mp.dps = dps
     threshold = mp.mpf('1e-20')
 
-    print(f"START calculating w = {float(val):.3f} [T={float(temp)}]", flush=True)
+    printing = np.random.uniform(0, 1)
+    if printing < 0.01:  # print ~1 in a 100
+        print(f"START calculating w = {float(val):.3f} [T={float(temp)}]", flush=True)
 
     abs_val = mp.fabs(val)
     sigma = mp.sqrt(2 * Ec * temp)
@@ -489,10 +529,46 @@ def _calc_segments_gapped_master(args, dps):
         return [args[0], str(probability.real), args[1], args[2]]
 
 
-def compute_gamma_worker_gapped(w_str, T_str, Ec_str, D_str, eps_str, dps):
-    """Picable wrapper for multiprocessing pool."""
-    args = (w_str, T_str, Ec_str, D_str, eps_str)
-    return _calc_segments_gapped_master(args, dps)
+def compute_gamma_worker_batch(w_list_str, expected_list_strings, Ec_str, D_str, eps_str, dps, checkpoint_dir,
+                               chunk_idx):
+    """
+    Picklable wrapper for multiprocessing pool.
+    Calculates a batch of energies and all their temperatures.
+    Returns (chunk_idx, results) to guarantee perfect array ordering.
+    """
+    np.random.seed((os.getpid() * int(time.time())) % 123456789)
+    # Name the file based on its absolute index in the grid
+    file_name = f"task_chunk_{chunk_idx:04d}.json"
+    file_path = os.path.join(checkpoint_dir, file_name)
+
+    # Redundant safety check
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, 'r') as f:
+                return chunk_idx, json.load(f)
+        except Exception:
+            pass  # If read fails, recalculate
+
+    # 1. Calculate the entire batch
+    results = []
+    for w_str in w_list_str:
+        for T_str in expected_list_strings:
+            args = (w_str, T_str, Ec_str, D_str, eps_str)
+            res = _calc_segments_gapped_master(args, dps)
+            results.append(res)
+
+    # 2. Atomic Write
+    temp_fd, temp_path = tempfile.mkstemp(dir=checkpoint_dir, prefix=f"tmp_chunk_{chunk_idx}_")
+    try:
+        with os.fdopen(temp_fd, 'w') as f:
+            json.dump(results, f)
+        os.replace(temp_path, file_path)
+    except Exception as e:
+        print(f"Failed to save batch checkpoint for chunk {chunk_idx}: {e}")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    return chunk_idx, results
 
 
 def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
@@ -504,21 +580,30 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     DPS = 40
     mp.dps = DPS
 
-    Ec_mp = mp.mpf(str(init_state.Ec))  # Assuming init_state holds standard Ec
+    Ec_mp = mp.mpf(str(init_state.Ec))
     mu_str = str(Ec_mp)
     D_mp = mp.mpf(str(gap_ratio)) * Ec_mp
     D_str = str(D_mp)
     eps_str = '1e-10'
 
-    # Apply the exact resolution logic from the standard version
+    # --- INFER 'n' FROM TEMPERATURE PROFILE ---
+    # T0 is always given by the init
+    n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / init_state.T0)
+
+    # --- Setup Checkpoint Directory ---
+    # The folder name now dynamically includes the inferred Tstd factor
+    checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_str}_Tstd_{n_inferred}")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    print(f"Checkpoints mapped to: {checkpoint_dir} (Inferred n={n_inferred})", flush=True)
+
     print(pos_energy_bound, neg_energy_bound, init_state.resolution)
     num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
     num_points = round(num_of_calc)
 
-    print(f"computing for energies {pos_energy_bound} > dE > {neg_energy_bound}")
-    print(np.array(expected_list))
+    # Clean temperature strings to eliminate float noise
+    expected_list_strings = [str(round(float(T), 8)) for T in expected_list]
 
-    # Dynamically generate pure high-precision space mimicking np.linspace(pos, neg)
+    # mimicking np.linspace(pos, neg)
     w_start = mp.mpf(str(pos_energy_bound))
     w_end = mp.mpf(str(neg_energy_bound))
 
@@ -528,39 +613,62 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     else:
         w_values_str = [str(w_start)]
 
-    w_args = []
-    T_args = []
+    # --- The Chunking Logic ---
+    CHUNK_SIZE = 10
+    # Break w_values_str into a list of smaller lists (chunks)
+    w_chunks = [w_values_str[i:i + CHUNK_SIZE] for i in range(0, len(w_values_str), CHUNK_SIZE)]
 
-    # flatten nested loops into a list of tasks.
-    for w_str in w_values_str:
-        for T in expected_list:
-            w_args.append(w_str)
-            T_args.append(str(T))
+    # Prepare a master list to hold our data in perfect order
+    final_ordered_chunks = [None] * len(w_chunks)
+    task_args = []
+    loaded_count = 0
 
-    total_tasks = len(w_args)
-    print(f"Submitting {total_tasks} gapped integral calculations to pool...", flush=True)
+    # --- Decipher Completed Batches ---
+    for chunk_idx, w_chunk_list in enumerate(w_chunks):
+        file_name = f"task_chunk_{chunk_idx:04d}.json"
+        file_path = os.path.join(checkpoint_dir, file_name)
 
-    results = []
-    # execute tasks in parallel using ProcessPoolExecutor
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # executor.map guarantees results are yielded in original submission order
-        futures = list(executor.map(
-            compute_gamma_worker_gapped,
-            w_args,
-            T_args,
-            [mu_str] * total_tasks,
-            [D_str] * total_tasks,
-            [eps_str] * total_tasks,
-            [DPS] * total_tasks,
-        ))
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r') as f:
+                    chunk_res = json.load(f)
+                    # Slot it directly into its rightful place in the array
+                    final_ordered_chunks[chunk_idx] = chunk_res
+                    loaded_count += 1
+            except json.JSONDecodeError:
+                # Corrupted file -> Send to pool
+                task_args.append(
+                    (w_chunk_list, expected_list_strings, mu_str, D_str, eps_str, DPS, checkpoint_dir, chunk_idx))
+        else:
+            # Not yet computed -> Send to pool
+            task_args.append(
+                (w_chunk_list, expected_list_strings, mu_str, D_str, eps_str, DPS, checkpoint_dir, chunk_idx))
 
-        # Cast the high-precision strings back to float64 strictly for final array formatting
-        for res in futures:
-            results.append([float(res[0]), float(res[1]), float(res[2]), float(res[3])])
+    total_tasks_left = len(task_args)
+    print(
+        f"Found {loaded_count}/{len(w_chunks)} completed batches. Submitting {total_tasks_left} batches to SLURM pool...",
+        flush=True)
+
+    # --- Process Remaining Tasks ---
+    if total_tasks_left > 0:
+        # maxtasksperchild guarantees memory leaks from mpmath don't take down the node
+        with multiprocessing.Pool(processes=max_workers, maxtasksperchild=10) as pool:
+            futures = pool.starmap(compute_gamma_worker_batch, task_args)
+
+            # Slot the newly computed futures back into their rightful places
+            for returned_idx, returned_results in futures:
+                final_ordered_chunks[returned_idx] = returned_results
+
+    # --- Flatten and Format final array ---
+    # Unpack the list of lists safely now that everything is guaranteed to be in order
+    final_results = []
+    for chunk_data in final_ordered_chunks:
+        for res in chunk_data:
+            final_results.append([float(res[0]), float(res[1]), float(res[2]), float(res[3])])
 
     # global precision for main
     mp.dps = 15
-    return np.array(results, dtype=np.float64).reshape(-1, 4)
+    return np.array(final_results, dtype=np.float64).reshape(-1, 4)
 
 
 def output_table_triplets(table_triplets: npt.NDArray, outfile: Path) -> None:
