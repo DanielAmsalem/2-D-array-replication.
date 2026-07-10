@@ -322,7 +322,7 @@ def prepare_table_triplets(init_state, expected_list, pos_energy_bound, neg_ener
     Uses maxtasksperchild to force OS-level memory flushes, preventing
     mpmath quadrature cache leaks over tens of thousands of tasks.
     """
-    DPS = 40
+    DPS = 30
     mp.dps = DPS
 
     print(f"Bounds: {pos_energy_bound}, {neg_energy_bound} | Res: {init_state.resolution}", flush=True)
@@ -577,8 +577,9 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     Orchestrates the calculation of Gapped Gamma integrals over the SLURM CPU pool.
     Returns a standard Nx4 float array for downstream validation/saving.
     """
-    DPS = 40
+    DPS = 30
     mp.dps = DPS
+    print(f"dps = {DPS}")
 
     Ec_mp = mp.mpf(str(init_state.Ec))
     mu_str = str(Ec_mp)
@@ -644,13 +645,17 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
             task_args.append(
                 (w_chunk_list, expected_list_strings, mu_str, D_str, eps_str, DPS, checkpoint_dir, chunk_idx))
 
-    total_tasks_left = len(task_args)
+    total_batches_left = len(task_args)
     print(
-        f"Found {loaded_count}/{len(w_chunks)} completed batches. Submitting {total_tasks_left} batches to SLURM pool...",
+        f"Found {loaded_count}/{len(w_chunks)} completed batches. Submitting {total_batches_left} batches to SLURM pool...",
         flush=True)
 
+    # --- CALCULATE AND PRINT INDIVIDUAL TASKS ---
+    total_individual_tasks_left = sum(len(args[0]) * len(args[1]) for args in task_args)
+    print(f"Total individual integration tasks remaining: {total_individual_tasks_left}", flush=True)
+
     # --- Process Remaining Tasks ---
-    if total_tasks_left > 0:
+    if total_batches_left > 0:
         # maxtasksperchild guarantees memory leaks from mpmath don't take down the node
         with multiprocessing.Pool(processes=max_workers, maxtasksperchild=10) as pool:
             futures = pool.starmap(compute_gamma_worker_batch, task_args)
