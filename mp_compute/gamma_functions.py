@@ -469,7 +469,7 @@ def Get_Steady_State(
 
                     # typical interaction time
                     dt = float(np.log(1 / np.random.random()) / R)
-                    if dt < 0:
+                    if dt <= 0:
                         raise ValueError
 
                     # picking a specific transition
@@ -528,7 +528,7 @@ def Get_Steady_State(
 
                     # typical interaction time
                     dt = float(np.log(1 / np.random.random()) / R)
-                    if dt < 0:
+                    if dt <= 0:
                         raise ValueError
 
                     # picking a specific transition
