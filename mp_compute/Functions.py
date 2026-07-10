@@ -94,51 +94,58 @@ def update_statistics(value, avg, n_var, total_time, time_step):
     return new_avg, new_n_var
 
 
-def Get_current_from_gamma(gamma_list, reaction_index, near_right, near_left, row_num, periodic_y):
+def Get_current_from_gamma(gamma_list, reaction_index_list, near_right, near_left, row_num, periodic_y):
     # e == 1
     I_right = 0
     I_down = 0
+
     for i in range(len(gamma_list)):
-        l, m = reaction_index[i]  # electron in isle l moved to isle m
+        try:
+            l, m = reaction_index_list[i]
+            charge_multiplier = 1
+        except ValueError:
+            l, m, particles_moved = reaction_index_list[i]
+            charge_multiplier = particles_moved
 
         if gamma_list[i] < 0:
             raise ValueError
+
         # negative side current
         if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
-            I_right -= gamma_list[i]
+            I_right -= gamma_list[i] * charge_multiplier
 
         # positive side current
         elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
-            I_right += gamma_list[i]
+            I_right += gamma_list[i] * charge_multiplier
 
         # right isle to isle current
         elif l - m == -1:
-            I_right += gamma_list[i]
+            I_right += gamma_list[i] * charge_multiplier
 
         # left isle to isle current
         elif l - m == 1:
-            I_right -= gamma_list[i]
+            I_right -= gamma_list[i] * charge_multiplier
 
         # up isle to isle current
         elif l - m == -row_num:
-            I_down -= gamma_list[i]
+            I_down -= gamma_list[i] * charge_multiplier
 
         # up isle to isle current on the y boundary
         elif l - m == row_num * (row_num - 1) and periodic_y:
-            I_down -= gamma_list[i]
+            I_down -= gamma_list[i] * charge_multiplier
 
         # down isle to isle current
         elif l - m == row_num:
-            I_down += gamma_list[i]
+            I_down += gamma_list[i] * charge_multiplier
 
         # down isle to isle current
         elif l - m == -row_num * (row_num - 1) and periodic_y:
-            I_down += gamma_list[i]
+            I_down += gamma_list[i] * charge_multiplier
 
     return I_right / (row_num + 1), I_down / (row_num + 1)
 
 
-def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, n_list, periodic_y):
+def Get_current_map(gamma_list, reaction_index_list, near_right, near_left, row_num, n_list, periodic_y):
     # e == 1
     n = row_num  # row_num
 
@@ -147,51 +154,50 @@ def Get_current_map(gamma_list, reaction_index, near_right, near_left, row_num, 
     # the entry in J with position x and y is J[y][x]
     Jy = np.zeros((n, n + 1))
     Jx = np.zeros((n, n + 1))
-    with open("map.csv", "w+") as f:
-        writer = csv.writer(f)
-        writer.writerow(n_list)
-        for j in range(len(gamma_list)):
-            entry = gamma_list[j]
-            l, m = reaction_index[j]
-            writer.writerow([l, m, entry])
+
     for i in range(len(gamma_list)):
-        l, m = reaction_index[i]  # electron in isle l moved to isle m
+        try:
+            l, m = reaction_index_list[i]
+            charge_multiplier = 1
+        except ValueError:
+            l, m, particles_moved = reaction_index_list[i]
+            charge_multiplier = particles_moved
 
         # negative side current
         if ((l in near_left) and m == "to") or ((l in near_right) and m == "from"):
             if m == "to":  # left side
-                Jx[l // n][0] -= gamma_list[i]
+                Jx[l // n][0] -= gamma_list[i] * charge_multiplier
             else:
-                Jx[l // n][-1] -= gamma_list[i]
+                Jx[l // n][-1] -= gamma_list[i] * charge_multiplier
 
         # positive side current
         elif ((l in near_left) and m == "from") or ((l in near_right) and m == "to"):
             if m == "to":  # right side
-                Jx[l // n][-1] += gamma_list[i]
+                Jx[l // n][-1] += gamma_list[i] * charge_multiplier
             else:
-                Jx[l // n][0] += gamma_list[i]
+                Jx[l // n][0] += gamma_list[i] * charge_multiplier
 
         # right isle to isle current
         elif l - m == -1:
-            Jx[l // n][(l % n) + 1] += gamma_list[i]
+            Jx[l // n][(l % n) + 1] += gamma_list[i] * charge_multiplier
 
         # left isle to isle current
         elif l - m == 1:
-            Jx[l // n][(l % n) + 1] -= gamma_list[i]
+            Jx[l // n][(l % n) + 1] -= gamma_list[i] * charge_multiplier
 
         # up isle to isle current
         elif l - m == -row_num:
-            Jy[l // n][(l % n) + 1] += gamma_list[i]
+            Jy[l // n][(l % n) + 1] += gamma_list[i] * charge_multiplier
 
         elif l - m == row_num * (row_num - 1) and periodic_y:
-            Jy[l // n][(l % n) + 1] += gamma_list[i]
+            Jy[l // n][(l % n) + 1] += gamma_list[i] * charge_multiplier
 
         # down isle to isle current
         elif l - m == row_num:
-            Jy[l // n][(l % n) + 1] -= gamma_list[i]
+            Jy[l // n][(l % n) + 1] -= gamma_list[i] * charge_multiplier
 
         elif l - m == -row_num * (row_num - 1) and periodic_y:
-            Jy[l // n][(l % n) + 1] -= gamma_list[i]
+            Jy[l // n][(l % n) + 1] -= gamma_list[i] * charge_multiplier
 
     return Jx, Jy
 
@@ -411,7 +417,7 @@ def Gamma_cp(dE, T, Ec, gap, Rt):
     # Gamma_cp(dE) = (pi/2hbar)Ej^2 P(-dE)
     # set h=1 -> 2hbar = 1/pi
     # Gamma_cp(dE) = (pi*Ej)^2 P(-dE)
-    return gauss * (Ej * mp.pi) ** 2
+    return float(gauss * (Ej * mp.pi) ** 2)
 
 
 def qp_integrand(T, dE, Ec, D):

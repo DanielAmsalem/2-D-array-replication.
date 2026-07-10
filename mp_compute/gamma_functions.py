@@ -430,15 +430,15 @@ def Get_Steady_State(
                 print(f"T_std={repetition}/20,{loop_index=}: current voltage is: {cycle}", flush=True)
 
             # define overall    rate vector, and a useful index
-            reaction_index = []
+            reaction_index_list = []
             Gamma = []
 
             if abs(gap_ratio) < 1e-3:
                 # normal metalic island case
-                Gamma, reaction_index = Get_Gamma(
+                Gamma, reaction_index_list = Get_Gamma(
                     Gamma_=Gamma,
                     e=init.e,
-                    reaction_index_=reaction_index,
+                    reaction_index_=reaction_index_list,
                     n_list=n,
                     curr_V=V,
                     cycle_voltage_=cycle_voltage,
@@ -461,19 +461,20 @@ def Get_Steady_State(
                     flip=flip,
                     periodic_y=periodic_y)
 
-                # transition occurred, limit for R=sum(Gamma) is the typical ground drain current
+                # transition occurred, limit for R=sum(Gamma) is typical ground drain current, or 1e-10 accuracy cutoff
                 R = np.sum(Gamma)
-                if R > cycle_voltage / init.CondRg:
+                if R > max(cycle_voltage / init.CondRg, 1e-10):
                     # reset zero curr steady state detection
                     zero_curr_steady_state_counter = 0
 
-                    # typical interaction time
-                    dt = float(np.log(1 / np.random.random()) / R)
+                    # typical interaction time, 1-U[0,1) avoids eta = 0.
+                    eta = 1 - np.random.random()
+                    dt = float(np.log(1 / eta) / R)
                     if dt <= 0:
                         raise ValueError
 
                     # picking a specific transition
-                    n, l, m, chosen_rate = execute_transition(Gamma, n, reaction_index, init.e)
+                    n, l, m, chosen_rate = execute_transition(Gamma, n, reaction_index_list, init.e)
 
                 else:  # rates too low, Poisson Tau-Leaping instead
                     dt = init.default_dt
@@ -482,7 +483,7 @@ def Get_Steady_State(
                     if np.any(firings > 0):
                         # A transition occurred! Apply them and reset freeze counter.
                         zero_curr_steady_state_counter = 0
-                        n = apply_multiple_transitions(n, reaction_index, firings, init.e)
+                        n = apply_multiple_transitions(n, reaction_index_list, firings, init.e)
                     else:
                         # Truly no transitions occurred.
                         zero_curr_steady_state_counter += 1
@@ -494,10 +495,10 @@ def Get_Steady_State(
 
             else:
                 # gapped case
-                Gamma, reaction_index = Get_Gamma_gapped(
+                Gamma, reaction_index_list = Get_Gamma_gapped(
                     Gamma_=Gamma,
                     e=init.e,
-                    reaction_index_=reaction_index,
+                    reaction_index_=reaction_index_list,
                     n_list=n,
                     curr_V=V,
                     cycle_voltage_=cycle_voltage,
@@ -521,18 +522,20 @@ def Get_Steady_State(
                     periodic_y=periodic_y,
                     gap=gap_ratio * init.Ec)
 
+                # transition occurred, limit for R=sum(Gamma) is typical ground drain current, or 1e-10 accuracy cutoff
                 R = np.sum(Gamma)
-                if R > cycle_voltage / init.CondRg:
+                if R > max(cycle_voltage / init.CondRg, 1e-10):
                     # reset zero curr steady state detection
                     zero_curr_steady_state_counter = 0
 
-                    # typical interaction time
-                    dt = float(np.log(1 / np.random.random()) / R)
+                    # typical interaction time, 1-U[0,1) avoids eta = 0.
+                    eta = 1 - np.random.random()
+                    dt = float(np.log(1 / eta) / R)
                     if dt <= 0:
                         raise ValueError
 
                     # picking a specific transition
-                    n, l, m, chosen_rate = execute_gapped_transition(Gamma, n, reaction_index, init.e)
+                    n, l, m, chosen_rate = execute_gapped_transition(Gamma, n, reaction_index_list, init.e)
 
                 else:  # rates too low, Poisson Tau-Leaping instead
                     dt = init.default_dt
@@ -541,7 +544,7 @@ def Get_Steady_State(
                     if np.any(firings > 0):
                         # A transition occurred! Apply them and reset freeze counter.
                         zero_curr_steady_state_counter = 0
-                        n = apply_multiple_transitions(n, reaction_index, firings, init.e)
+                        n = apply_multiple_transitions(n, reaction_index_list, firings, init.e)
                     else:
                         # Truly no transitions occurred.
                         zero_curr_steady_state_counter += 1
@@ -556,7 +559,7 @@ def Get_Steady_State(
 
             # update statistics
             if steady_state_reps <= 0:
-                I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index, init.near_right, init.near_left,
+                I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index_list, init.near_right, init.near_left,
                                                            init.row_num, periodic_y=periodic_y)
                 # Use t_ss for current statistics only
                 I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t_ss, dt)
@@ -592,7 +595,7 @@ def Get_Steady_State(
                     if steady_state_reps <= 0:
                         steady_state_timer -= dt
                         if cycle_voltage == V_cycle[capture_heatmap_at_idx]:
-                            Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index,
+                            Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index_list,
                                                          init.near_right, init.near_left, init.row_num, n,
                                                          periodic_y=periodic_y)
                             Jx += Jx_
