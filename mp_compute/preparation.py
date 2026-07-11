@@ -529,53 +529,27 @@ def _calc_segments_gapped_master(args, dps):
         return [args[0], str(probability.real), args[1], args[2]]
 
 
-def compute_gamma_worker_batch(w_list_str, expected_list_strings, Ec_str, D_str, eps_str, dps, checkpoint_dir,
-                               chunk_idx):
+def compute_gamma_worker_single(packed_args):
     """
-    Picklable wrapper for multiprocessing pool.
-    Calculates a batch of energies and all their temperatures.
-    Returns (chunk_idx, results) to guarantee perfect array ordering.
+    Calculates a SINGLE integral and returns its exact matrix indices
+    so the Master Process can seamlessly reassemble the chunk.
     """
+    w_str, T_str, Ec_str, D_str, eps_str, dps, chunk_idx, w_idx, T_idx = packed_args
+
+    # Optional: ensure independent print probabilities across Linux forks
     np.random.seed((os.getpid() * int(time.time())) % 123456789)
-    # Name the file based on its absolute index in the grid
-    file_name = f"task_chunk_{chunk_idx:04d}.json"
-    file_path = os.path.join(checkpoint_dir, file_name)
 
-    # Redundant safety check
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, 'r') as f:
-                return chunk_idx, json.load(f)
-        except Exception:
-            pass  # If read fails, recalculate
+    args = (w_str, T_str, Ec_str, D_str, eps_str)
+    res = _calc_segments_gapped_master(args, dps)
 
-    # 1. Calculate the entire batch
-    results = []
-    for w_str in w_list_str:
-        for T_str in expected_list_strings:
-            args = (w_str, T_str, Ec_str, D_str, eps_str)
-            res = _calc_segments_gapped_master(args, dps)
-            results.append(res)
-
-    # 2. Atomic Write
-    temp_fd, temp_path = tempfile.mkstemp(dir=checkpoint_dir, prefix=f"tmp_chunk_{chunk_idx}_")
-    try:
-        with os.fdopen(temp_fd, 'w') as f:
-            json.dump(results, f)
-        os.replace(temp_path, file_path)
-    except Exception as e:
-        print(f"Failed to save batch checkpoint for chunk {chunk_idx}: {e}")
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-    return chunk_idx, results
+    return chunk_idx, w_idx, T_idx, res
 
 
 def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
                                   gap_ratio):
     """
-    Orchestrates the calculation of Gapped Gamma integrals over the SLURM CPU pool.
-    Returns a standard Nx4 float array for downstream validation/saving.
+    Orchestrates the calculation of Gapped Gamma integrals using a flattened
+    Master-Aggregator queue to guarantee 100% worker utilization.
     """
     DPS = 30
     mp.dps = DPS
@@ -589,10 +563,12 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
 
     # --- INFER 'n' FROM TEMPERATURE PROFILE ---
     # T0 is always given by the init
-    n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / init_state.T0)
+    if len(expected_list) > 1:
+        n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / init_state.T0)
+    else:
+        n_inferred = 0
 
     # --- Setup Checkpoint Directory ---
-    # The folder name now dynamically includes the inferred Tstd factor
     checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_str}_Tstd_{n_inferred}")
     os.makedirs(checkpoint_dir, exist_ok=True)
     print(f"Checkpoints mapped to: {checkpoint_dir} (Inferred n={n_inferred})", flush=True)
@@ -616,10 +592,8 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
 
     # --- The Chunking Logic ---
     CHUNK_SIZE = 10
-    # Break w_values_str into a list of smaller lists (chunks)
     w_chunks = [w_values_str[i:i + CHUNK_SIZE] for i in range(0, len(w_values_str), CHUNK_SIZE)]
 
-    # Prepare a master list to hold our data in perfect order
     final_ordered_chunks = [None] * len(w_chunks)
     task_args = []
     loaded_count = 0
@@ -627,45 +601,83 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     # --- Decipher Completed Batches ---
     for chunk_idx, w_chunk_list in enumerate(w_chunks):
         file_name = f"task_chunk_{chunk_idx:04d}.json"
+        if len(w_chunks) > 10000:
+            file_name = f"task_chunk_{chunk_idx}.json"
         file_path = os.path.join(checkpoint_dir, file_name)
 
         if os.path.exists(file_path):
             try:
                 with open(file_path, 'r') as f:
                     chunk_res = json.load(f)
-                    # Slot it directly into its rightful place in the array
                     final_ordered_chunks[chunk_idx] = chunk_res
                     loaded_count += 1
             except json.JSONDecodeError:
-                # Corrupted file -> Send to pool
-                task_args.append(
-                    (w_chunk_list, expected_list_strings, mu_str, D_str, eps_str, DPS, checkpoint_dir, chunk_idx))
+                # Corrupted file -> Flatten into single tasks
+                for w_idx, w_str in enumerate(w_chunk_list):
+                    for T_idx, T_str in enumerate(expected_list_strings):
+                        task_args.append((w_str, T_str, mu_str, D_str, eps_str, DPS, chunk_idx, w_idx, T_idx))
         else:
-            # Not yet computed -> Send to pool
-            task_args.append(
-                (w_chunk_list, expected_list_strings, mu_str, D_str, eps_str, DPS, checkpoint_dir, chunk_idx))
+            # Not yet computed -> Flatten into single tasks
+            for w_idx, w_str in enumerate(w_chunk_list):
+                for T_idx, T_str in enumerate(expected_list_strings):
+                    task_args.append((w_str, T_str, mu_str, D_str, eps_str, DPS, chunk_idx, w_idx, T_idx))
 
-    total_batches_left = len(task_args)
+    total_tasks_left = len(task_args)
     print(
-        f"Found {loaded_count}/{len(w_chunks)} completed batches. Submitting {total_batches_left} batches to SLURM pool...",
+        f"Found {loaded_count}/{len(w_chunks)} completed batches. Submitting {total_tasks_left} individual tasks to {max_workers} workers...",
         flush=True)
 
-    # --- CALCULATE AND PRINT INDIVIDUAL TASKS ---
-    total_individual_tasks_left = sum(len(args[0]) * len(args[1]) for args in task_args)
-    print(f"Total individual integration tasks remaining: {total_individual_tasks_left}", flush=True)
+    # --- Setup Master Aggregator Buffers ---
+    chunk_buffers = {}
+    chunk_target_counts = {}
+    for chunk_idx, w_chunk_list in enumerate(w_chunks):
+        if final_ordered_chunks[chunk_idx] is None:
+            chunk_buffers[chunk_idx] = []
+            # How many individual integrals are required to complete this specific chunk?
+            chunk_target_counts[chunk_idx] = len(w_chunk_list) * len(expected_list_strings)
 
-    # --- Process Remaining Tasks ---
-    if total_batches_left > 0:
-        # maxtasksperchild guarantees memory leaks from mpmath don't take down the node
+    # --- Process Remaining Tasks Asynchronously ---
+    if total_tasks_left > 0:
         with multiprocessing.Pool(processes=max_workers, maxtasksperchild=10) as pool:
-            futures = pool.starmap(compute_gamma_worker_batch, task_args)
 
-            # Slot the newly computed futures back into their rightful places
-            for returned_idx, returned_results in futures:
-                final_ordered_chunks[returned_idx] = returned_results
+            # imap_unordered yields results the exact millisecond ANY worker finishes
+            for returned_chunk_idx, w_idx, T_idx, returned_result in pool.imap_unordered(compute_gamma_worker_single,
+                                                                                         task_args):
+
+                # Hand the result to the Master Process buffer
+                chunk_buffers[returned_chunk_idx].append((w_idx, T_idx, returned_result))
+
+                # --- ATOMIC CHECKPOINT TRIGGER ---
+                # If the buffer has received all the pieces for this chunk from the various workers:
+                if len(chunk_buffers[returned_chunk_idx]) == chunk_target_counts[returned_chunk_idx]:
+
+                    # 1. Sort the buffer to perfectly match the original matrix nested-loop order
+                    chunk_buffers[returned_chunk_idx].sort(key=lambda x: (x[0], x[1]))
+
+                    # 2. Extract just the clean results
+                    sorted_results = [item[2] for item in chunk_buffers[returned_chunk_idx]]
+
+                    # 3. Master Process handles the Atomic Write securely
+                    file_name = f"task_chunk_{returned_chunk_idx:04d}.json"
+                    if len(w_chunks) > 10000:
+                        file_name = f"task_chunk_{returned_chunk_idx}.json"
+
+                    file_path = os.path.join(checkpoint_dir, file_name)
+                    temp_fd, temp_path = tempfile.mkstemp(dir=checkpoint_dir, prefix=f"tmp_chunk_{returned_chunk_idx}_")
+                    try:
+                        with os.fdopen(temp_fd, 'w') as f:
+                            json.dump(sorted_results, f)
+                        os.replace(temp_path, file_path)
+                    except Exception as e:
+                        print(f"Failed to save aggregated checkpoint {returned_chunk_idx}: {e}", flush=True)
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+
+                    # 4. Slot into final array and free memory
+                    final_ordered_chunks[returned_chunk_idx] = sorted_results
+                    del chunk_buffers[returned_chunk_idx]
 
     # --- Flatten and Format final array ---
-    # Unpack the list of lists safely now that everything is guaranteed to be in order
     final_results = []
     for chunk_data in final_ordered_chunks:
         for res in chunk_data:
