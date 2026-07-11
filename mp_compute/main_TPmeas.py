@@ -1,11 +1,11 @@
 import os
 
-ratio = 3 / 2
-os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = max(int(total_cpus / ratio), 80)
+num_workers = min(total_cpus - 5, 80)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
 from concurrent.futures import ProcessPoolExecutor
@@ -19,6 +19,7 @@ from define_objects import IMPORT_EXPORT, SteadyStateResult, ExperimentInitialSt
 from gamma_functions import Get_Steady_State
 from preparation import (
     prepare_initial_state,
+    prepare_table_triplets_gapped,
     validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
@@ -31,10 +32,11 @@ import csv
 import math
 import time
 import re
+from plot_graph_from_csv import plot_graph_from_csv
 
 ####### slurm parameter parsing from job name ######
 job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Cg2')
-pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Cg(\d+)"
+pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Cg(\d+)_D(\d+)_(\d+)"
 match = re.search(pattern, job_name)
 
 if match:
@@ -44,14 +46,22 @@ if match:
     last_rep = int(match.group(3))
     jumps = int(match.group(4))
     Cg = int(match.group(5))
+    gap_int = int(match.group(6))
+    gap_tenth = int(match.group(7))
+    gap_ratio = gap_int + gap_tenth / 10
 
     repetition_list = list(range(x, last_rep, jumps))
-    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, x={x}, last_rep={last_rep}, jumps={jumps}, Cg={Cg}", flush=True)
+    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, x={x}, last_rep={last_rep}, jumps={jumps}, Cg={Cg}",
+          flush=True)
 
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
 
 Cg_list = [2, 5, 10, 20, 50]
+Cg_list_gapped = [10]
+gap_list = [2]
+
+
 ##############################################################
 
 
@@ -68,7 +78,21 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
     # FIXED PARAMETERS
     V_capture = 4
-    if Cg in Cg_list:
+    if gap_ratio > 1e-3:
+        if (Cg not in Cg_list_gapped) or (gap_ratio not in gap_list):
+            raise ValueError(f"Cg must be in Cg_list_gapped, Cg = {Cg} ; "
+                             f"gap ratio must be between in gap_list, D = {gap_ratio}")
+        if Cg == 10 and gap_ratio == 2:
+            pos_energy_boundT0 = 0
+            neg_energy_boundT0 = -0.30769
+        elif Cg == 2 and gap_ratio == 2:
+            pos_energy_boundT0 = -1
+            neg_energy_boundT0 = -2
+        else:
+            raise ValueError("whadahel?")
+    else:
+        if Cg not in Cg_list:
+            raise ValueError(f"Cg must be in Cg_list, Cg = {Cg}")
         if Cg == 20:
             pos_energy_boundT0 = 0.02  # -0.01 for T=0.001; 0.14 for T=0.01; 1.7 for T=0.1 at cg = 10
             neg_energy_boundT0 = -0.07  # -0.09 for T=0.001; -0.24 for T=0.01; -1.8 for T=0.1 at cg = 10
@@ -86,18 +110,15 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
             neg_energy_boundT0 = -0.37
         else:
             raise ValueError("what")
-    else:
-        raise ValueError("Cg must be in Cg_list")
 
     # EXPERIMENT PARAMETERS
-    loop_count = max(num_workers, 1000)
+    loop_count = max(num_workers, 960)
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
     last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
     repetition_list = list(range(first_rep, last_rep, jumps))
     T0_unitless = 0.001
-    gap_ratio = 0
     mean_Rg = 100
     stdR = 2
     sig = 0.05
@@ -118,6 +139,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
     null_path_name = (import_export.export_path /
                       f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+    if gap_ratio > 1e-3:
+        null_path_name = (import_export.export_path /
+                          f"64bit_GAP{gap_int}_{gap_tenth}table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
     # choose a specific run
     run_to_get_init_from = "20260606_22h05m04s"  # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ; sig = 0.05, stdR =2 "20260606_22h05m04s"
@@ -132,6 +156,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
         # if old init has inappropriate variables
         init = F.swap_in_init("flip", flip, init)
+        if gap_ratio > 1e-3:
+            if init.resolution != 1e-4:
+                init = F.swap_in_init("resolution", 1e-4, init)
+                print(f"set resolution times 100 res=1e-4", flush=True)
         if init.T0 != T0_unitless:
             print("T0 is different in reference file or Temperature units != 1. switching.")
             init = F.swap_in_init("T0", T0_unitless, init)
@@ -171,10 +199,17 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                                        results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
 
     if not validate_table_triplets_file(null_path_name, init, [init.T0]) and first_run:
-        table_triplets = prepare_table_triplets(init, [init.T0],
-                                                pos_energy_bound=pos_energy_boundT0,
-                                                neg_energy_bound=neg_energy_boundT0,
-                                                max_workers=num_workers)
+        if gap_ratio > 1e-3:
+            table_triplets = prepare_table_triplets_gapped(init, [init.T0],
+                                                           pos_energy_bound=pos_energy_boundT0,
+                                                           neg_energy_bound=neg_energy_boundT0,
+                                                           max_workers=num_workers,
+                                                           gap_ratio=gap_ratio)
+        else:
+            table_triplets = prepare_table_triplets(init, [init.T0],
+                                                    pos_energy_bound=pos_energy_boundT0,
+                                                    neg_energy_bound=neg_energy_boundT0,
+                                                    max_workers=num_workers)
         output_table_triplets(table_triplets, null_path_name)
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
@@ -273,14 +308,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                     # Skip rows like "21,,," where bounds are missing
                     continue
 
-    ### run thermopower until I(V)<0
-    current_at_V0 = True
+    ### run thermopower experiment
+    icreasing_T_gradient = True
 
-    while current_at_V0:
+    while icreasing_T_gradient:
         repetition += 1
         if repetition > last_repetition_to_do:
             print("Tstd>T0, finished all runs for Tstd<=T0", flush=True)
-            current_at_V0 = False
+            icreasing_T_gradient = False
             continue
         if not int(repetition) in repetition_list:
             print(f"repetition {repetition} was skipped")
@@ -365,6 +400,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                                    tot_error_count=err,
                                    gap_ratio=gap_ratio)
 
+    ### plot all new csvs
+    print(f"plotting all new csv in {import_export.results_dir_path}")
+    plot_graph_from_csv(run_names=[f"results_{run_name}"], directory=import_export.results_dir_path)
+
 
 if __name__ == "__main__":
     date_ = datetime.datetime.now()
@@ -376,13 +415,20 @@ if __name__ == "__main__":
     RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
     print(f"Created results directory at {RESULTS_DIR_PATH}")
 
+    if gap_ratio > 1e-3:
+        tables_list = [EXPORT_PATH /
+                       f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz.npz" for n in range(501)]
+        csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv.csv"
+    else:
+        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
+        csv_table_path = MP_COMPUTE_PATH / f"table_Cg{Cg}.csv"
+
     main(
         IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=[EXPORT_PATH /
-                                              f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)],
-            csv_table_path=MP_COMPUTE_PATH / f"table_Cg{Cg}.csv",
+            prepare_table_triplets_file_list=tables_list,
+            csv_table_path=csv_table_path,
             results_dir_path=RESULTS_DIR_PATH
         ),
         run_name=run_name_flat,
