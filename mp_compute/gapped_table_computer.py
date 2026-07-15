@@ -112,7 +112,7 @@ def main(export: IMPORT_EXPORT) -> None:
 
 if __name__ == "__main__":
     # Appended Cg to the gapped export string to keep your data organized
-    export_filename = f"64bit_D0is{gap_ratio_int}_{gap_ratio_tenth}_table_triplets_Tstd{iter_name}_20_Cg_{Cg}.npz"
+    export_filename = f"64bit_GAP{gap_ratio_int}_{gap_ratio_tenth}_table_triplets_Tstd{iter_name}_20_Cg_{Cg}.npz"
 
     main(
         IMPORT_EXPORT(

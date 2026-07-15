@@ -24,7 +24,7 @@ def compute_distributed_R_matrices(
         near_right: list
 ) -> tuple[list, npt.NDArray]:
     R_t_ij = 2 ** np.random.uniform(
-        low=np.log2(max(R - stdR, 0.01)),
+        low=np.log2(max(R - stdR, 0.1)),
         high=np.log2(R + stdR),
         size=(array_size, array_size), )
 

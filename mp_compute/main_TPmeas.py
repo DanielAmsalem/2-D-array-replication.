@@ -171,6 +171,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
             init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
             print(f"Successfully updated Cg to {init.Cg[0]} and Rg to {init.Rg[0]}. New Ec = {init.Ec}", flush=True)
 
+        # 1. Check if ANY element in the matrix is below the threshold
+        if np.any(init.R_t_ij < 0.1):
+            min_Rt = np.min(init.R_t_ij)
+            shift_amount = 0.1 - min_Rt
+            print(f"min Rt = {min_Rt:.4f}. Shifting entire array by +{shift_amount:.4f}...",flush=True)
+            R_t_ij_shifted = init.R_t_ij + shift_amount
+            init = F.swap_in_init("R_t_ij", R_t_ij_shifted, init)
+
         print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
     else:
@@ -429,7 +437,7 @@ if __name__ == "__main__":
 
     if gap_ratio > 1e-3:
         tables_list = [EXPORT_PATH /
-                       f"64bit_D0is{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
+                       f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
         csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
     else:
         tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]

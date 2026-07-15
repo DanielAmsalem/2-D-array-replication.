@@ -3,7 +3,7 @@ import sys
 
 import numpy as np
 import numpy.typing as npt
-
+import scipy.special as sp
 import Functions as F
 from define_objects import ExperimentInitialState, SteadyStateResult
 import matplotlib
@@ -49,33 +49,75 @@ def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table
             return probs[idx]
 
 
-def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_bound, table_val, table_prob, T_table,
-                 flip):
-    # low bound starts at dE=-0.09 and thence is analytically the mean of a gaussian
-    # high bound starts at dE=-0.01 and thence is 0
+def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_bound, table_val, table_prob, T_table, flip,
+                 gap_ratio):
     if Rt < 0:
         raise ValueError
 
-    val = (-dE - Ec) / Rt
-
+    # ---------------------------------------------------------------------
+    # ZERO TEMPERATURE LIMIT (Exact Analytical Elliptic Integral)
+    # ---------------------------------------------------------------------
     if T_at_junction == 0:
         if dE < -Ec:
-            return val
-        else:
-            return 0
+            v = -dE - Ec
+            D = gap_ratio * Ec
 
+            # SciPy takes m = k^2, perfectly matching your m_param
+            m_param = ((v - 2.0 * D) / (v + 2.0 * D)) ** 2
+            E_m = sp.ellipe(m_param)
+            K_m = sp.ellipk(m_param)
+
+            term1 = (v + 2.0 * D) * E_m
+            term2 = (4.0 * D * (v + D) / (v + 2.0 * D)) * K_m
+            y2 = term1 - term2
+
+            return y2 / Rt
+        else:
+            return 0.0
+
+    # ---------------------------------------------------------------------
+    # DEEP NEGATIVE ENERGY TAIL (Model 3: Elliptic + Gaussian Smearing)
+    # ---------------------------------------------------------------------
     if dE < neg_energy_bound:
+        v = -dE - Ec
+        D = gap_ratio * Ec
+
+        m_param = ((v - 2.0 * D) / (v + 2.0 * D)) ** 2
+        E_m = sp.ellipe(m_param)
+        K_m = sp.ellipk(m_param)
+
+        term1 = (v + 2.0 * D) * E_m
+        term2 = (4.0 * D * (v + D) / (v + 2.0 * D)) * K_m
+        y2 = term1 - term2
+
+        # Apply Gaussian thermal smearing
+        sigma_sq = 2.0 * Ec * T_at_junction
+
+        # Exact closed-form second derivative
+        numerator = -2.0 * D ** 2 * ((4.0 * D ** 2 + v ** 2) * E_m - 4.0 * D * v * K_m)
+        denominator = (v ** 2) * (-2.0 * D + v) ** 2 * (2.0 * D + v)
+
+        # Guard against zero-division if neg_energy_bound is set dangerously close to -Ec
+        d2_exact = numerator / denominator if denominator != 0.0 else 0.0
+
+        y3 = y2 + 0.5 * sigma_sq * d2_exact
+        val = y3 / Rt
+
         if val < 0:
             print(val)
             raise ValueError
         return val
 
+    # ---------------------------------------------------------------------
+    # INNER ENERGY BOUNDS (Lookup Table Integration)
+    # ---------------------------------------------------------------------
     elif pos_energy_bound > dE > neg_energy_bound:
         approx = approximate_gamma_integral(
             dE, T_at_junction, table_val, table_prob, T_table, flip
         )
         val = approx / Rt
         return val
+
     else:
         raise ValueError
 
@@ -159,7 +201,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
             # dEij must be negative enough for transition i->j
             if dEij[i][j] < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dEij[i][j], T_gradient[i % row_num], R_t_ij[i][j], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=0)]
                 reaction_index_ += [(i, j)]
 
     # left electrode to island transition:
@@ -171,7 +213,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
         # rate for V_left->i
         if dE_left < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                    pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=0)]
             reaction_index_ += [(isle, "from")]
 
         # for ith transition to electrode there must be at least one electron at isle i
@@ -181,7 +223,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
             # rate for i->V_left
             if dE_left < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=0)]
                 reaction_index_ += [(isle, "to")]
 
     # similarly, for right side
@@ -192,7 +234,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
         # rate for V_right->i
         if dE_right < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                    pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=0)]
             reaction_index_ += [(isle, "from")]
 
         # for ith transition to electrode
@@ -203,7 +245,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
             # rate for i->V_right
             if dE_right < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=0)]
                 reaction_index_ += [(isle, "to")]
 
     return Gamma_, reaction_index_
@@ -239,14 +281,19 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
                 cp_dE = (2 * e) * (curr_V[j] - curr_V[i]) + (2 * e) * (2 * e) * (
                         C_inv[j][j] + C_inv[i][i] - 2 * C_inv[i][j]) / 2
 
-                Gamma_ += [F.Gamma_cp(cp_dE, T_gradient[i % row_num], Ec, Rt=R_t_ij[i][j], gap=gap_array[i % row_num])]
+                Gamma_ += [F.Gamma_cp(cp_dE,
+                                      T_i=T_gradient[i % row_num],
+                                      T_j=T_gradient[j % row_num],
+                                      gap_i=gap_array[i % row_num],
+                                      gap_j=gap_array[j % row_num],
+                                      Ec=Ec, Rt=R_t_ij[i][j])]
                 reaction_index_ += [(i, j, 2)]
 
             # dEij must be negative enough for qp transition i->j
             # for qp the integrals are store beforehand and divided the same way by Rt*e^2
             if dEij[i][j] < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dEij[i][j], T_gradient[i % row_num], R_t_ij[i][j], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[i % row_num])]
                 reaction_index_ += [(i, j, 1)]
 
     # left electrode to island transition:
@@ -254,63 +301,39 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         # for ith transition from electrode:
         # V'i = V'i [C^-1(ei)]i = V'i + e*C^-1(self)
         dE_left = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * cycle_voltage_) * e / 2
-        cp_dE_left = (2 * curr_V[isle] + (2 * e) * C_inv[isle][isle] - 2 * cycle_voltage_) * e
-
-        Gamma_ += [F.Gamma_cp(cp_dE_left, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap_array[i % row_num])]
-        reaction_index_ += [(isle, "from", 2)]
 
         # rate for V_left->i
         if dE_left < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                    pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
             reaction_index_ += [(isle, "from", 1)]
 
         # for ith transition to electrode there must be at least one electron at isle i
         if n_list[isle] / e >= 1:
             dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
-
-            if n_list[isle] / e >= 2:
-                cp_dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + 2 * e * C_inv[isle][isle]) * e
-
-                Gamma_ += [F.Gamma_cp(cp_dE_left, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap_array[i % row_num])]
-                reaction_index_ += [(isle, "to", 2)]
-
-            # rate for i->V_left
             if dE_left < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
                 reaction_index_ += [(isle, "to", 1)]
 
     # similarly, for right side
     for isle in near_right:
         # for ith transition from electrode
         dE_right = (2 * curr_V[isle] + e * C_inv[isle][isle] - 2 * Vright) * e / 2
-        cp_dE_right = (2 * curr_V[isle] + 2 * e * C_inv[isle][isle] - 2 * Vright) * e
-
-        Gamma_ += [F.Gamma_cp(cp_dE_right, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap_array[i % row_num])]
-        reaction_index_ += [(isle, "from", 2)]
-
         # rate for V_right->i
         if dE_right < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                    pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
             reaction_index_ += [(isle, "from", 1)]
 
         # for ith transition to electrode
         if n_list[isle] / e >= 1:
             # for ith transition to electrode
             dE_right = (2 * Vright - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
-
-            if n_list[isle] / e >= 2:
-                cp_dE_right = (2 * Vright - 2 * curr_V[isle] + 2 * e * C_inv[isle][isle]) * e
-
-                Gamma_ += [F.Gamma_cp(cp_dE_right, T_gradient[isle % row_num], Ec, Rt=R_t_i[isle], gap=gap_array[i % row_num])]
-                reaction_index_ += [(isle, "to", 2)]
-
             # rate for i->V_right
             if dE_right < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip)]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
                 reaction_index_ += [(isle, "to", 1)]
 
     return Gamma_, reaction_index_

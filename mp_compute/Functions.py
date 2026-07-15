@@ -4,7 +4,7 @@ import numpy as np
 import mpmath as mp
 from mpmath import exp, sqrt
 from scipy.integrate import quad
-from scipy.special import erf
+from scipy.special import erf, ellipk
 from scipy.optimize import fsolve
 import mpmath
 
@@ -402,22 +402,40 @@ def change_top_and_bottom_rows_to_insulate(R_t_ij, insulate_R):
     return R_new
 
 
-def Gamma_cp(dE, T, Ec, gap, Rt):
-    tanh = mp.tanh(gap / (2 * T))
-    # Ej = (hbar/2eRt)(pi*gap/2e)*tanh
-    # set h=1 -> hbar = 1/2pi
-    # Ej = tanh * gap/8Rt
-    Ej = tanh * gap / (8 * Rt)
+def Gamma_cp(dE, T_i, T_j, gap_i, gap_j, Ec, Rt):
+    # Convert inputs to mpmath floats for high precision
+    T_i_mp = mp.mpf(T_i)
+    T_j_mp = mp.mpf(T_j)
+    gap_i_mp = mp.mpf(gap_i)
+    gap_j_mp = mp.mpf(gap_j)
 
-    # P2(-dE)
+    # 1. Junction Effective Temperature
+    T_ij = (T_i_mp + T_j_mp) / mp.mpf('2.0')
+
+    # 2. Extract smaller and larger gaps
+    gap_S = min(gap_i_mp, gap_j_mp)
+    gap_L = max(gap_i_mp, gap_j_mp)
+
+    # Ota et al. Effective Gap using mpmath's Complete Elliptic Integral
+    m_ij = mp.mpf('1.0') - (gap_S / gap_L) ** 2
+    K_elliptic = mp.ellipk(m_ij)
+    Delta_eff = (mp.mpf('2.0') / mp.pi) * gap_S * K_elliptic
+
+    # calc Ej
+    tanh_val = mp.tanh(Delta_eff / (2.0 * T_ij))
+    Ej = tanh_val * Delta_eff / (8.0 * Rt)
+
+    # P(E) Calculation second harmonic gaussian
     kappa_2 = mp.mpf('4')
     mu = kappa_2 * Ec
-    gauss = mp.exp(-((dE + mu) ** 2) / (4 * mu * T))
-    gauss = gauss / mp.sqrt(mp.pi * 4 * mu * T)
 
-    # Gamma_cp(dE) = (pi/2hbar)Ej^2 P(-dE)
-    # set h=1 -> 2hbar = 1/pi
-    # Gamma_cp(dE) = (pi*Ej)^2 P(-dE)
+    gauss_arg = -((dE + mu) ** 2) / (4.0 * mu * T_ij)
+    if gauss_arg < -100:
+        gauss = mp.mpf('0.0')
+    else:
+        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4.0 * mu * T_ij)
+
+    # Gamma_cp(dE) = (pi/2hbar)Ej^2 P(-dE) --> set h=1 --> (pi*Ej)^2 P(-dE)
     return float(gauss * (Ej * mp.pi) ** 2)
 
 
@@ -461,15 +479,16 @@ def dos(E, D):
     return mpmath.fabs(E) / sqrt(val)
 
 
-def calc_expected_dist_std(T_grad, T0, gap_array, Rt_ij, Ec, periodic_y=True):
+def calc_expected_dist_std(T_grad, T0, gap_grad, Rt_ij, Ec, periodic_y=True):
     # T should be unitless
     T = np.asarray(T_grad) / T0
     # array_size is n_side^2
     n_side = T.shape[0]
     array_size = n_side * n_side
 
-    # Each site temperature
+    # Each site temperature and gap.
     T_array = np.repeat(T, n_side)
+    gap_array = np.repeat(gap_grad, n_side)
     # ----------------------------------
 
     # qp component, std of each site
@@ -484,22 +503,38 @@ def calc_expected_dist_std(T_grad, T0, gap_array, Rt_ij, Ec, periodic_y=True):
                 adj_mask[i, j] = 1.0
 
         # evaluating physical neighbors
+        Rt_ij_safe = np.maximum(Rt_ij, 1)
         with np.errstate(divide='ignore', invalid='ignore'):
-            G_ij = np.where((adj_mask > 0) & (Rt_ij > 0) & (Rt_ij < np.inf), 1.0 / Rt_ij, 0.0)
+            G_ij = np.where((adj_mask > 0) & (Rt_ij > 0) & (Rt_ij < np.inf), 1.0 / Rt_ij_safe, 0.0)
 
-        # We now use gap_array instead of the scalar 'gap'
-        # G_ij is (N^2, N^2), T_col is (N^2, 1), gap_col is (N^2, 1)
-        T_col = T_array[:, np.newaxis]
+        # 1. Expand 1D arrays to 2D to represent junctions (i, j)
+        T_col = T_array[:, np.newaxis] * T0
+        T_row = T_array[np.newaxis, :] * T0
         gap_col = gap_array[:, np.newaxis]
+        gap_row = gap_array[np.newaxis, :]
 
-        # Calculate Ej_ij = tanh(gap_i / 2T_i) * gap_i / 8Rt_ij
-        Ej_ij = np.tanh(gap_col / (2.0 * T_col)) * gap_col / 8.0 * G_ij
+        # Junction effective temperature
+        T_ij = (T_col + T_row) / 2.0
+        T_ij_safe = np.where(T_ij == 0, 0.001, T_ij)  # Avoid division by zero
+        # -----------------------------------------------------------------
+        # Ota et al. Approximation (Gaps differ)
+        # -----------------------------------------------------------------
+        gap_S = np.minimum(gap_col, gap_row)
+        gap_L = np.maximum(gap_col, gap_row)
+        gap_L_safe = np.where(gap_L == 0, 1e-12, gap_L)
+
+        m_ij = 1.0 - (gap_S / gap_L_safe) ** 2
+        K_elliptic = ellipk(m_ij)
+        Delta_eff_approx = (2.0 / np.pi) * gap_S * K_elliptic
+
+        # Ambegaokar-Baratoff for delta_eff
+        Ej_ij = np.tanh(Delta_eff_approx / (2.0 * T_ij_safe)) * (Delta_eff_approx / 8.0) * G_ij
 
         # <Q^2>_cp,i = sum_j (Ej_ij^2 / 8*Ec^2)
         var_cp = np.sum(Ej_ij ** 2, axis=1) / (8.0 * Ec ** 2)
 
         # combine variances (Independent error propagation)
-        sigma = np.sqrt(sigma**2 + var_cp)
+        sigma = np.sqrt(sigma ** 2 + var_cp)
 
     sqrt2_sigma = np.sqrt(2) * sigma
 
