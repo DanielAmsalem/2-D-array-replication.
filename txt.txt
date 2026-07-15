@@ -1,0 +1,38 @@
+\section{Temperature Gradient effect on Superconducting Gap}
+Heretofore we assumed, in discussing the SC case, that the superconducting gap $\Delta$ is given and uniform across the grid, while true for small temperatures (and therefore small gradients), this is not generally the case:
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\linewidth]{Thesis/content/lit_rev/images/BCSgap_T.pdf}
+    \caption[BCS gap dependence on temperature, self consistency solution]{BCS gap dependence on temperature, self consistency equation solution}
+    \label{BCSgap_T}
+\end{figure}
+We obtain this directly from a known BCS theory result, the exact gap is given via the self consistency integral:
+\begin{equation}
+    \frac{1}{\mathcal{N}(0)V}=\int \frac{1-2f(\sqrt{\xi^2 +\Delta^2})}{\sqrt{\xi^2 +\Delta^2}}d\xi
+\end{equation}
+Where $\mathcal{N}(0)$ is the DOS near the fermi level, $V$ the volume of the SC, and $f(E)$ the fermi function. Using the $T=0$ equation, which has our maximal gap $\Delta(T=0)$ and subtracting it from the equation above, which is for an arbitrary $T$:
+\begin{equation}
+    0 = \left[\int_0^{\omega_D}\frac{1}{\sqrt{\xi^2 +\Delta^2}}d\xi-\int_0^{\omega_D}\frac{1}{\sqrt{\xi^2 +\Delta(T=0)^2}}d\xi\right] -\int \frac{2f(\sqrt{\xi^2 +\Delta^2})}{\sqrt{\xi^2 +\Delta^2}}d\xi
+\end{equation}
+The first term simply evaluates to $\ln{\frac{\Delta(T=0)}{\Delta(T)}}$, and we find $\Delta(T)$ by minimizing the difference:
+\begin{equation}
+    \ln{\frac{\Delta(T=0)}{\Delta}}-\int \frac{2f(\sqrt{\xi^2 +\Delta^2})}{\sqrt{\xi^2 +\Delta^2}}d\xi
+\end{equation}
+we can therefore find the gap at each island given the island temperature. Considering figure \ref{BCSgap_T}, we are tasked with a serious problem if we wish to use the the transition rates for the SC case as in Kasirer \cite{Kasirer_Thesis}, as they are written for a junction with two identical SC gaps at each end. We follow Ota et al. \cite{Ota_et_al.} and write the effective gap given the two SC gaps for each end of the junction:
+\begin{equation}
+    \Delta_{eff} = \frac{2}{\pi}K(k^2)\Delta_s
+\end{equation}
+Where $K$ is the complete elliptic integral of the first kind, $k^2 =1-\Delta_L^2/\Delta_s^2$ is the argument, with $\Delta_L>\Delta_s$ the two super conducting gaps. this relation is correct for $T=0$, we introduce a correction akin to the standard Ambegaokar-Baratoff relations (See Eq. \eqref{cp_tunnelrate}):
+\begin{equation}
+    E_J^{(eff)} = \frac{h}{2eR_T} \frac{\pi \Delta_{eff}}{2e}\tanh(\Delta_{eff}/2T)
+\end{equation}
+Which we may now use directly to calculate both the expected error (previous Section \ref{Charge Variance for the Superconducting Case}) and the Cooper pair tunneling rates (Eq. \ref{cp_tunnelrate})
+
+\subsection{The Quasiparticle Case}
+The treatment of quasiparticles is not as trivial. Because the quasi-particle tunneling rates do not depend on the Josephson energy $E_J$, but on the SC density of states $g_\Delta(E) =\Theta(|E|-\Delta)\frac{|E|}{\sqrt{E^2 -\Delta^2}}$, Eq. \eqref{SC_tunnelingrates} becomes ultimately non-trivial, as the two superconducting gaps are not the same. For small enough gradients, as well as in our fixed average temperature experiments $T\leq30T_0$, in resurveying the exact results in figure \ref{BCSgap_T} we see the gap is rather constant, with $\Delta(T=30T_0) = 0.94\Delta(T=0)$. we decide therefore to completely trust our small gradient results.
+for larger gradients the this is no longer the case, and requires finer treatment, which is rather simple:
+\begin{equation}
+\label{SC_tunnelingrates}
+\Gamma_{ij}(\Delta E)= \frac{1}{e^2R_T}\int_{-\infty}^{\infty}dE\int_{-\infty}^{\infty}dE'\frac{|E|}{\sqrt{E^2 -\Delta(T_i)^2}}\frac{|E'-\Delta E|}{\sqrt{|E'-\Delta E|^2 -\Delta(T_j)^2}}f(E)[1-f(E'-\Delta E)]P_1(E'-E)
+\end{equation}
+The issue in realizing this calculation is merely computational, since it multiplies our current table size by a factor of $\sim N$. Our current assumption is that the quasiparticle (or indeed electron in the metal case) has the temperature of the island from which is originates, we also use this temperature to decide the temperature of the hole it occupies in the host island (used in the fermi function), and the temperature of the electromagnetic environment (used in $P(E)$). We are therefore consistent with previous assumptions in choosing to ignore this, the main difference being that for temperatures $T\sim\Delta(T=0)$ the gap vanishes rapidly, so this introduces a square root like error for these transitions, this is simply a limitation of our current model, as we discussed, it will not effect the fixed average temperature experiments which are our most relevant to our cause.
