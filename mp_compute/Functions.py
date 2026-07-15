@@ -5,6 +5,7 @@ import mpmath as mp
 from mpmath import exp, sqrt
 from scipy.integrate import quad
 from scipy.special import erf
+from scipy.optimize import fsolve
 import mpmath
 
 # parameters
@@ -460,15 +461,45 @@ def dos(E, D):
     return mpmath.fabs(E) / sqrt(val)
 
 
-def calc_expected_dist_std(T_grad, T0):
+def calc_expected_dist_std(T_grad, T0, gap_ratio, Rt_ij, Ec, periodic_y=True):
     # T should be unitless
     T = np.asarray(T_grad) / T0
+    gap = gap_ratio * Ec
+
+    # The side length of the lattice is derived from the temperature gradient
+    n_side = T.shape[0]
+    array_size = n_side * n_side
 
     # T_array should be an N*N long list with entries [T0/T0...T0/T0,(T0+dT)/T0...(T0+dt/T0),...(T0+(N-1)dT)/T0]
-    T_array = np.repeat(T, T.shape[0])
+    T_array = np.repeat(T, n_side)
 
-    # std of each site
+    # qp component, std of each site, from Grabert 1991 like calculation
     sigma = 0.01 * np.sqrt(T_array)
+
+    if gap > 1e-3:
+        # cp variance component
+        adj_mask = np.zeros((array_size, array_size))
+        for i in range(array_size):
+            neighbors = neighbour_list(n_side, i, periodic_y)
+            for j in neighbors:
+                adj_mask[i, j] = 1.0
+
+        # evaluating physical neighbors
+        with np.errstate(divide='ignore', invalid='ignore'):
+            G_ij = np.where((adj_mask > 0) & (Rt_ij > 0) & (Rt_ij < np.inf), 1.0 / Rt_ij, 0.0)
+
+        # column vector so it aligns with the (N^2, N^2) junction matrix
+        T_col = T_array[:, np.newaxis]
+
+        # Calculate Ej for every junction: Ej_ij = tanh(gap / 2T_i) * gap / 8Rt_ij
+        Ej_ij = np.tanh(gap / (2.0 * T_col)) * gap / 8.0 * G_ij
+
+        # <Q^2>_cp,i = sum_j (Ej_ij^2 / 8*Ec^2)
+        var_cp = np.sum(Ej_ij ** 2, axis=1) / (8.0 * Ec ** 2)
+
+        # combine variances (Independent error propagation)
+        sigma = np.sqrt(sigma**2 + var_cp)
+
     sqrt2_sigma = np.sqrt(2) * sigma
 
     # CDF of the maximum absolute deviation
@@ -504,3 +535,38 @@ def get_mapping(a, b, threshold):
         if width < threshold:
             return None
         return lambda t: (a + t * width, width)
+
+
+def exact_bcs_gap(T_array, Delta_0):
+    """
+    Numerically solves the BCS self-consistency equation for a given array of temperatures.
+    Returns the exact Delta(T).
+    """
+    Tc = Delta_0 / 1.764
+
+    # The BCS integral to minimize:
+    # ln(Delta_0 / Delta(T)) = Integral from 0 to infinity of [f(E) / E] dE
+    # where f(E) = 1 / (exp(E / kBT) + 1)
+    def bcs_integral(Delta, T):
+        if Delta <= 0:
+            return 1e9
+        integrand = lambda E: 2.0 / (np.exp(np.sqrt(E ** 2 + Delta ** 2) / T) + 1.0) / np.sqrt(E ** 2 + Delta ** 2)
+        # Integrate up to a cutoff (e.g. 100*Delta_0 is effectively infinity for this converging function)
+        val, _ = quad(integrand, 0, 100 * Delta_0)
+        return val - np.log(Delta_0 / Delta)
+
+    Delta_exact = []
+
+    for T in T_array:
+        if T >= Tc:
+            Delta_exact.append(0.0)
+        elif T < 0.01 * Tc:
+            Delta_exact.append(Delta_0)
+        else:
+            # Use fsolve to find the Delta that makes the integral equation = 0
+            # We use the previous Delta as the initial guess for faster convergence
+            guess = Delta_exact[-1] if len(Delta_exact) > 0 and Delta_exact[-1] > 0 else Delta_0
+            sol = fsolve(bcs_integral, guess, args=(T,))[0]
+            Delta_exact.append(sol)
+
+    return np.array(Delta_exact)
