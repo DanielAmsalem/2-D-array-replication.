@@ -588,7 +588,8 @@ def exact_bcs_gap(T_array, Delta_0):
             return 1e9
         integrand = lambda E: 2.0 / (np.exp(np.sqrt(E ** 2 + Delta ** 2) / T) + 1.0) / np.sqrt(E ** 2 + Delta ** 2)
         # Integrate up to a cutoff (e.g. 100*Delta_0 is effectively infinity for this converging function)
-        val, _ = quad(integrand, 0, 100 * Delta_0)
+        with np.errstate(over='ignore'):
+            val, _ = quad(integrand, 0, 100 * Delta_0)
         return val - np.log(Delta_0 / Delta)
 
     Delta_exact = []

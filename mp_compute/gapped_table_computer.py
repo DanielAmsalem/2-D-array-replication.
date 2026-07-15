@@ -49,7 +49,7 @@ where for each position the appropriate bounds for dE calc are given
 EXPORT_PATH = Path(__file__).parent.parent.parent / "export"
 CSV_PATH = Path(__file__).parent.parent / f"gapped_table_Cg{Cg}_D{gap_ratio_int}_{gap_ratio_tenth}.csv"
 t0 = time.time()
-gap_ratio = gap_ratio_int + gap_ratio_tenth / (10 ^ len(str(gap_ratio_tenth)))
+gap_ratio = gap_ratio_int + gap_ratio_tenth / (10 ** len(str(gap_ratio_tenth)))
 print(f"gap_ratio is : {gap_ratio}", flush=True)
 
 def main(export: IMPORT_EXPORT) -> None:
