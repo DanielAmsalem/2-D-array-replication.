@@ -229,7 +229,13 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0] * init.row_num
-    expected_err = F.calc_expected_dist_std(T, init.T0)
+    print("############# ISLAND APPROPRIATE ERROR & GAPS ##################", flush=True)
+    Delta_0 = gap_ratio * init.Ec
+    gap_array = F.exact_bcs_gap(T, Delta_0)
+    expected_err = F.calc_expected_dist_std(T, init.T0, gap_array, init.R_t_ij, init.Ec)
+    print(f"expected_err : {expected_err}", flush=True)
+    print(f"gaps for each island : {gap_array}", flush=True)
+
     print("############# RUN VIRTUAL EXPERIMENT ##################", flush=True)
 
     if first_run:
@@ -255,6 +261,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                 periodic_y=periodic_y,
                 plot_ongoing_voltage_map=plot_ongoing_voltage_map,
                 gap_ratio=gap_ratio,
+                gap_array=gap_array
             )
 
             results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
@@ -309,13 +316,13 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                     continue
 
     ### run thermopower experiment
-    icreasing_T_gradient = True
+    increasing_T_gradient = True
 
-    while icreasing_T_gradient:
+    while increasing_T_gradient:
         repetition += 1
         if repetition > last_repetition_to_do:
             print("Tstd>T0, finished all runs for Tstd<=T0", flush=True)
-            icreasing_T_gradient = False
+            increasing_T_gradient = False
             continue
         if not int(repetition) in repetition_list:
             print(f"repetition {repetition} was skipped")
@@ -347,8 +354,12 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
             T = T_list_to_compute
             if flip:
                 T = np.flip(T_list_to_compute)
-            expected_err = F.calc_expected_dist_std(T, init.T0)
-            print(expected_err, flush=True)
+            print("############# ISLAND APPROPRIATE ERROR & GAPS ##################", flush=True)
+            gap_array = F.exact_bcs_gap(T, Delta_0)
+            expected_err = F.calc_expected_dist_std(T, init.T0, gap_array, init.R_t_ij, init.Ec)
+            print(f"expected_err : {expected_err}", flush=True)
+            print(f"gaps for each island : {gap_array}", flush=True)
+
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -367,6 +378,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                 periodic_y=periodic_y,
                 plot_ongoing_voltage_map=plot_ongoing_voltage_map,
                 gap_ratio=gap_ratio,
+                gap_array=gap_array
             )
 
             results: list[SteadyStateResult] = list(
@@ -417,8 +429,8 @@ if __name__ == "__main__":
 
     if gap_ratio > 1e-3:
         tables_list = [EXPORT_PATH /
-                       f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz.npz" for n in range(501)]
-        csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv.csv"
+                       f"64bit_D0is{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
+        csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
     else:
         tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
         csv_table_path = MP_COMPUTE_PATH / f"table_Cg{Cg}.csv"

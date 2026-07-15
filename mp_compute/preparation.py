@@ -550,15 +550,31 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     """
     Orchestrates the calculation of Gapped Gamma integrals using a flattened
     Master-Aggregator queue to guarantee 100% worker utilization.
+    Includes exact BCS gap calculation for temperature-dependent Deltas.
     """
+    import os
+    import json
+    import tempfile
+
     DPS = 30
     mp.dps = DPS
     print(f"dps = {DPS}")
 
     Ec_mp = mp.mpf(str(init_state.Ec))
     mu_str = str(Ec_mp)
-    D_mp = mp.mpf(str(gap_ratio)) * Ec_mp
-    D_str = str(D_mp)
+
+    # Calculate the zero-temperature gap D_0
+    D_0_float = float(init_state.Ec) * gap_ratio
+    D_0_str = str(mp.mpf(str(D_0_float)))
+
+    # Pre-calculate the exact temperature-dependent gaps for the whole profile
+    print(f"Solving exact BCS self-consistency equation for {len(expected_list)} temperatures...", flush=True)
+    exact_deltas_float = F.exact_bcs_gap(expected_list, D_0_float)
+
+    # Convert to 30-DPS mpmath strings immediately to prevent float noise in workers
+    exact_deltas_str = [str(mp.mpf(str(d))) for d in exact_deltas_float]
+    # ------------------------------------------------
+
     eps_str = '1e-10'
 
     # --- INFER 'n' FROM TEMPERATURE PROFILE ---
@@ -569,7 +585,8 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
         n_inferred = 0
 
     # --- Setup Checkpoint Directory ---
-    checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_str}_Tstd_{n_inferred}")
+    # We use D_0_str in the directory name so the base gap parameter defines the folder
+    checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_0_str}_Tstd_{n_inferred}_dynamicD")
     os.makedirs(checkpoint_dir, exist_ok=True)
     print(f"Checkpoints mapped to: {checkpoint_dir} (Inferred n={n_inferred})", flush=True)
 
@@ -615,12 +632,16 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
                 # Corrupted file -> Flatten into single tasks
                 for w_idx, w_str in enumerate(w_chunk_list):
                     for T_idx, T_str in enumerate(expected_list_strings):
-                        task_args.append((w_str, T_str, mu_str, D_str, eps_str, DPS, chunk_idx, w_idx, T_idx))
+                        # --- MODIFIED: Inject the specific gap for this T_idx ---
+                        D_str_T = exact_deltas_str[T_idx]
+                        task_args.append((w_str, T_str, mu_str, D_str_T, eps_str, DPS, chunk_idx, w_idx, T_idx))
         else:
             # Not yet computed -> Flatten into single tasks
             for w_idx, w_str in enumerate(w_chunk_list):
                 for T_idx, T_str in enumerate(expected_list_strings):
-                    task_args.append((w_str, T_str, mu_str, D_str, eps_str, DPS, chunk_idx, w_idx, T_idx))
+                    # --- MODIFIED: Inject the specific gap for this T_idx ---
+                    D_str_T = exact_deltas_str[T_idx]
+                    task_args.append((w_str, T_str, mu_str, D_str_T, eps_str, DPS, chunk_idx, w_idx, T_idx))
 
     total_tasks_left = len(task_args)
     print(

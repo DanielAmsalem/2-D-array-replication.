@@ -461,22 +461,21 @@ def dos(E, D):
     return mpmath.fabs(E) / sqrt(val)
 
 
-def calc_expected_dist_std(T_grad, T0, gap_ratio, Rt_ij, Ec, periodic_y=True):
+def calc_expected_dist_std(T_grad, T0, gap_array, Rt_ij, Ec, periodic_y=True):
     # T should be unitless
     T = np.asarray(T_grad) / T0
-    gap = gap_ratio * Ec
-
-    # The side length of the lattice is derived from the temperature gradient
+    # array_size is n_side^2
     n_side = T.shape[0]
     array_size = n_side * n_side
 
-    # T_array should be an N*N long list with entries [T0/T0...T0/T0,(T0+dT)/T0...(T0+dt/T0),...(T0+(N-1)dT)/T0]
+    # Each site temperature
     T_array = np.repeat(T, n_side)
+    # ----------------------------------
 
-    # qp component, std of each site, from Grabert 1991 like calculation
+    # qp component, std of each site
     sigma = 0.01 * np.sqrt(T_array)
 
-    if gap > 1e-3:
+    if np.any(gap_array > 1e-3):
         # cp variance component
         adj_mask = np.zeros((array_size, array_size))
         for i in range(array_size):
@@ -488,11 +487,13 @@ def calc_expected_dist_std(T_grad, T0, gap_ratio, Rt_ij, Ec, periodic_y=True):
         with np.errstate(divide='ignore', invalid='ignore'):
             G_ij = np.where((adj_mask > 0) & (Rt_ij > 0) & (Rt_ij < np.inf), 1.0 / Rt_ij, 0.0)
 
-        # column vector so it aligns with the (N^2, N^2) junction matrix
+        # We now use gap_array instead of the scalar 'gap'
+        # G_ij is (N^2, N^2), T_col is (N^2, 1), gap_col is (N^2, 1)
         T_col = T_array[:, np.newaxis]
+        gap_col = gap_array[:, np.newaxis]
 
-        # Calculate Ej for every junction: Ej_ij = tanh(gap / 2T_i) * gap / 8Rt_ij
-        Ej_ij = np.tanh(gap / (2.0 * T_col)) * gap / 8.0 * G_ij
+        # Calculate Ej_ij = tanh(gap_i / 2T_i) * gap_i / 8Rt_ij
+        Ej_ij = np.tanh(gap_col / (2.0 * T_col)) * gap_col / 8.0 * G_ij
 
         # <Q^2>_cp,i = sum_j (Ej_ij^2 / 8*Ec^2)
         var_cp = np.sum(Ej_ij ** 2, axis=1) / (8.0 * Ec ** 2)

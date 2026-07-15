@@ -3,18 +3,19 @@ import re
 
 filename = os.path.basename(__file__)
 
+# name should be Like table_computer_Tstd{n}_20_ratio1_Cg10_res100_GAP2_0.py
 iter_name = re.search(r"Tstd(\d+)", filename).group(1)
 Cg = int(re.search(r"Cg(\d+)", filename).group(1))
-ratio = int(re.search(r"ratio(\d+)", filename).group(1))
+res = int(re.search(r"res(\d+)", filename).group(1))
 gap_match = re.search(r"GAP(\d+)_(\d+)", filename)
 gap_ratio_int = int(gap_match.group(1))
 gap_ratio_tenth = int(gap_match.group(2))
 
-os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = max(int(total_cpus / ratio) - 2, 1)
+num_workers = max(total_cpus - 3, 1)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
 import sys
@@ -46,10 +47,10 @@ where for each position the appropriate bounds for dE calc are given
 '''
 
 EXPORT_PATH = Path(__file__).parent.parent.parent / "export"
-CSV_PATH = Path(__file__).parent.parent / f"gapped_table_Cg{Cg}.csv"
+CSV_PATH = Path(__file__).parent.parent / f"gapped_table_Cg{Cg}_D{gap_ratio_int}_{gap_ratio_tenth}.csv"
 t0 = time.time()
 gap_ratio = gap_ratio_int + gap_ratio_tenth / (10 ^ len(str(gap_ratio_tenth)))
-
+print(f"gap_ratio is : {gap_ratio}", flush=True)
 
 def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
@@ -92,6 +93,10 @@ def main(export: IMPORT_EXPORT) -> None:
                                  stdR_R_ratio=0.9,
                                  sigC_C_ratio=0.5)  # only init.Ec and init.resolution are relevant
     init = F.swap_in_init("row_num", row_num, init)
+    # for gapped compute we need to lower the resolution by an order of magnitude:
+    norm_metal_resolution = init.resolution
+    init = F.swap_in_init("resolution", norm_metal_resolution*res, init)
+    print(f"set resolution times {res} to res={norm_metal_resolution*res}", flush=True)
     T_list_to_compute = [init.T0 + i * init.T0 * T_std for i in range(init.row_num)]
 
     table_triplets = prepare_table_triplets_gapped(
@@ -107,7 +112,7 @@ def main(export: IMPORT_EXPORT) -> None:
 
 if __name__ == "__main__":
     # Appended Cg to the gapped export string to keep your data organized
-    export_filename = f"64bit_GAP{gap_ratio_int}_{gap_ratio_tenth}_table_triplets_Tstd{iter_name}_20_Cg_{Cg}.npz"
+    export_filename = f"64bit_D0is{gap_ratio_int}_{gap_ratio_tenth}_table_triplets_Tstd{iter_name}_20_Cg_{Cg}.npz"
 
     main(
         IMPORT_EXPORT(
