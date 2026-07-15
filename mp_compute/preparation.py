@@ -394,6 +394,40 @@ def _calc_segments_gapped_master(args, dps):
     theta_max = mp.mpf('12.0')
     signs = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
 
+    # =========================================================================
+    # HOTFIX: THE NORMAL METAL FALLBACK (For D = 0)
+    # When T >= Tc, the gap D collapses to exactly 0.0.
+    # The island is now a normal metal. The gapped integration mappings
+    # (which divide by D) will crash. We bypass them and use the
+    # standard Ohmic integration logic.
+    # =========================================================================
+    if D <= mp.mpf('1e-6'):
+        func = F.integrand(temp, val, Ec)
+        absval = mp.fabs(val + Ec)
+
+        limits = [-mp.inf, -absval, mp.mpf('0'), absval, mp.inf]
+        probability = mp.mpf('0')
+
+        for i in range(len(limits) - 1):
+            a = limits[i]
+            b = limits[i + 1]
+
+            if a == -mp.inf:
+                segment_prob = mp.quad(lambda t, b=b: func(b - t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2),
+                                       [0, 1], method='tanh-sinh')
+            elif b == mp.inf:
+                segment_prob = mp.quad(lambda t, a=a: func(a + t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2),
+                                       [0, 1], method='tanh-sinh')
+            else:
+                width = b - a
+                if width < mp.mpf('1e-8'):
+                    continue
+                segment_prob = mp.quad(lambda t, a=a, w=width: func(a + t * w) * w, [0, 1])
+
+            probability += segment_prob
+
+        return [args[0], str(probability.real), args[1], args[2]]
+
     # CASE 1: Near or inside the gap
     if abs_val < D + eps:
         def mapped_integrand(theta1, theta2, sign_E, sign_Etag):
