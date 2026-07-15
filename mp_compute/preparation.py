@@ -570,7 +570,7 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     # Pre-calculate the exact temperature-dependent gaps for the whole profile
     print(f"Solving exact BCS self-consistency equation for {len(expected_list)} temperatures...", flush=True)
     exact_deltas_float = F.exact_bcs_gap(expected_list, D_0_float)
-
+    print(f"delta's per site is : {exact_deltas_float}", flush=True)
     # Convert to 30-DPS mpmath strings immediately to prevent float noise in workers
     exact_deltas_str = [str(mp.mpf(str(d))) for d in exact_deltas_float]
     # ------------------------------------------------
