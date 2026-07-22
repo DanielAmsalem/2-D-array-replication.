@@ -414,6 +414,8 @@ def Gamma_cp(dE, T_i, T_j, gap_i, gap_j, Ec, Rt):
 
     # 2. Extract smaller and larger gaps
     gap_S = min(gap_i_mp, gap_j_mp)
+    if gap_S < 1e-3:
+        return 0
     gap_L = max(gap_i_mp, gap_j_mp)
 
     # Ota et al. Effective Gap using mpmath's Complete Elliptic Integral
@@ -516,19 +518,31 @@ def calc_expected_dist_std(T_grad, T0, gap_grad, Rt_ij, Ec, periodic_y=True):
         # Junction effective temperature
         T_ij = (T_col + T_row) / 2.0
         T_ij_safe = np.where(T_ij == 0, 0.001, T_ij)  # Avoid division by zero
+
         # -----------------------------------------------------------------
         # Ota et al. Approximation (Gaps differ)
         # -----------------------------------------------------------------
         gap_S = np.minimum(gap_col, gap_row)
         gap_L = np.maximum(gap_col, gap_row)
-        gap_L_safe = np.where(gap_L == 0, 1e-12, gap_L)
 
-        m_ij = 1.0 - (gap_S / gap_L_safe) ** 2
+        # MASK: Both islands must be superconducting (gap > 1e-3).
+        # Since gap_S is the minimum of the two, if gap_S > 1e-3, both are valid.
+        sc_mask = gap_S > 1e-3
+
+        # Protect against Elliptic Integral singularity (ellipk(1.0) = inf)
+        # We feed safe dummy values to the invalid junctions to prevent SciPy warnings.
+        gap_S_safe = np.where(sc_mask, gap_S, 1.0)
+        gap_L_safe = np.where(sc_mask, gap_L, 1.0)
+
+        m_ij = 1.0 - (gap_S_safe / gap_L_safe) ** 2
         K_elliptic = ellipk(m_ij)
-        Delta_eff_approx = (2.0 / np.pi) * gap_S * K_elliptic
+        Delta_eff_approx = (2.0 / np.pi) * gap_S_safe * K_elliptic
 
-        # Ambegaokar-Baratoff for delta_eff
-        Ej_ij = np.tanh(Delta_eff_approx / (2.0 * T_ij_safe)) * (Delta_eff_approx / 8.0) * G_ij
+        # Calculate raw Ambegaokar-Baratoff Ej
+        Ej_ij_raw = np.tanh(Delta_eff_approx / (2.0 * T_ij_safe)) * (Delta_eff_approx / 8.0) * G_ij
+
+        # Apply the mask: strictly ZERO out Ej for any S-N or N-N junction
+        Ej_ij = np.where(sc_mask, Ej_ij_raw, 0.0)
 
         # <Q^2>_cp,i = sum_j (Ej_ij^2 / 8*Ec^2)
         var_cp = np.sum(Ej_ij ** 2, axis=1) / (8.0 * Ec ** 2)

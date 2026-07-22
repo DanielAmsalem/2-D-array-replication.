@@ -8,7 +8,7 @@ total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
 num_workers = min(total_cpus - 5, 80)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
 import datetime
@@ -59,7 +59,7 @@ else:
 
 Cg_list = [2, 5, 10, 20, 50]
 Cg_list_gapped = [10]
-gap_list = [2]
+gap_list = [2,0.2]
 
 
 ##############################################################
@@ -88,6 +88,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
         elif Cg == 2 and gap_ratio == 2:
             pos_energy_boundT0 = -1
             neg_energy_boundT0 = -2
+        elif Cg == 10 and gap_ratio == 0.2:
+            pos_energy_boundT0 = -0.01
+            neg_energy_boundT0 = -0.1
         else:
             raise ValueError("whadahel?")
     else:
@@ -272,7 +275,19 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                 gap_array=gap_array
             )
 
-            results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
+            # --- FAIL-FAST SUBMISSION ---
+            results: list[SteadyStateResult] = [None] * init.loop_count
+            futures = {executor.submit(loaded_state_function, i): i for i in range(init.loop_count)}
+
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as e:
+                    print(f"\nCRITICAL ERROR: Worker {idx} crashed instantly during first run!", flush=True)
+                    for f in futures:
+                        f.cancel()
+                    raise
 
         ### find smallest I(V) > 2
         curve_plotter.iv_curve_compute_and_save_csv(init=init,
@@ -389,9 +404,19 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                 gap_array=gap_array
             )
 
-            results: list[SteadyStateResult] = list(
-                executor.map(loaded_state_function, range(init.loop_count))
-            )
+            # --- FAIL-FAST SUBMISSION ---
+            results: list[SteadyStateResult] = [None] * init.loop_count
+            futures = {executor.submit(loaded_state_function, i): i for i in range(init.loop_count)}
+
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as e:
+                    print(f"\nCRITICAL ERROR: Worker {idx} crashed instantly during rep {repetition}!", flush=True)
+                    for f in futures:
+                        f.cancel()
+                    raise
 
         ### find I(V) with gradient dT
         curve_plotter.iv_curve_compute_and_save_csv(init=init,
