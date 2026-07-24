@@ -580,7 +580,7 @@ def compute_gamma_worker_single(packed_args):
 
 
 def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
-                                  gap_ratio):
+                                  gap_ratio, midfix=False):
     """
     Orchestrates the calculation of Gapped Gamma integrals using a flattened
     Master-Aggregator queue to guarantee 100% worker utilization.
@@ -610,18 +610,35 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
     # ------------------------------------------------
 
     eps_str = '1e-10'
-
-    # --- INFER 'n' FROM TEMPERATURE PROFILE ---
-    # T0 is always given by the init
-    if len(expected_list) > 1:
-        n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / init_state.T0)
-    else:
-        n_inferred = 0
-
     # --- Setup Checkpoint Directory ---
-    # We use D_0_str in the directory name so the base gap parameter defines the folder
-    checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_0_str}_Tstd_{n_inferred}_dynamicD")
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    if not midfix:
+        # Standard experiment
+        # T0 is always given by the init
+        # --- INFER 'n' FROM TEMPERATURE PROFILE ---
+        if len(expected_list) > 1:
+            n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / init_state.T0)
+        else:
+            n_inferred = 0
+
+        checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_0_str}_Tstd_{n_inferred}_dynamicD")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    else:
+        # midfix experiment --> find middle temp ratio
+        Tmid_physical = expected_list[len(expected_list) // 2]
+        Tmid_val = Tmid_physical / init_state.T0  # Unitless ratio for the folder name
+
+        center_idx = (init_state.row_num - 1) / 2.0
+        max_std = (Tmid_physical - init_state.T0) / center_idx
+        # using T_std = iteration * max_std / 20 --> find iteration "n"
+        n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / max_std)
+
+        # Round to 2 decimals, convert to string, and replace the dot with an underscore
+        Tmid_str = str(round(Tmid_val, 2)).replace('.', '_')
+
+        checkpoint_dir = os.path.join("checkpoints",
+                                      f"Tmid{Tmid_str}_run_Ec_{mu_str}_D_{D_0_str}_Tstd_{n_inferred}_dynamicD")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
     print(f"Checkpoints mapped to: {checkpoint_dir} (Inferred n={n_inferred})", flush=True)
 
     print(pos_energy_bound, neg_energy_bound, init_state.resolution)

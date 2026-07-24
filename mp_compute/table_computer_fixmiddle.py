@@ -133,7 +133,8 @@ def main(export: IMPORT_EXPORT) -> None:
         pos_energy_bound=pos,
         neg_energy_bound=neg,
         max_workers=num_workers,
-        gap_ratio=gap_ratio
+        gap_ratio=gap_ratio,
+        midfix=True
     )
     output_table_triplets(table_triplets, export.prepare_table_triplets_file_list[0])
 
