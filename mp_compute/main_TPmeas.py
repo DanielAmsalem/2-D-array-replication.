@@ -67,6 +67,10 @@ gap_list = [2,0.2]
 
 
 def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=False) -> None:
+    # Set up dedicated checkpoint directory
+    checkpoint_dir = import_export.results_dir_path / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     # RUN TYPE
     flip = is_reverse
     first_run = False
@@ -293,7 +297,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                 futures = {}
 
                 for i in range(init.loop_count):
-                    ckpt_path = import_export.results_dir_path / f"ckpt_rep0_idx{i}.pkl"
+                    ckpt_path = checkpoint_dir / f"ckpt_rep0_idx{i}.pkl"
                     if ckpt_path.exists():
                         try:
                             with open(ckpt_path, "rb") as f:
@@ -318,7 +322,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                         results[idx] = res
 
                         # Save checkpoint instantly
-                        ckpt_path = import_export.results_dir_path / f"ckpt_rep0_idx{idx}.pkl"
+                        ckpt_path = checkpoint_dir / f"ckpt_rep0_idx{idx}.pkl"
                         with open(ckpt_path, "wb") as f:
                             pickle.dump(res, f)
 
@@ -359,7 +363,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
             # SUCCESS: Mark as complete and clean up .pkl files
             marker_file.touch()
-            for f in import_export.results_dir_path.glob("ckpt_rep0_idx*.pkl"):
+            for f in checkpoint_dir.glob("ckpt_rep0_idx*.pkl"):
                 f.unlink(missing_ok=True)
 
     else:
@@ -458,7 +462,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             futures = {}
 
             for i in range(init.loop_count):
-                ckpt_path = import_export.results_dir_path / f"ckpt_rep{repetition}_idx{i}.pkl"
+                ckpt_path = checkpoint_dir / f"ckpt_rep{repetition}_idx{i}.pkl"
                 if ckpt_path.exists():
                     try:
                         with open(ckpt_path, "rb") as f:
@@ -484,7 +488,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                     results[idx] = res
 
                     # Save checkpoint instantly
-                    ckpt_path = import_export.results_dir_path / f"ckpt_rep{repetition}_idx{idx}.pkl"
+                    ckpt_path = checkpoint_dir / f"ckpt_rep{repetition}_idx{idx}.pkl"
                     with open(ckpt_path, "wb") as f:
                         pickle.dump(res, f)
 
@@ -523,7 +527,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
         # SUCCESS: Mark as complete and clean up .pkl files
         marker_file.touch()
-        for f in import_export.results_dir_path.glob(f"ckpt_rep{repetition}_idx*.pkl"):
+        for f in checkpoint_dir.glob(f"ckpt_rep{repetition}_idx*.pkl"):
             f.unlink(missing_ok=True)
 
     ### plot all new csvs
