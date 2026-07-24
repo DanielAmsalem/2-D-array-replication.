@@ -1,19 +1,6 @@
 import os
 import re
 
-filename = os.path.basename(__file__)
-
-# name should be Like table_computer_Tmid15_4_Tstd{n}_20_ratio1_Cg10_res100_GAP2_0.py
-iter_name = re.search(r"Tstd(\d+)", filename).group(1)
-Cg = int(re.search(r"Cg(\d+)", filename).group(1))
-res = int(re.search(r"res(\d+)", filename).group(1))
-gap_match = re.search(r"GAP(\d+)_(\d+)", filename)
-gap_ratio_int = int(gap_match.group(1))
-gap_ratio_tenth = int(gap_match.group(2))
-Tconst_match = re.search(r"Tmid(\d+)_(\d+)", filename)
-Tconst_units = int(Tconst_match.group(1))
-Tconst_tenth = int(Tconst_match.group(2))
-
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -27,13 +14,10 @@ import time
 from pathlib import Path
 import numpy as np
 
-# __file__ is the script, .parent is table_computers, .parent.parent is mp_compute
+filename = os.path.basename(__file__)
 mp_compute_dir = Path(__file__).resolve().parent.parent
-
-# 2. Add it to the system path
 sys.path.append(str(mp_compute_dir))
 
-# 3. NOW you can safely run your custom imports
 from define_objects import IMPORT_EXPORT
 from preparation import (
     prepare_initial_state,
@@ -54,19 +38,38 @@ for Tmid = T0 + 3*0.4*T0 = 0.0022
 for Tmid = T0 + 3*0.2*T0 = 0.0016
 
 for Tmid = T0 + 3*0.7*T0 = 0.0031
-
-SHOULD HAVE IN ITS DIRECTORY A "table_mid.csv" WHICH LOOKS LIKE
-#rep | POS | NEG
-where for each position the appropriate bounds for dE calc are given
 '''
 
-EXPORT_PATH = Path(__file__).parent.parent.parent / "export"
-CSV_PATH = Path(__file__).parent.parent / f"gapped_table_Tmid{Tconst_units}_{Tconst_tenth}_Cg{Cg}_D{gap_ratio_int}_{gap_ratio_tenth}.csv"
-t0 = time.time()
-gap_ratio = gap_ratio_int + gap_ratio_tenth / (10 ** len(str(gap_ratio_tenth)))
+# name should be Like table_computer_Tmid15_4_Tstd{n}_20_ratio1_Cg10_res100_GAP2_0.py
+iter_name = re.search(r"Tstd(\d+)", filename).group(1)
+Cg = int(re.search(r"Cg(\d+)", filename).group(1))
+res = int(re.search(r"res(\d+)", filename).group(1))
+
+# Extracting the raw strings to preserve exact formatting (e.g. "05" vs "5")
+gap_match = re.search(r"GAP(\d+)_(\d+)", filename)
+gap_int_str = gap_match.group(1)
+gap_tenth_str = gap_match.group(2)
+
+Tconst_match = re.search(r"Tmid(\d+)_(\d+)", filename)
+Tconst_units_str = Tconst_match.group(1)
+Tconst_tenth_str = Tconst_match.group(2)
+
+# Converting raw string captures to physical floats
+gap_ratio = float(f"{gap_int_str}.{gap_tenth_str}")
+Tconst = float(f"{Tconst_units_str}.{Tconst_tenth_str}")
+
 print(f"gap_ratio is : {gap_ratio}", flush=True)
-Tconst = Tconst_units + Tconst_tenth / (10**len(str(Tconst_tenth)))
 print(f"Tconst is {Tconst}", flush=True)
+
+# =========================================================================
+# PATHS
+# =========================================================================
+EXPORT_PATH = Path(__file__).parent.parent.parent / "export"
+# Rebuilding paths using the exact string captures to prevent file mismatches
+CSV_PATH = Path(
+    __file__).parent.parent / f"gapped_table_Tmid{Tconst_units_str}_{Tconst_tenth_str}_Cg{Cg}_D{gap_int_str}_{gap_tenth_str}.csv"
+t0 = time.time()
+
 
 def main(export: IMPORT_EXPORT) -> None:
     loop_count = 100
@@ -75,7 +78,7 @@ def main(export: IMPORT_EXPORT) -> None:
     row_num = 7
 
     ### get runname -> check if Tstd is in list
-    iteration = int(iter_name)  # Reused iter_name from the top
+    iteration = int(iter_name)
 
     ### get pos & neg for this Tstd by searching the first column
     neg = None
@@ -110,17 +113,19 @@ def main(export: IMPORT_EXPORT) -> None:
     init = F.swap_in_init("row_num", row_num, init)
     # for gapped compute we need to lower the resolution by an order of magnitude:
     norm_metal_resolution = init.resolution
-    init = F.swap_in_init("resolution", norm_metal_resolution*res, init)
+    init = F.swap_in_init("resolution", norm_metal_resolution * res, init)
     print(f"set resolution times {res} to res={norm_metal_resolution * res}", flush=True)
     ##################################
 
     T_mid = Tconst * init.T0
-    max_std = 2 * (T_mid - init.T0) / (row_num-1)
+    center_idx = (init.row_num - 1) / 2.0
+
+    max_std = (T_mid - init.T0) / center_idx
     T_std = iteration * max_std / 20
-    first_site_T = T_mid - ((init.row_num - init.row_num % 2) / 2) * T_std
+    first_site_T = T_mid - (center_idx * T_std)
     T_list_to_compute = [first_site_T + i * T_std for i in range(init.row_num)]
     print(f"T_list_to_compute = {T_list_to_compute}")
-    print(f"in units of T0 : {np.array(T_list_to_compute)/init.T0}", flush=True)
+    print(f"in units of T0 : {np.array(T_list_to_compute) / init.T0}", flush=True)
 
     table_triplets = prepare_table_triplets_gapped(
         init_state=init,
@@ -135,8 +140,9 @@ def main(export: IMPORT_EXPORT) -> None:
 
 if __name__ == "__main__":
     # Appended Cg to the gapped export string to keep your data organized
-    export_filename = (f"64bit_GAP{gap_ratio_int}_{gap_ratio_tenth}_"
-                       f"table_triplets_Tmid{Tconst_units}_{Tconst_tenth}_Tstd{iter_name}_20_Cg_{Cg}.npz")
+    # using exact string captures to maintain file format integrity
+    export_filename = (f"64bit_GAP{gap_int_str}_{gap_tenth_str}_"
+                       f"table_triplets_Tmid{Tconst_units_str}_{Tconst_tenth_str}_Tstd{iter_name}_20_Cg_{Cg}.npz")
 
     main(
         IMPORT_EXPORT(
