@@ -1,14 +1,14 @@
 import os
 
-ratio = 10 / 8
-os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = max(int(total_cpus / ratio), 80)
+num_workers = min(total_cpus - 5, 80)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
 import datetime
@@ -19,6 +19,7 @@ from define_objects import IMPORT_EXPORT, SteadyStateResult, ExperimentInitialSt
 from gamma_functions import Get_Steady_State
 from preparation import (
     prepare_initial_state,
+    prepare_table_triplets_gapped,
     validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
@@ -31,10 +32,12 @@ import csv
 import math
 import time
 import re
+import pickle
+from plot_graph_from_csv import plot_graph_from_csv
 
 ####### slurm parameter parsing from job name ######
-job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Cg2')
-pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Tmid(\d+)_(\d+)_Cg(\d+)"
+job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Tmid15_4_Cg10_D2_0')
+pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Tmid(\d+)_(\d+)_Cg(\d+)_D(\d+)_(\d+)"
 match = re.search(pattern, job_name)
 
 if match:
@@ -47,21 +50,30 @@ if match:
     Tmid_pastdigit = int(match.group(6))
     Tmid = Tmid_units + Tmid_pastdigit / (10 ** len(str(Tmid_pastdigit)))
     Cg = int(match.group(7))
+    gap_int = int(match.group(8))
+    gap_tenth = int(match.group(9))
+    gap_ratio = gap_int + gap_tenth / 10
 
     repetition_list = list(range(x, last_rep, jumps))
     print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, repetition_list={repetition_list}, Cg={Cg}, "
-          f"Tmid={Tmid_units + Tmid_pastdigit / 10}", flush=True)
+          f"Tmid={Tmid}, D={gap_ratio}", flush=True)
 
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
 
 Cg_list = [2, 10]
+Cg_list_gapped = [10]
+gap_list = [2]
 
 
 ##############################################################
 
 
-def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=False) -> None:
+    # Set up dedicated checkpoint directory
+    checkpoint_dir = import_export.results_dir_path / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     # RUN TYPE
     flip = is_reverse
     first_run = False
@@ -73,27 +85,32 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     plot_ongoing_voltage_map = False
     V_capture = 4
 
-    # FIXED PARAMETERS
+    # VERIFY GAP RATIO AND CG
+    if gap_ratio > 1e-3:
+        if (Cg not in Cg_list_gapped) or (gap_ratio not in gap_list):
+            raise ValueError(f"Cg must be in Cg_list_gapped, Cg = {Cg} ; "
+                             f"gap ratio must be between in gap_list, D = {gap_ratio}")
+    else:
+        if Cg not in Cg_list:
+            raise ValueError(f"Cg must be in Cg_list, Cg = {Cg}")
+
+    # FIXED PARAMETERS (Read directly from CSV for rep=0 to accurately capture T_mid logic boundaries)
     pos_energy_boundT0 = None
     neg_energy_boundT0 = None
 
-    if Cg in Cg_list:
-        # import from csv table
-        with open(import_export.csv_table_path, encoding='utf-8-sig') as f:
-            for row in csv.reader(f):
-                if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
-                    try:
-                        rep_idx = int(row[0].strip())
-                    except ValueError:
-                        continue
+    with open(import_export.csv_table_path, encoding='utf-8-sig') as f:
+        for row in csv.reader(f):
+            if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
+                try:
+                    rep_idx = int(row[0].strip())
+                except ValueError:
+                    continue
 
-                    if rep_idx == 0:
-                        pos_energy_boundT0 = float(row[2].strip())
-                        neg_energy_boundT0 = float(row[1].strip())
-                        print(f"T0 pos : {pos_energy_boundT0}, T0 neg : {neg_energy_boundT0}", flush=True)
-                        break
-    else:
-        raise ValueError(f"Cg ({Cg}) must be in Cg_list ({Cg_list})")
+                if rep_idx == 0:
+                    pos_energy_boundT0 = float(row[2].strip())
+                    neg_energy_boundT0 = float(row[1].strip())
+                    print(f"T0 pos : {pos_energy_boundT0}, T0 neg : {neg_energy_boundT0}", flush=True)
+                    break
 
     # VERIFICATION CHECK
     if pos_energy_boundT0 is None or neg_energy_boundT0 is None:
@@ -110,7 +127,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     if last_rep == 20:
         repetition_list += [20]
     T0_unitless = 0.001
-    gap_ratio = 0
     mean_Rg = 100
     stdR = 2
     sig = 0.05
@@ -134,12 +150,22 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
     # base null path for new constT
     constT_str = str(constT).replace('.', '_')
-    null_path_name = (import_export.export_path /
-                      f"64bit_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+    if gap_ratio > 1e-3:
+        null_path_name = (import_export.export_path /
+                          f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+    else:
+        null_path_name = (import_export.export_path /
+                          f"64bit_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
-    # choose a specific run
-    run_to_get_init_from = "20260606_22h05m04s"  # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ; sig = 0.05, stdR =2 "20260606_22h05m04s"
-    results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
+    # choose a specific run based on whether we are resuming or starting fresh
+    if is_resumed:
+        run_to_get_init_from = run_name
+        results_dir_of_past_run = import_export.results_dir_path
+    else:
+        # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ; sig = 0.05, stdR =2 "20260606_22h05m04s"
+        run_to_get_init_from = "20260606_22h05m04s"
+        results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
+
     infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
     if infile.exists():
         json_txt = infile.read_text()
@@ -151,6 +177,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
 
         # if old init has inappropriate variables
         init = F.swap_in_init("flip", flip, init)
+        if gap_ratio > 1e-3:
+            if init.resolution != 1e-4:
+                init = F.swap_in_init("resolution", 1e-4, init)
+                print(f"set resolution times 100 res=1e-4", flush=True)
         if init.T0 != T0_unitless:
             print("T0 is different in reference file or Temperature units != 1. switching.")
             init = F.swap_in_init("T0", T0_unitless, init)
@@ -161,6 +191,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
             print(f"Mismatch in Cg or Rg from past run. Updating physics matrices...", flush=True)
             init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
             print(f"Successfully updated Cg to {init.Cg[0]} and Rg to {init.Rg[0]}. New Ec = {init.Ec}", flush=True)
+
+        # Check if ANY element in the matrix is below the threshold
+        if np.any(init.R_t_ij < 0.1):
+            min_Rt = np.min(init.R_t_ij)
+            shift_amount = 0.1 - min_Rt
+            print(f"min Rt = {min_Rt:.4f}. Shifting entire array by +{shift_amount:.4f}...", flush=True)
+            R_t_ij_shifted = init.R_t_ij + shift_amount
+            init = F.swap_in_init("R_t_ij", R_t_ij_shifted, init)
 
         print(f"success, starting run for {run_to_get_init_from}", flush=True)
 
@@ -178,22 +216,32 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
         outfile.write_text(serialized_init_data)
         print("STORED INIT IN JSON", flush=True)
 
-    Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
-                                                  near_left=init.near_left,
-                                                  near_right=init.near_right,
-                                                  periodic_y=periodic_y, )
-    print("created resistance maps, now saving plots...", flush=True)
-    curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
-                                       results_path=import_export.results_dir_path, show=False)
-    print("plotting capacitance map...", flush=True)
-    curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
-                                       results_path=import_export.results_dir_path, show=False, periodic_y=periodic_y)
+    if not is_resumed:
+        Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
+                                                      near_left=init.near_left,
+                                                      near_right=init.near_right,
+                                                      periodic_y=periodic_y, )
+        print("created resistance maps, now saving plots...", flush=True)
+        curve_plotter.plot_resistance_maps(Rx, Ry, n=init.row_num,
+                                           results_path=import_export.results_dir_path, show=False)
+        print("plotting capacitance map...", flush=True)
+        curve_plotter.plot_capacitance_map(init.C_inv, n=init.row_num,
+                                           results_path=import_export.results_dir_path, show=False,
+                                           periodic_y=periodic_y)
 
     if not validate_table_triplets_file(null_path_name, init, [init.T0 * constT]) and first_run:
-        table_triplets = prepare_table_triplets(init, [init.T0 * constT],
-                                                pos_energy_bound=pos_energy_boundT0,
-                                                neg_energy_bound=neg_energy_boundT0,
-                                                max_workers=num_workers)
+        if gap_ratio > 1e-3:
+            table_triplets = prepare_table_triplets_gapped(init, [init.T0 * constT],
+                                                           pos_energy_bound=pos_energy_boundT0,
+                                                           neg_energy_bound=neg_energy_boundT0,
+                                                           max_workers=num_workers,
+                                                           gap_ratio=gap_ratio,
+                                                           midfix=True)
+        else:
+            table_triplets = prepare_table_triplets(init, [init.T0 * constT],
+                                                    pos_energy_bound=pos_energy_boundT0,
+                                                    neg_energy_bound=neg_energy_boundT0,
+                                                    max_workers=num_workers)
         output_table_triplets(table_triplets, null_path_name)
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
@@ -213,64 +261,117 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
     V_doubled = np.concatenate([Vleft, Vleft[-2::-1]])
     cycles = len(V_doubled)
     T = [init.T0 * constT] * init.row_num
-    expected_err = F.calc_expected_dist_std(T, init.T0)
+    print("############# ISLAND APPROPRIATE ERROR & GAPS ##################", flush=True)
+    Delta_0 = gap_ratio * init.Ec
+    gap_array = F.exact_bcs_gap(T, Delta_0)
+    expected_err = F.calc_expected_dist_std(T, init.T0, gap_array, init.R_t_ij, init.Ec)
+    print(f"expected_err : {expected_err}", flush=True)
+    print(f"gaps for each island : {gap_array}", flush=True)
+
     print("############# RUN VIRTUAL EXPERIMENT ##################", flush=True)
 
     if first_run:
-        t0 = time.time()
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            actual_workers = executor._max_workers
-            print(f"running with {actual_workers} workers", flush=True)
-            loaded_state_function = partial(
-                Get_Steady_State,
-                init=init,
-                V_cycle=V_doubled,
-                cycles=cycles,
-                table_val=table_val,
-                table_prob=table_prob,
-                flip=flip,
-                table_T=table_T,
-                T=T,
-                expected_error=expected_err,
-                pos_energy_bound=pos_energy_boundT0,
-                neg_energy_bound=neg_energy_boundT0,
-                repetition=0,
-                capture_heatmap_at_idx=V_capture_idx,
-                periodic_y=periodic_y,
-                plot_ongoing_voltage_map=plot_ongoing_voltage_map,
-                gap_ratio=gap_ratio,
-            )
+        marker_file = import_export.results_dir_path / ".completed_rep0"
+        if marker_file.exists():
+            print("Repetition 0 already fully completed in previous run. Skipping execution block.", flush=True)
+        else:
+            t0 = time.time()
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                actual_workers = executor._max_workers
+                print(f"running with {actual_workers} workers", flush=True)
+                loaded_state_function = partial(
+                    Get_Steady_State,
+                    init=init,
+                    V_cycle=V_doubled,
+                    cycles=cycles,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                    flip=flip,
+                    table_T=table_T,
+                    T=T,
+                    expected_error=expected_err,
+                    pos_energy_bound=pos_energy_boundT0,
+                    neg_energy_bound=neg_energy_boundT0,
+                    repetition=0,
+                    capture_heatmap_at_idx=V_capture_idx,
+                    periodic_y=periodic_y,
+                    plot_ongoing_voltage_map=plot_ongoing_voltage_map,
+                    gap_ratio=gap_ratio,
+                    gap_array=gap_array
+                )
 
-            results: list[SteadyStateResult] = list(executor.map(loaded_state_function, range(init.loop_count)))
+                # --- CHECKPOINT LOADING / PARTIAL SUBMISSION ---
+                results: list[SteadyStateResult] = [None] * init.loop_count
+                futures = {}
 
-        ### find smallest I(V) > 2
-        curve_plotter.iv_curve_compute_and_save_csv(init=init,
-                                                    filename=run_name,
-                                                    results=results,
-                                                    Vleft=Vleft,
-                                                    repetition=0,
-                                                    results_path=import_export.results_dir_path,
-                                                    get_heatmap=True,
-                                                    heatmap_at_V=V_capture)
+                for i in range(init.loop_count):
+                    ckpt_path = checkpoint_dir / f"ckpt_rep0_idx{i}.pkl"
+                    if ckpt_path.exists():
+                        try:
+                            with open(ckpt_path, "rb") as f:
+                                results[i] = pickle.load(f)
+                        except Exception as e:
+                            print(f"Warning: Failed to load {ckpt_path}, recomputing. Error: {e}")
+                            ckpt_path.unlink(missing_ok=True)
 
-        ### get errors
-        err = 0
-        for run in results:
-            err += run.error_count
+                    if results[i] is None:
+                        futures[executor.submit(loaded_state_function, i)] = i
 
-        ### report run specific output
-        curve_plotter.report_param(init=init,
-                                   filename=run_name,
-                                   repetition=0,
-                                   T=T,
-                                   expected_error=expected_err,
-                                   loop_count=init.loop_count,
-                                   T_std=0,
-                                   t0=t0,
-                                   results_path=import_export.results_dir_path,
-                                   tot_error_count=err,
-                                   gap_ratio=gap_ratio,
-                                   )
+                completed_count = init.loop_count - len(futures)
+                if completed_count > 0:
+                    print(f"Checkpoint Resume: {completed_count} workers pre-loaded. {len(futures)} submitted.",
+                          flush=True)
+
+                # --- FAIL-FAST SUBMISSION WITH INCREMENTAL SAVING ---
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        res = future.result()
+                        results[idx] = res
+
+                        # Save checkpoint instantly
+                        ckpt_path = checkpoint_dir / f"ckpt_rep0_idx{idx}.pkl"
+                        with open(ckpt_path, "wb") as f:
+                            pickle.dump(res, f)
+
+                    except Exception as e:
+                        print(f"\nCRITICAL ERROR: Worker {idx} crashed instantly during first run!", flush=True)
+                        for f_cancel in futures:
+                            f_cancel.cancel()
+                        raise
+
+            ### find smallest I(V) > 2
+            curve_plotter.iv_curve_compute_and_save_csv(init=init,
+                                                        filename=run_name,
+                                                        results=results,
+                                                        Vleft=Vleft,
+                                                        repetition=0,
+                                                        results_path=import_export.results_dir_path,
+                                                        get_heatmap=True,
+                                                        heatmap_at_V=V_capture)
+
+            ### get errors
+            err = 0
+            for run in results:
+                err += run.error_count
+
+            ### report run specific output
+            curve_plotter.report_param(init=init,
+                                       filename=run_name,
+                                       repetition=0,
+                                       T=T,
+                                       expected_error=expected_err,
+                                       loop_count=init.loop_count,
+                                       T_std=0,
+                                       t0=t0,
+                                       results_path=import_export.results_dir_path,
+                                       tot_error_count=err,
+                                       gap_ratio=gap_ratio)
+
+            # SUCCESS: Mark as complete and clean up .pkl files
+            marker_file.touch()
+            for f in checkpoint_dir.glob("ckpt_rep0_idx*.pkl"):
+                f.unlink(missing_ok=True)
 
     else:
         print("skipped first run")
@@ -306,6 +407,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
             print(f"repetition {repetition} missing from bounds table, skipped")
             continue
 
+        marker_file = import_export.results_dir_path / f".completed_rep{repetition}"
+        if marker_file.exists():
+            print(f"Repetition {repetition} already completely finished. Skipping.", flush=True)
+            continue
+
         # NEW TEMPERATURE PROFILE LOGIC: Fixed Middle
         T_mid = constT * init.T0
         # the maximum difference in temps between islands is when Tleft = T0:
@@ -333,8 +439,13 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
             T = T_list_to_compute
             if flip:
                 T = np.flip(T_list_to_compute)
-            expected_err = F.calc_expected_dist_std(T, init.T0)
-            print(expected_err, flush=True)
+
+            print("############# ISLAND APPROPRIATE ERROR & GAPS ##################", flush=True)
+            gap_array = F.exact_bcs_gap(T, Delta_0)
+            expected_err = F.calc_expected_dist_std(T, init.T0, gap_array, init.R_t_ij, init.Ec)
+            print(f"expected_err : {expected_err}", flush=True)
+            print(f"gaps for each island : {gap_array}", flush=True)
+
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -353,11 +464,49 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                 periodic_y=periodic_y,
                 plot_ongoing_voltage_map=plot_ongoing_voltage_map,
                 gap_ratio=gap_ratio,
+                gap_array=gap_array
             )
 
-            results: list[SteadyStateResult] = list(
-                executor.map(loaded_state_function, range(init.loop_count))
-            )
+            # --- CHECKPOINT LOADING / PARTIAL SUBMISSION ---
+            results: list[SteadyStateResult] = [None] * init.loop_count
+            futures = {}
+
+            for i in range(init.loop_count):
+                ckpt_path = checkpoint_dir / f"ckpt_rep{repetition}_idx{i}.pkl"
+                if ckpt_path.exists():
+                    try:
+                        with open(ckpt_path, "rb") as f:
+                            results[i] = pickle.load(f)
+                    except Exception as e:
+                        print(f"Warning: Failed to load {ckpt_path}, recomputing. Error: {e}")
+                        ckpt_path.unlink(missing_ok=True)
+
+                if results[i] is None:
+                    futures[executor.submit(loaded_state_function, i)] = i
+
+            completed_count = init.loop_count - len(futures)
+            if completed_count > 0:
+                print(
+                    f"Checkpoint Resume: Rep {repetition} pre-loaded {completed_count} workers. {len(futures)} submitted.",
+                    flush=True)
+
+            # --- FAIL-FAST SUBMISSION WITH INCREMENTAL SAVING ---
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    res = future.result()
+                    results[idx] = res
+
+                    # Save checkpoint instantly
+                    ckpt_path = checkpoint_dir / f"ckpt_rep{repetition}_idx{idx}.pkl"
+                    with open(ckpt_path, "wb") as f:
+                        pickle.dump(res, f)
+
+                except Exception as e:
+                    print(f"\nCRITICAL ERROR: Worker {idx} crashed instantly during rep {repetition}!", flush=True)
+                    for f_cancel in futures:
+                        f_cancel.cancel()
+                    raise
 
         ### find I(V) with gradient dT
         curve_plotter.iv_curve_compute_and_save_csv(init=init,
@@ -386,29 +535,94 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep) -> None:
                                    tot_error_count=err,
                                    gap_ratio=gap_ratio)
 
+        # SUCCESS: Mark as complete and clean up .pkl files explicitly in the subfolder
+        marker_file.touch()
+        for f in checkpoint_dir.glob(f"ckpt_rep{repetition}_idx*.pkl"):
+            f.unlink(missing_ok=True)
+
+    ### plot all new csvs
+    print(f"plotting all new csv in {import_export.results_dir_path}")
+    plot_graph_from_csv(run_names=[f"results_{run_name}"], directory=import_export.results_dir_path)
+
+
+def find_resume_directory(base_dir: Path, current_job_name: str) -> Path:
+    """
+    Scans the base directory for 'results_*' folders.
+    Looks for checkpoint_meta.json to guarantee a 1:1 match with SLURM_JOB_NAME.
+    """
+    # Sort by newest first just in case
+    dirs = sorted([d for d in base_dir.glob("results_*") if d.is_dir()],
+                  key=lambda x: x.stat().st_mtime, reverse=True)
+
+    for p in dirs:
+        meta_file = p / "checkpoint_meta.json"
+        if meta_file.exists():
+            try:
+                meta = orjson.loads(meta_file.read_text())
+                if meta.get("slurm_job_name") == current_job_name:
+                    return p
+            except Exception:
+                pass
+    return None
+
 
 if __name__ == "__main__":
-    date_ = datetime.datetime.now()
-    run_name_flat = date_.strftime("%Y%m%d_%Hh%Mm%Ss")
-
     EXPORT_PATH = Path(__file__).parent.parent / "export"
     MP_COMPUTE_PATH = Path(__file__).parent.parent / "mp_compute"
-    RESULTS_DIR_PATH = Path(__file__).parent.parent / f"results_{run_name_flat}"
-    RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
-    print(f"Created results directory at {RESULTS_DIR_PATH}")
+    BASE_RESULTS_DIR = Path(__file__).parent.parent
+
+    # 1. Check if this is an interrupted run we can hijack
+    resume_dir = find_resume_directory(BASE_RESULTS_DIR, job_name)
+
+    if resume_dir:
+        RESULTS_DIR_PATH = resume_dir
+        run_name_flat = resume_dir.name.replace("results_", "")
+        print(f"RESUMING existing run at {RESULTS_DIR_PATH} (Run Name: {run_name_flat})", flush=True)
+        is_resumed = True
+    else:
+        date_ = datetime.datetime.now()
+        run_name_flat = date_.strftime("%Y%m%d_%Hh%Mm%Ss")
+        RESULTS_DIR_PATH = BASE_RESULTS_DIR / f"results_{run_name_flat}"
+        RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
+        print(f"Created NEW results directory at {RESULTS_DIR_PATH}")
+        is_resumed = False
+
+        # Save exact metadata to allow future resumption, strictly tracking Tmid and D parameters
+        meta_data = {
+            "slurm_job_name": job_name,
+            "created_at": run_name_flat,
+            "Cg": Cg,
+            "Tmid_units": Tmid_units,
+            "Tmid_pastdigit": Tmid_pastdigit,
+            "gap_ratio": gap_ratio,
+            "is_reverse": is_reverse,
+            "x": x,
+            "last_rep": last_rep,
+            "jumps": jumps
+        }
+        meta_file = RESULTS_DIR_PATH / "checkpoint_meta.json"
+        meta_file.write_text(orjson.dumps(meta_data).decode("utf-8"))
+
+    if gap_ratio > 1e-3:
+        tables_list = [EXPORT_PATH /
+                       f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
+                       for n in range(501)]
+        csv_table_path = MP_COMPUTE_PATH / f"gapped_Tmid{Tmid_units}_{Tmid_pastdigit}_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
+    else:
+        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
+                       for n in range(501)]
+        csv_table_path = MP_COMPUTE_PATH / f"table_Tmid{Tmid_units}_{Tmid_pastdigit}_Cg{Cg}.csv"
 
     main(
-        IMPORT_EXPORT(
+        import_export=IMPORT_EXPORT(
             plot_results=True,
             export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=[EXPORT_PATH /
-                                              f"64bit_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
-                                              for n in
-                                              range(501)],
-            csv_table_path=MP_COMPUTE_PATH / f"table_Tmid{Tmid_units}_{Tmid_pastdigit}_Cg{Cg}.csv",
+            prepare_table_triplets_file_list=tables_list,
+            csv_table_path=csv_table_path,
             results_dir_path=RESULTS_DIR_PATH
         ),
         run_name=run_name_flat,
         mean_Cg=Cg,
-        first_rep=x
+        first_rep=x,
+        is_resumed=is_resumed
     )
