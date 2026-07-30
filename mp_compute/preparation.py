@@ -630,7 +630,12 @@ def prepare_table_triplets_gapped(init_state, expected_list, pos_energy_bound, n
         center_idx = (init_state.row_num - 1) / 2.0
         max_std = (Tmid_physical - init_state.T0) / center_idx
         # using T_std = iteration * max_std / 20 --> find iteration "n"
-        n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / max_std)
+        if len(expected_list) > 1:
+            n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / max_std)
+        elif len(expected_list) == 1:
+            n_inferred = 0
+        else:
+            raise ValueError("expected list is empty")
 
         # Round to 2 decimals, convert to string, and replace the dot with an underscore
         Tmid_str = str(round(Tmid_val, 2)).replace('.', '_')
@@ -802,3 +807,442 @@ def validate_table_triplets_file(
         print(T_in_file)
         print(T)
         raise ValueError
+
+
+def _calc_segments_NIS_master(args, dps):
+    """
+    2D INTEGRATION METHOD (N-I-S BOUNDARY)
+    Master top-level worker function to calculate segmented probabilities for quasiparticles
+    transitioning between a Normal Metal electrode and a Superconducting island.
+    """
+    val = mp.mpf(args[0])
+    temp = mp.mpf(args[1])
+    Ec = mp.mpf(args[2])
+    D = mp.mpf(args[3])
+    eps = mp.mpf(args[4])
+
+    mp.dps = dps
+    threshold = mp.mpf('1e-20')
+
+    printing = np.random.uniform(0, 1)
+    if printing < 0.01:
+        print(f"START calculating NIS w = {float(val):.3f} [T={float(temp)}]", flush=True)
+
+    abs_val = mp.fabs(val)
+    sigma = mp.sqrt(2 * Ec * temp)
+    bracket_width = 5 * sigma
+
+    probability = mp.mpf('0')
+    theta_max = mp.mpf('12.0')
+
+    # =========================================================================
+    # HOTFIX: THE NORMAL METAL FALLBACK (For D = 0)
+    # =========================================================================
+    if D <= mp.mpf('1e-6'):
+        func = F.integrand(temp, val, Ec)
+        absval = mp.fabs(val + Ec)
+
+        limits = [-mp.inf, -absval, mp.mpf('0'), absval, mp.inf]
+        probability = mp.mpf('0')
+
+        for i in range(len(limits) - 1):
+            a = limits[i]
+            b = limits[i + 1]
+
+            if a == -mp.inf:
+                segment_prob = mp.quad(lambda t, b=b: func(b - t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2),
+                                       [0, 1], method='tanh-sinh')
+            elif b == mp.inf:
+                segment_prob = mp.quad(lambda t, a=a: func(a + t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2),
+                                       [0, 1], method='tanh-sinh')
+            else:
+                width = b - a
+                if width < mp.mpf('1e-8'):
+                    continue
+                segment_prob = mp.quad(lambda t, a=a, w=width: func(a + t * w) * w, [0, 1])
+
+            probability += segment_prob
+
+        return [args[0], str(probability.real), args[1], args[2]]
+
+    # =========================================================================
+    # EXACT N-I-S INTEGRATION
+    # =========================================================================
+    # CASE 1: Near or inside the gap
+    if abs_val < D + eps:
+        def mapped_integrand_NIS(theta1, Etag, sign_E):
+            E = sign_E * D * mp.cosh(theta1)
+            gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
+            if gauss_arg < -200:
+                return mp.mpf('0')
+            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
+
+            f_E = F.f(E, temp)
+            f_Etag_w = F.f(Etag - val, temp)
+
+            # mp.fabs(E) acts as the cosh measure for the S-island.
+            # Normal metal DOS is strictly 1.0, so dEtag has no jacobian multiplier.
+            measure = mp.fabs(E)
+            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+        for s1 in [1, -1]:
+            def outer_E_inner_Etag(theta1, s1=s1):
+                E = s1 * D * mp.cosh(theta1)
+                peak = E - Ec
+
+                # Etag has no gap, we integrate smoothly over the entire real line
+                dynamic_limits = [
+                    -mp.inf,
+                    mp.mpf(val),
+                    peak - bracket_width,
+                    peak + bracket_width,
+                    mp.inf
+                ]
+
+                sorted_Etag = sorted(list(set(dynamic_limits)))
+                cleaned_Etag = [sorted_Etag[0]]
+                for cp in sorted_Etag[1:]:
+                    if cp - cleaned_Etag[-1] > threshold:
+                        cleaned_Etag.append(cp)
+
+                prob_inner = mp.mpf('0')
+                for i in range(len(cleaned_Etag) - 1):
+                    a = cleaned_Etag[i]
+                    b = cleaned_Etag[i + 1]
+                    if a == -mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, b=b: mapped_integrand_NIS(theta1, b - t / (mp.mpf('1') - t), s1) / (
+                                        (mp.mpf('1') - t) ** 2), [0, 1], method='tanh-sinh')
+                    elif b == mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, a=a: mapped_integrand_NIS(theta1, a + t / (mp.mpf('1') - t), s1) / (
+                                        (mp.mpf('1') - t) ** 2), [0, 1], method='tanh-sinh')
+                    else:
+                        width = b - a
+                        if width < mp.mpf('1e-8'):
+                            continue
+                        prob_inner += mp.quad(lambda t, a=a, w=width: mapped_integrand_NIS(theta1, a + t * w, s1) * w,
+                                              [0, 1], method='tanh-sinh')
+                return prob_inner
+
+            res = mp.quad(outer_E_inner_Etag, [0, theta_max], method='gauss-legendre')
+            probability += res
+
+        return [args[0], str(probability.real), args[1], args[2]]
+
+    # CASE 2: Far from the gap
+    else:
+        def func_NIS_local(E, Etag):
+            n_E = F.dos(E, D)
+            if n_E == mp.mpf('0'):
+                return mp.mpf('0')
+            gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
+            if gauss_arg < -200:
+                return mp.mpf('0')
+            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
+            f_E = F.f(E, temp)
+            f_Etag_w = F.f(Etag - val, temp)
+
+            # n_Etag has been strictly replaced by 1.0
+            return n_E * mp.mpf('1.0') * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+        limits_E_far_neg = [-mp.inf, -abs_val, -D - eps]
+        limits_E_far_pos = [D + eps, abs_val, mp.inf]
+
+        mappings_E = []
+        for lims in [limits_E_far_neg, limits_E_far_pos]:
+            for i in range(len(lims) - 1):
+                m = F.get_mapping(lims[i], lims[i + 1], threshold)
+                if m is not None:
+                    mappings_E.append(m)
+
+        for m_E in mappings_E:
+            def outer_integrand(t_E, m_E=m_E):
+                if t_E <= 0 or t_E >= 1:
+                    return mp.mpf('0')
+
+                E, jac_E = m_E(t_E)
+                peak_center = E - Ec
+
+                dynamic_limits = [
+                    -mp.inf,
+                    mp.mpf(val),
+                    peak_center - bracket_width,
+                    peak_center + bracket_width,
+                    mp.inf
+                ]
+
+                sorted_Etag_limits = sorted(list(set(dynamic_limits)))
+                cleaned_limits = [sorted_Etag_limits[0]]
+                for cp in sorted_Etag_limits[1:]:
+                    if cp - cleaned_limits[-1] > threshold:
+                        cleaned_limits.append(cp)
+
+                inner_integral = mp.quad(lambda Etag: func_NIS_local(E, Etag), cleaned_limits, method='tanh-sinh')
+                return inner_integral * jac_E
+
+            segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh')
+            probability += segment_prob
+
+        # Step 6: Inner Integrals (Near the Gap)
+        theta1_max = mp.acosh((D + eps) / D)
+
+        for s1 in [1, -1]:
+            def outer_integrand_near(theta1, s1=s1):
+                E = s1 * D * mp.cosh(theta1)
+                peak_center = E - Ec
+                prob_inner = mp.mpf('0')
+
+                dynamic_limits_far = [
+                    -mp.inf,
+                    mp.mpf(val),
+                    peak_center - bracket_width,
+                    peak_center + bracket_width,
+                    mp.inf
+                ]
+
+                sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
+                cleaned_far = [sorted_Etag_far[0]]
+                for cp in sorted_Etag_far[1:]:
+                    if cp - cleaned_far[-1] > threshold:
+                        cleaned_far.append(cp)
+
+                for i in range(len(cleaned_far) - 1):
+                    a = cleaned_far[i]
+                    b = cleaned_far[i + 1]
+
+                    def inner_far_Etag(Etag):
+                        gauss_arg = -((E - Etag - Ec) ** 2) / (4 * Ec * temp)
+                        if gauss_arg < -200:
+                            return mp.mpf('0')
+                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec * temp)
+                        f_E = F.f(E, temp)
+                        f_Etag_w = F.f(Etag - val, temp)
+
+                        measure_E = mp.fabs(E)
+                        return measure_E * mp.mpf('1.0') * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+                    if a == -mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, b=b: inner_far_Etag(b - t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2), [0, 1],
+                            method='tanh-sinh')
+                    elif b == mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, a=a: inner_far_Etag(a + t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2), [0, 1],
+                            method='tanh-sinh')
+                    else:
+                        width = b - a
+                        if width < mp.mpf('1e-8'):
+                            continue
+                        prob_inner += mp.quad(lambda t, a=a, w=width: inner_far_Etag(a + t * w) * w, [0, 1],
+                                              method='tanh-sinh')
+
+                return prob_inner
+
+            res = mp.quad(outer_integrand_near, [0, theta1_max], method='gauss-legendre')
+            probability += res
+
+        return [args[0], str(probability.real), args[1], args[2]]
+
+
+def compute_gamma_worker_single_NIS(task_tuple):
+    """
+    Lightweight unwrapper for the multiprocessing Pool.
+    Routes the task to the N-I-S integration master and returns the indices for the Master-Aggregator.
+    """
+    w_str, T_str, mu_str, D_str_T, eps_str, dps, chunk_idx, w_idx, T_idx = task_tuple
+    args = (w_str, T_str, mu_str, D_str_T, eps_str)
+
+    # Route explicitly to the N-I-S master function
+    res = _calc_segments_NIS_master(args, dps)
+
+    return chunk_idx, w_idx, T_idx, res
+
+
+def prepare_table_triplets_NIS(init_state, expected_list, pos_energy_bound, neg_energy_bound, max_workers,
+                               gap_ratio, midfix=False):
+    """
+    Orchestrates the calculation of Normal-Insulator-Superconductor (N-I-S) boundary integrals
+    using a flattened Master-Aggregator.
+    Includes exact BCS gap calculation for temperature-dependent Deltas and isolated NIS checkpointing.
+    OPTIMIZED: Strictly calculates values for the physical boundaries (first and last temperatures).
+    """
+    import os
+    import json
+    import tempfile
+
+    DPS = 30
+    mp.dps = DPS
+    print(f"dps = {DPS}")
+
+    Ec_mp = mp.mpf(str(init_state.Ec))
+    mu_str = str(Ec_mp)
+
+    # Calculate the zero-temperature gap D_0
+    D_0_float = float(init_state.Ec) * gap_ratio
+    D_0_str = str(mp.mpf(str(D_0_float)))
+
+    # Pre-calculate the exact temperature-dependent gaps for the whole profile
+    print(f"Solving exact BCS self-consistency equation for {len(expected_list)} temperatures...", flush=True)
+    exact_deltas_float = F.exact_bcs_gap(expected_list, D_0_float)
+    print(f"delta's per site is : {exact_deltas_float}", flush=True)
+    # Convert to 30-DPS mpmath strings immediately to prevent float noise in workers
+    exact_deltas_str = [str(mp.mpf(str(d))) for d in exact_deltas_float]
+    # ------------------------------------------------
+
+    eps_str = '1e-10'
+    # --- Setup Checkpoint Directory (Isolated for NIS) ---
+    if not midfix:
+        # Standard experiment
+        if len(expected_list) > 1:
+            n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / init_state.T0)
+        else:
+            n_inferred = 0
+
+        # EXACT NIS RENAME: Added _NIS_dynamicD to separate from SIS checkpoints
+        checkpoint_dir = os.path.join("checkpoints", f"run_Ec_{mu_str}_D_{D_0_str}_Tstd_{n_inferred}_NIS_dynamicD")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    else:
+        # midfix experiment --> find middle temp ratio
+        Tmid_physical = expected_list[len(expected_list) // 2]
+        Tmid_val = Tmid_physical / init_state.T0  # Unitless ratio for the folder name
+
+        center_idx = (init_state.row_num - 1) / 2.0
+        max_std = (Tmid_physical - init_state.T0) / center_idx
+        n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / max_std)
+
+        Tmid_str = str(round(Tmid_val, 2)).replace('.', '_')
+
+        # EXACT NIS RENAME: Added _NIS_dynamicD to separate from SIS checkpoints
+        checkpoint_dir = os.path.join("checkpoints",
+                                      f"Tmid{Tmid_str}_run_Ec_{mu_str}_D_{D_0_str}_Tstd_{n_inferred}_NIS_dynamicD")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+    print(f"N-I-S Checkpoints mapped to: {checkpoint_dir} (Inferred n={n_inferred})", flush=True)
+
+    print(pos_energy_bound, neg_energy_bound, init_state.resolution)
+    num_of_calc = (pos_energy_bound - neg_energy_bound) / init_state.resolution
+    num_points = round(num_of_calc)
+
+    # Clean temperature strings to eliminate float noise
+    expected_list_strings = [str(round(float(T), 8)) for T in expected_list]
+
+    # =========================================================================
+    # THE BOUNDARY OPTIMIZATION
+    # N-I-S transitions ONLY happen at the array boundaries.
+    # If gradient is 0, we only need 1 temperature. If it's a gradient, we need the 2 edges.
+    # =========================================================================
+    edge_indices = [0] if expected_list[0] == expected_list[-1] else [0, -1]
+
+    edge_T_strings = [expected_list_strings[i] for i in edge_indices]
+    edge_D_strings = [exact_deltas_str[i] for i in edge_indices]
+    # =========================================================================
+
+    # mimicking np.linspace(pos, neg)
+    w_start = mp.mpf(str(pos_energy_bound))
+    w_end = mp.mpf(str(neg_energy_bound))
+
+    if num_points > 1:
+        w_values_str = [str(w_start + mp.mpf(i) * (w_end - w_start) / mp.mpf(num_points - 1)) for i in
+                        range(num_points)]
+    else:
+        w_values_str = [str(w_start)]
+
+    # --- The Chunking Logic ---
+    CHUNK_SIZE = 10
+    w_chunks = [w_values_str[i:i + CHUNK_SIZE] for i in range(0, len(w_values_str), CHUNK_SIZE)]
+
+    final_ordered_chunks = [None] * len(w_chunks)
+    task_args = []
+    loaded_count = 0
+
+    # --- Decipher Completed Batches ---
+    for chunk_idx, w_chunk_list in enumerate(w_chunks):
+        file_name = f"task_chunk_{chunk_idx:04d}.json"
+        if len(w_chunks) > 10000:
+            file_name = f"task_chunk_{chunk_idx}.json"
+        file_path = os.path.join(checkpoint_dir, file_name)
+
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r') as f:
+                    chunk_res = json.load(f)
+                    final_ordered_chunks[chunk_idx] = chunk_res
+                    loaded_count += 1
+            except json.JSONDecodeError:
+                # Corrupted file -> Flatten into single tasks strictly for the edges
+                for w_idx, w_str in enumerate(w_chunk_list):
+                    for T_idx, T_str in enumerate(edge_T_strings):
+                        D_str_T = edge_D_strings[T_idx]
+                        task_args.append((w_str, T_str, mu_str, D_str_T, eps_str, DPS, chunk_idx, w_idx, T_idx))
+        else:
+            # Not yet computed -> Flatten into single tasks strictly for the edges
+            for w_idx, w_str in enumerate(w_chunk_list):
+                for T_idx, T_str in enumerate(edge_T_strings):
+                    D_str_T = edge_D_strings[T_idx]
+                    task_args.append((w_str, T_str, mu_str, D_str_T, eps_str, DPS, chunk_idx, w_idx, T_idx))
+
+    total_tasks_left = len(task_args)
+    print(
+        f"Found {loaded_count}/{len(w_chunks)} completed batches. Submitting {total_tasks_left} individual tasks to {max_workers} workers...",
+        flush=True)
+
+    # --- Setup Master Aggregator Buffers ---
+    chunk_buffers = {}
+    chunk_target_counts = {}
+    for chunk_idx, w_chunk_list in enumerate(w_chunks):
+        if final_ordered_chunks[chunk_idx] is None:
+            chunk_buffers[chunk_idx] = []
+            # Calculate targets strictly based on edge temperatures (cutting workload drastically)
+            chunk_target_counts[chunk_idx] = len(w_chunk_list) * len(edge_T_strings)
+
+    # --- Process Remaining Tasks Asynchronously ---
+    if total_tasks_left > 0:
+        with multiprocessing.Pool(processes=max_workers, maxtasksperchild=10) as pool:
+
+            # ROUTING MODIFICATION: Target the compute_gamma_worker_single_NIS wrapper
+            for returned_chunk_idx, w_idx, T_idx, returned_result in pool.imap_unordered(
+                    compute_gamma_worker_single_NIS,
+                    task_args):
+
+                # Hand the result to the Master Process buffer
+                chunk_buffers[returned_chunk_idx].append((w_idx, T_idx, returned_result))
+
+                # --- ATOMIC CHECKPOINT TRIGGER ---
+                if len(chunk_buffers[returned_chunk_idx]) == chunk_target_counts[returned_chunk_idx]:
+
+                    # 1. Sort the buffer to perfectly match the original matrix nested-loop order
+                    chunk_buffers[returned_chunk_idx].sort(key=lambda x: (x[0], x[1]))
+
+                    # 2. Extract just the clean results
+                    sorted_results = [item[2] for item in chunk_buffers[returned_chunk_idx]]
+
+                    # 3. Master Process handles the Atomic Write securely
+                    file_name = f"task_chunk_{returned_chunk_idx:04d}.json"
+                    if len(w_chunks) > 10000:
+                        file_name = f"task_chunk_{returned_chunk_idx}.json"
+
+                    file_path = os.path.join(checkpoint_dir, file_name)
+                    temp_fd, temp_path = tempfile.mkstemp(dir=checkpoint_dir, prefix=f"tmp_chunk_{returned_chunk_idx}_")
+                    try:
+                        with os.fdopen(temp_fd, 'w') as f:
+                            json.dump(sorted_results, f)
+                        os.replace(temp_path, file_path)
+                    except Exception as e:
+                        print(f"Failed to save aggregated checkpoint {returned_chunk_idx}: {e}", flush=True)
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+
+                    # 4. Slot into final array and free memory
+                    final_ordered_chunks[returned_chunk_idx] = sorted_results
+                    del chunk_buffers[returned_chunk_idx]
+
+    # --- Flatten and Format final array ---
+    final_results = []
+    for chunk_data in final_ordered_chunks:
+        for res in chunk_data:
+            final_results.append([float(res[0]), float(res[1]), float(res[2]), float(res[3])])
+
+    # global precision for main
+    mp.dps = 15
+    return np.array(final_results, dtype=np.float64).reshape(-1, 4)

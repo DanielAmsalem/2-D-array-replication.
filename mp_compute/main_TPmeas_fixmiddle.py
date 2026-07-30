@@ -20,6 +20,7 @@ from gamma_functions import Get_Steady_State
 from preparation import (
     prepare_initial_state,
     prepare_table_triplets_gapped,
+    prepare_table_triplets_NIS,
     validate_table_triplets_file,
     prepare_table_triplets,
     output_table_triplets,
@@ -69,7 +70,7 @@ gap_list = [2]
 ##############################################################
 
 
-def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=False) -> None:
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed_shadow=False) -> None:
     # Set up dedicated checkpoint directory
     checkpoint_dir = import_export.results_dir_path / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -115,7 +116,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     # VERIFICATION CHECK
     if pos_energy_boundT0 is None or neg_energy_boundT0 is None:
         raise ValueError(
-            f"Failed to find n=0 bounds in the CSV table located at {import_export.csv_table_path}. Please check your CSV contents.")
+            f"Failed to find n=0 bounds in the CSV table located at {import_export.csv_table_path} check CSV contents")
 
     # EXPERIMENT PARAMETERS
     loop_count = max(num_workers, 960)
@@ -123,9 +124,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
     ######## CHANGABLES ###############
     last_repetition_to_do = 501  # int : n -> the last repetition has dT = n*Tstd
-    repetition_list = list(range(first_rep, last_rep, jumps))
+    repetition_list_shadow = list(range(first_rep, last_rep, jumps))
     if last_rep == 20:
-        repetition_list += [20]
+        repetition_list_shadow += [20]
     T0_unitless = 0.001
     mean_Rg = 100
     stdR = 2
@@ -143,7 +144,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     print(f"Cg = {Cg}")
     print(f"stdR = {stdR}")
     print(f"sig = {sig}")
-    print(f"repeating for dT=n*max_std/20, n = {repetition_list}", flush=True)
+    print(f"repeating for dT=n*max_std/20, n = {repetition_list_shadow}", flush=True)
     print(f"############# INITZIALIZING GRID ##################")
     if loop_count != 1:
         plot_ongoing_voltage_map = False
@@ -152,17 +153,25 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     constT_str = str(constT).replace('.', '_')
     if gap_ratio > 1e-3:
         null_path_name = (import_export.export_path /
-                          f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+                          f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_"
+                          f"Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+
+        # Define the N-I-S Filepath
+        nis_null_path_name = (import_export.export_path /
+                              f"64bit_GAP{gap_int}_{gap_tenth}_NIS_table_triplets_"
+                              f"Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
     else:
         null_path_name = (import_export.export_path /
                           f"64bit_table_triplets_Tmid_{constT_str}_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+        nis_null_path_name = null_path_name
 
     # choose a specific run based on whether we are resuming or starting fresh
-    if is_resumed:
+    if is_resumed_shadow:
         run_to_get_init_from = run_name
         results_dir_of_past_run = import_export.results_dir_path
     else:
-        # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ; sig = 0.05, stdR =2 "20260606_22h05m04s"
+        # sig = 0.5, stdR=0.9 "20251207_17h43m26s" ; sig = 0.5, stdR = 4.8 "20260605_19h36m00s" ;
+        # sig = 0.05, stdR =2 "20260606_22h05m04s"
         run_to_get_init_from = "20260606_22h05m04s"
         results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
 
@@ -216,7 +225,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         outfile.write_text(serialized_init_data)
         print("STORED INIT IN JSON", flush=True)
 
-    if not is_resumed:
+    if not is_resumed_shadow:
         Rx, Ry = curve_plotter.extract_nn_resistances(init.R_t_ij, init.row_num, init.R_t_i,
                                                       near_left=init.near_left,
                                                       near_right=init.near_right,
@@ -229,7 +238,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                                            results_path=import_export.results_dir_path, show=False,
                                            periodic_y=periodic_y)
 
+    # =========================================================================
+    # 1. S-I-S TABLE GENERATION
+    # =========================================================================
     if not validate_table_triplets_file(null_path_name, init, [init.T0 * constT]) and first_run:
+        print("S-I-S Table not found or invalid. Generating...", flush=True)
         if gap_ratio > 1e-3:
             table_triplets = prepare_table_triplets_gapped(init, [init.T0 * constT],
                                                            pos_energy_bound=pos_energy_boundT0,
@@ -243,15 +256,40 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                                                     neg_energy_bound=neg_energy_boundT0,
                                                     max_workers=num_workers)
         output_table_triplets(table_triplets, null_path_name)
+
         table_val = table_triplets[:, 0]
         table_prob = table_triplets[:, 1]
         table_T = [init.T0 * constT]
     elif first_run:
+        print("Valid S-I-S Table found. Loading...", flush=True)
         table_triplets = np.load(null_path_name.as_posix())
         table_val = table_triplets["val"]
         table_prob = table_triplets["prob"]
         table_T = np.unique(table_triplets["temp"]).tolist()
 
+    # =========================================================================
+    # 2. N-I-S TABLE GENERATION
+    # =========================================================================
+    if not validate_table_triplets_file(nis_null_path_name, init,
+                                        [init.T0 * constT]) and first_run and gap_ratio > 1e-3:
+        print("N-I-S Table not found or invalid. Generating...", flush=True)
+        nis_table_triplets_raw = prepare_table_triplets_NIS(init, [init.T0 * constT],
+                                                            pos_energy_bound=pos_energy_boundT0,
+                                                            neg_energy_bound=neg_energy_boundT0,
+                                                            max_workers=num_workers,
+                                                            gap_ratio=gap_ratio,
+                                                            midfix=True)
+        output_table_triplets(nis_table_triplets_raw, nis_null_path_name)
+        nis_table_val = nis_table_triplets_raw[:, 0]
+        nis_table_prob = nis_table_triplets_raw[:, 1]
+    elif first_run and gap_ratio > 1e-3:
+        print("Valid N-I-S Table found. Loading...", flush=True)
+        nis_table_triplets = np.load(nis_null_path_name.as_posix())
+        nis_table_val = nis_table_triplets["val"]
+        nis_table_prob = nis_table_triplets["prob"]
+    elif first_run:
+        nis_table_val = None
+        nis_table_prob = None
     # RUN PARAMETERS
     V_diff = 4
     steps = 100
@@ -286,6 +324,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                     cycles=cycles,
                     table_val=table_val,
                     table_prob=table_prob,
+                    nis_table_val=nis_table_val,
+                    nis_table_prob=nis_table_prob,
                     flip=flip,
                     table_T=table_T,
                     T=T,
@@ -399,7 +439,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             print("Tstd>T0, finished all runs for Tstd<=T0", flush=True)
             current_at_V0 = False
             continue
-        if not int(repetition) in repetition_list:
+        if not int(repetition) in repetition_list_shadow:
             print(f"repetition {repetition} was skipped")
             continue
 
@@ -422,16 +462,42 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         print(f"T list : {T_list_to_compute}", flush=True)
 
         ### check if there is valid table for new dT
-        if not validate_table_triplets_file(import_export.prepare_table_triplets_file_list[repetition],
-                                            init,
-                                            np.array(T_list_to_compute)):
-            warnings.warn(f"no validated table, skipped rep{T_std}")
-            continue
+        # --- PATH DEFINITIONS ---
+        bulk_path = import_export.prepare_table_triplets_file_list[repetition]
+        if gap_ratio > 1e-3:
+            nis_path_str = bulk_path.as_posix().replace("_table_triplets_", "_NIS_table_triplets_")
+            nis_path = Path(nis_path_str)
         else:
-            table_triplets = np.load(import_export.prepare_table_triplets_file_list[repetition].as_posix())
-            table_val = table_triplets["val"]
-            table_prob = table_triplets["prob"]
-            table_T = np.unique(table_triplets["temp"]).tolist()
+            nis_path = bulk_path
+
+        # --- VALIDATION CHECKS ---
+        valid_bulk = validate_table_triplets_file(bulk_path, init, np.array(T_list_to_compute))
+        valid_nis = True
+        if gap_ratio > 1e-3:
+            # For N-I-S, the array only expects to see the boundaries
+            edge_T_list = [T_list_to_compute[0]] if T_list_to_compute[0] == T_list_to_compute[-1] else [
+                T_list_to_compute[0], T_list_to_compute[-1]]
+            valid_nis = validate_table_triplets_file(nis_path, init, np.array(edge_T_list))
+
+        # --- THE 'SKIP' LOGIC ---
+        if not (valid_bulk and valid_nis):
+            warnings.warn(
+                f"Missing or invalid tables (BULK valid: {valid_bulk}, EDGE valid: {valid_nis}), skipped rep {T_std}")
+            continue
+
+        # --- SAFE LOADING ---
+        table_triplets = np.load(bulk_path.as_posix())
+        table_val = table_triplets["val"]
+        table_prob = table_triplets["prob"]
+        table_T = np.unique(table_triplets["temp"]).tolist()
+
+        if gap_ratio > 1e-3:
+            nis_table_triplets = np.load(nis_path.as_posix())
+            nis_table_val = nis_table_triplets["val"]
+            nis_table_prob = nis_table_triplets["prob"]
+        else:
+            nis_table_val = None
+            nis_table_prob = None
 
         ### run repetition for new dT
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -446,6 +512,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             print(f"expected_err : {expected_err}", flush=True)
             print(f"gaps for each island : {gap_array}", flush=True)
 
+            # ---> STEP 3.3: Splice into KMC Arguments
             loaded_state_function = partial(
                 Get_Steady_State,
                 init=init,
@@ -453,6 +520,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                 cycles=cycles,
                 table_val=table_val,
                 table_prob=table_prob,
+                nis_table_val=nis_table_val,
+                nis_table_prob=nis_table_prob,
                 table_T=table_T,
                 flip=flip,
                 T=T,
@@ -607,7 +676,7 @@ if __name__ == "__main__":
         tables_list = [EXPORT_PATH /
                        f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
                        for n in range(501)]
-        csv_table_path = MP_COMPUTE_PATH / f"gapped_Tmid{Tmid_units}_{Tmid_pastdigit}_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
+        csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Tmid{Tmid_units}_{Tmid_pastdigit}_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
     else:
         tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tmid{Tmid_units}_{Tmid_pastdigit}_Tstd{n}_20_Cg_{Cg}.npz"
                        for n in range(501)]
@@ -624,5 +693,5 @@ if __name__ == "__main__":
         run_name=run_name_flat,
         mean_Cg=Cg,
         first_rep=x,
-        is_resumed=is_resumed
+        is_resumed_shadow=is_resumed
     )

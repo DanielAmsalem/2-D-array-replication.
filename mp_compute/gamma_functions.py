@@ -49,8 +49,8 @@ def approximate_gamma_integral(dE, T_at_junction, table_val, table_prob, T_table
             return probs[idx]
 
 
-def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_bound, table_val, table_prob, T_table, flip,
-                 gap_ratio):
+def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_bound,
+                 table_val, table_prob, T_table, flip, gap_ratio, is_NIS=False):
     if Rt < 0:
         raise ValueError
 
@@ -64,26 +64,34 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
                 return v/Rt
             D = gap_ratio * Ec
 
-            # Protect against division by zero at the singularity v = -2D
-            denom = v + 2.0 * D
-            if abs(denom) < 1e-9:
-                return 0.0  # Rate decays to 0 at extreme parameter boundary
+            # EXACT NIS TAIL (T=0)
+            if is_NIS:
+                if abs(v) < D:
+                    return 0.0
+                return float(np.sqrt(v ** 2 - D ** 2)) / Rt
 
-            m_param = ((v - 2.0 * D) / denom) ** 2
+            # EXISTING SIS TAIL (T=0)
+            else:
+                # Protect against division by zero at the singularity v = -2D
+                denom = v + 2.0 * D
+                if abs(denom) < 1e-9:
+                    return 0.0  # Rate decays to 0 at extreme parameter boundary
 
-            # SciPy elliptic integrals throw warnings for m > 1 in some edge cases,
-            # though mathematically valid in complex plane. If m is wildly huge, rate is 0.
-            if m_param > 1e9:
-                return 0.0
+                m_param = ((v - 2.0 * D) / denom) ** 2
 
-            E_m = sp.ellipe(m_param)
-            K_m = sp.ellipk(m_param)
+                # SciPy elliptic integrals throw warnings for m > 1 in some edge cases,
+                # though mathematically valid in complex plane. If m is wildly huge, rate is 0.
+                if m_param > 1e9:
+                    return 0.0
 
-            term1 = denom * E_m
-            term2 = (4.0 * D * (v + D) / denom) * K_m
-            y2 = term1 - term2
+                E_m = sp.ellipe(m_param)
+                K_m = sp.ellipk(m_param)
 
-            return y2 / Rt
+                term1 = denom * E_m
+                term2 = (4.0 * D * (v + D) / denom) * K_m
+                y2 = term1 - term2
+
+                return y2 / Rt
         else:
             return 0.0
 
@@ -94,44 +102,63 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
         v = -dE - Ec
         D = gap_ratio * Ec
         if gap_ratio < 1e-3:
-            return v/Rt
-        # Protect against division by zero at the singularity v = -2D
-        denom = v + 2.0 * D
-        if abs(denom) < 1e-9:
-            return 0.0
+            return v / Rt
 
-        m_param = ((v - 2.0 * D) / denom) ** 2
+        # EXACT NIS TAIL (T > 0)
+        if is_NIS:
+            if abs(v) < D:
+                return 0.0
+            y2 = float(np.sqrt(v ** 2 - D ** 2))
+            sigma_sq = 2.0 * Ec * T_at_junction
+            denom_nis = (v ** 2 - D ** 2) ** 1.5
 
-        if m_param > 1e9:
-            return 0.0
+            if abs(denom_nis) < 1e-9:
+                d2_exact = 0.0
+            else:
+                d2_exact = -(D ** 2) / denom_nis
 
-        E_m = sp.ellipe(m_param)
-        K_m = sp.ellipk(m_param)
+            val = (y2 + 0.5 * sigma_sq * d2_exact) / Rt
+            return max(float(val), 0.0)
 
-        term1 = denom * E_m
-        term2 = (4.0 * D * (v + D) / denom) * K_m
-        y2 = term1 - term2
-
-        # Apply Gaussian thermal smearing
-        sigma_sq = 2.0 * Ec * T_at_junction
-
-        # Exact closed-form second derivative (Protected denominator)
-        denominator = (v ** 2) * (-2.0 * D + v) ** 2 * denom
-
-        if abs(denominator) < 1e-9:
-            d2_exact = 0.0
+        # EXISTING SIS TAIL (T > 0)
         else:
-            numerator = -2.0 * D ** 2 * ((4.0 * D ** 2 + v ** 2) * E_m - 4.0 * D * v * K_m)
-            d2_exact = numerator / denominator
+            # Protect against division by zero at the singularity v = -2D
+            denom = v + 2.0 * D
+            if abs(denom) < 1e-9:
+                return 0.0
 
-        y3 = y2 + 0.5 * sigma_sq * d2_exact
-        val = y3 / Rt
+            m_param = ((v - 2.0 * D) / denom) ** 2
 
-        # If the Gaussian smearing creates a slight unphysical negative rate, floor it to 0
-        if val < 0:
-            return 0.0
+            if m_param > 1e9:
+                return 0.0
 
-        return val
+            E_m = sp.ellipe(m_param)
+            K_m = sp.ellipk(m_param)
+
+            term1 = denom * E_m
+            term2 = (4.0 * D * (v + D) / denom) * K_m
+            y2 = term1 - term2
+
+            # Apply Gaussian thermal smearing
+            sigma_sq = 2.0 * Ec * T_at_junction
+
+            # Exact closed-form second derivative (Protected denominator)
+            denominator = (v ** 2) * (-2.0 * D + v) ** 2 * denom
+
+            if abs(denominator) < 1e-9:
+                d2_exact = 0.0
+            else:
+                numerator = -2.0 * D ** 2 * ((4.0 * D ** 2 + v ** 2) * E_m - 4.0 * D * v * K_m)
+                d2_exact = numerator / denominator
+
+            y3 = y2 + 0.5 * sigma_sq * d2_exact
+            val = y3 / Rt
+
+            # If the Gaussian smearing creates a slight unphysical negative rate, floor it to 0
+            if val < 0:
+                return 0.0
+
+            return val
 
     # ---------------------------------------------------------------------
     # INNER ENERGY BOUNDS (Lookup Table Integration)
@@ -278,11 +305,16 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
 
 def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_size, islands, row_num, C_inv,
                      pos_energy_bound, neg_energy_bound, T_gradient, R_t_ij, R_t_i, near_left, near_right, Vright, Ec,
-                     table_val, table_prob, T_table, flip, periodic_y, gap_array):
-    '''
+                     table_val, table_prob, nis_table_val, nis_table_prob, T_table, flip, periodic_y, gap_array):
+    """
     opposed to regular get gamma here reaction index is of the form
     [(i,j,n)] where n={1,2} for qp/cp transition
-    '''
+    """
+    # normal-insulator-SC junction or SC-insulator junction on the electrodes ?
+    has_nis_tables = (nis_table_val is not None)
+    bound_table_val = nis_table_val if has_nis_tables else table_val
+    bound_table_prob = nis_table_prob if has_nis_tables else table_prob
+    bound_is_NIS = True if has_nis_tables else False
 
     # dE values for i->j transition
     dEij = np.zeros((array_size, array_size))
@@ -318,7 +350,8 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             # for qp the integrals are store beforehand and divided the same way by Rt*e^2
             if dEij[i][j] < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dEij[i][j], T_gradient[i % row_num], R_t_ij[i][j], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[i % row_num])]
+                                        pos_energy_bound, table_val, table_prob, T_table, flip,
+                                        gap_ratio=gap_array[i % row_num])]
                 reaction_index_ += [(i, j, 1)]
 
     # left electrode to island transition:
@@ -330,7 +363,8 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         # rate for V_left->i
         if dE_left < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
+                                    pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                    gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
             reaction_index_ += [(isle, "from", 1)]
 
         # for ith transition to electrode there must be at least one electron at isle i
@@ -338,7 +372,8 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
             if dE_left < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
+                                        pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                        gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
                 reaction_index_ += [(isle, "to", 1)]
 
     # similarly, for right side
@@ -348,7 +383,8 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         # rate for V_right->i
         if dE_right < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
+                                    pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                    gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
             reaction_index_ += [(isle, "from", 1)]
 
         # for ith transition to electrode
@@ -358,7 +394,8 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             # rate for i->V_right
             if dE_right < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, table_val, table_prob, T_table, flip, gap_ratio=gap_array[isle % row_num])]
+                                        pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                        gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
                 reaction_index_ += [(isle, "to", 1)]
 
     return Gamma_, reaction_index_
@@ -414,6 +451,8 @@ def Get_Steady_State(
         plot_ongoing_voltage_map: bool,
         gap_ratio: float,
         gap_array: npt.NDArray,
+        nis_table_val=None,
+        nis_table_prob=None
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -566,6 +605,8 @@ def Get_Steady_State(
                     Ec=init.Ec,
                     table_val=table_val,
                     table_prob=table_prob,
+                    nis_table_val=nis_table_val,
+                    nis_table_prob=nis_table_prob,
                     T_table=table_T,
                     flip=flip,
                     periodic_y=periodic_y,
