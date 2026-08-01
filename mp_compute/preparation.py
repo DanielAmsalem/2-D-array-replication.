@@ -1109,7 +1109,13 @@ def prepare_table_triplets_NIS(init_state, expected_list, pos_energy_bound, neg_
 
         center_idx = (init_state.row_num - 1) / 2.0
         max_std = (Tmid_physical - init_state.T0) / center_idx
-        n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / max_std)
+        # using T_std = iteration * max_std / 20 --> find iteration "n"
+        if len(expected_list) > 1:
+            n_inferred = round(20.0 * (expected_list[1] - expected_list[0]) / max_std)
+        elif len(expected_list) == 1:
+            n_inferred = 0
+        else:
+            raise ValueError("expected list is empty")
 
         Tmid_str = str(round(Tmid_val, 2)).replace('.', '_')
 
