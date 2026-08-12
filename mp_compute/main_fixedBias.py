@@ -71,7 +71,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
     flip = is_reverse
     rep_json = True if TASK_ID == 0 else False  # Only task 0 writes the init json
     periodic_y = True
-    plot_ongoing_voltage_map = False
 
     # NEW FIXED EXPERIMENT PARAMETERS
     FIXED_VOLTAGE = 0.0  # V=0 or any constant V you require for this sweep
@@ -86,7 +85,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
                      list(range(20, 40, 2)) +
                      list(range(40, 80, 4)) +
                      list(range(80, 200, 16)) +
-                     list(range(200, 381, 30))
+                     list(range(200, 501, 30))
                      )
 
     # MESSAGES
@@ -218,7 +217,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             io_lock=io_lock,  # <--- NEW I/O LOCK ARGUMENT
             flip=flip,
             periodic_y=periodic_y,
-            plot_ongoing_voltage_map=plot_ongoing_voltage_map,
             gap_ratio=gap_ratio
         )
 
@@ -263,38 +261,42 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
                     f_cancel.cancel()
                 raise
 
-    # ----------------- DATA AGGREGATION FOR THIS TASK -----------------
-    valid_results = [res for res in results[START_LOOP_IDX:safe_end_idx] if res is not None]
-    if valid_results:
-        print(f"Task {TASK_ID} finished computing. Aggregating {len(valid_results)} valid loops.", flush=True)
+        # ----------------- DATA AGGREGATION FOR THIS TASK -----------------
+        valid_results = [res for res in results[START_LOOP_IDX:safe_end_idx] if res is not None]
+        if valid_results:
+            N_valid = len(valid_results)
+            print(f"Task {TASK_ID} finished computing. Aggregating {N_valid} valid loops.", flush=True)
 
-        avg_currents = np.zeros(len(valid_n_list))
-        tot_error_count = 0
+            # 1. Stack all individual I_vec arrays into a 2D matrix of shape (N_valid, cycles)
+            all_I_vecs = np.array([res.I_vec for res in valid_results])
 
-        for res in valid_results:
-            avg_currents += res.I_vec
-            tot_error_count += res.error_count
+            # 2. Vectorized Mean: Calculate average across the 0th axis (columns/loops)
+            avg_currents = np.mean(all_I_vecs, axis=0)
 
-        avg_currents /= len(valid_results)
+            # 3. Vectorized Standard Deviation (ddof=1 gives unbiased sample variance)
+            std_currents = np.std(all_I_vecs, axis=0, ddof=1)
 
-        # Output specific task CSV (to avoid concurrent write race conditions with other tasks)
-        out_csv_path = import_export.results_dir_path / f"fixed_bias_task{TASK_ID}.csv"
-        with open(out_csv_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["n", "T_std", "delta_T", "I_avg"])
-            for idx, n in enumerate(valid_n_list):
-                T_std = simulation_data_dict[n]["T_std"]
-                delta_T = 0.001 + 0.006 * (n / 20)
-                writer.writerow([n, T_std, delta_T, avg_currents[idx]])
+            # 4. Standard Error of the Mean (What you actually plot for error bars)
+            err_currents = std_currents / np.sqrt(N_valid)
 
-        print(f"Saved local task output to {out_csv_path.name}")
+            # Output specific task CSV
+            out_csv_path = import_export.results_dir_path / f"fixed_bias_task{TASK_ID}.csv"
+            with open(out_csv_path, mode="w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["n", "T_std", "delta_T", "I_avg", "I_err"])
+
+                for idx, n in enumerate(valid_n_list):
+                    T_std = simulation_data_dict[n]["T_std"]
+                    delta_T = 0.001 + 0.006 * (n / 20)
+                    writer.writerow([n, T_std, delta_T, avg_currents[idx], err_currents[idx]])
+
+            print(f"Saved local task output to {out_csv_path.name}")
 
         # Output basic report for task
         report_path = import_export.results_dir_path / f"report_task{TASK_ID}.txt"
         with open(report_path, "w") as f:
             f.write(f"Task ID: {TASK_ID}\n")
             f.write(f"Run Time: {time.time() - t0} sec\n")
-            f.write(f"Total loop errors: {tot_error_count}\n")
 
     # Mark as complete and clean up .pkl files
     marker_file.touch()
@@ -359,10 +361,10 @@ if __name__ == "__main__":
 
     if gap_ratio > 1e-3:
         tables_list = [EXPORT_PATH / f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in
-                       range(381)]
+                       range(501)]
         csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
     else:
-        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(381)]
+        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
         csv_table_path = MP_COMPUTE_PATH / f"table_Cg{Cg}.csv"
 
     main(
