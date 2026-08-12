@@ -232,8 +232,6 @@ def qp_integrand(T, dE, Ec_val, D):
 def _calc_segments_NIS_master(args, dps):
     """
     2D INTEGRATION METHOD (N-I-S BOUNDARY)
-    Master top-level worker function to calculate segmented probabilities for quasiparticles
-    transitioning between a Normal Metal electrode and a Superconducting island.
     """
     val = mp.mpf(args[0])
     temp = mp.mpf(args[1])
@@ -249,7 +247,6 @@ def _calc_segments_NIS_master(args, dps):
     if printing < 0.01:
         print(f"START calculating NIS w = {float(val):.3f} [T={float(temp)}]", flush=True)
 
-    # HOTFIX: THE NORMAL METAL FALLBACK (For D = 0)
     if D_val <= mp.mpf('1e-6'):
         func = integrand(temp, val, Ec_val)
         absval = mp.fabs(val + Ec_val)
@@ -644,7 +641,8 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
             G_L_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "left"), Tdot, T_l, D_dot, D_l, Ec, Rl)
             G_R_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "right"), Tdot, T_r, D_dot, D_r, Ec, Rr)
 
-        gc.collect()
+    # Executed safely once per Vl jump.
+    gc.collect()
 
     G_plus = G_L_plus + G_R_plus
     G_minus = G_L_minus + G_R_minus
@@ -726,23 +724,34 @@ if __name__ == '__main__':
     num_of_grads = 20
     flip_states = [False, True]
 
+    # --- DYNAMIC TASK FILTERING ---
     all_tasks = []
+    total_theoretical_tasks = num_of_grads * len(flip_states) * num_points
+
     for m in range(num_of_grads):
         for flip in flip_states:
             for v_idx, V in enumerate(V_vals):
-                all_tasks.append((m, v_idx, V, N_states, T0, checkpoint_dir, flip))
+                cp_path = checkpoint_dir / f"grad_{m}_vidx_{v_idx}_flip_{flip}.npy"
+                # ONLY append tasks that are actually missing from the disk
+                if not cp_path.exists():
+                    all_tasks.append((m, v_idx, V, N_states, T0, checkpoint_dir, flip))
 
     total_tasks = len(all_tasks)
+    print(f"Found {total_tasks} incomplete tasks out of {total_theoretical_tasks} total possible.", flush=True)
 
-    # Slurm chunk routing slicing parameters
+    if total_tasks == 0:
+        print("All tasks are already completed! Exiting.", flush=True)
+        sys.exit(0)
+
+    # BULLETPROOF SLURM PARSING LOGIC:
     try:
-        raw_chunk_id = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-        num_chunks = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+        raw_chunk_id = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))
+        num_chunks = int(sys.argv[2]) if len(sys.argv) > 2 else int(os.environ.get('SLURM_ARRAY_TASK_COUNT', 1))
     except ValueError:
-        raw_chunk_id = 0
-        num_chunks = 1
+        raw_chunk_id = int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))
+        num_chunks = int(os.environ.get('SLURM_ARRAY_TASK_COUNT', 1))
 
-    # BULLETPROOF LOGIC: Force bounds
+    # Clamp bounds to prevent overlap errors
     num_chunks = max(1, num_chunks)
     chunk_id = max(0, min(raw_chunk_id, num_chunks - 1))
 
@@ -762,7 +771,8 @@ if __name__ == '__main__':
         pf.write(f"Chunk ID               : {chunk_id} (of {num_chunks} total chunks)\n")
         pf.write(f"Global Precision (DPS) : {DPS}\n")
         pf.write(f"ProcessPool Workers    : {num_workers}\n")
-        pf.write(f"Total Tasks in Chunk   : {len(my_tasks)}\n")
+        pf.write(f"Total Missing Tasks    : {total_tasks}\n")
+        pf.write(f"Tasks in This Chunk    : {len(my_tasks)}\n")
         pf.write(f"N_states               : {N_states}\n")
         pf.write(f"T0                     : {T0}\n")
         pf.write(f"Cg                     : {Cg}\n")
@@ -770,7 +780,7 @@ if __name__ == '__main__':
         pf.write(f"D_ratio                : {D_ratio}\n")
         pf.write(f"Delta_0                : {Delta_0_float:.5e}\n")
 
-    print(f"Slicing Task Group: processing tasks {start_idx} to {end_idx} (Total: {len(my_tasks)}) on Pool.",
+    print(f"Slicing Task Group: processing missing tasks {start_idx} to {end_idx} (Total: {len(my_tasks)}) on Pool.",
           flush=True)
 
     if len(my_tasks) > 0:
