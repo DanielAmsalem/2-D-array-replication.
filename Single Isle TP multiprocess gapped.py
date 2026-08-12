@@ -111,30 +111,82 @@ def W(n, Qg, Vl, in_out, left_right):
 # MASTER INTEGRATION ALGORITHMS
 # ============================================================================
 
-def Gamma_cp(dE, T, Ec_val, Rt, D_local):
-    """Cooper pair transition rate using the local Temperature-dependent gap."""
-    if D_local <= 1e-8:
-        return 0.0  # Above Tc, Cooper pairs cease to exist
+def get_mapping(a, b, threshold):
+    """Affine mapping generator for tanh-sinh infinity bounds."""
+    if a == -mp.inf:
+        return lambda t: (b - t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
+    elif b == mp.inf:
+        return lambda t: (a + t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
+    else:
+        width = b - a
+        if width < threshold:
+            return None
+        return lambda t: (a + t * width, width)
 
-    # Convert inputs strictly to 50-dps mpmath objects
-    dE_mp = mp.mpf(str(dE))
-    T_mp = mp.mpf(str(T))
-    Rt_mp = mp.mpf(str(Rt))
+
+def integrand(T, dE, Ec_val):
+    """
+    P- function for high impedance (Normal Metal fallback).
+    """
+
+    def conv(E):
+        if mp.fabs(E) < 1e-8:
+            zero_limit_gauss = mp.exp(-((dE + Ec_val) ** 2) / (4 * Ec_val * T))
+            return zero_limit_gauss * mp.sqrt(T / (4 * mp.pi * Ec_val))
+
+        gauss = mp.exp(-((E + dE + Ec_val) ** 2) / (4 * Ec_val * T))
+        gauss = gauss / mp.sqrt(mp.pi * 4 * Ec_val * T)
+        bose_mean = E / (1 - mp.exp(-E / T))
+
+        return bose_mean * gauss
+
+    return conv
+
+
+def Gamma_cp(dE, T_i, T_j, gap_i, gap_j, Ec_val, Rt):
+    """Cooper pair transition rate handling asymmetric temperature/gap boundaries."""
+    # Convert inputs to mpmath floats for high precision
+    T_i_mp = mp.mpf(str(T_i))
+    T_j_mp = mp.mpf(str(T_j))
+    gap_i_mp = mp.mpf(str(gap_i))
+    gap_j_mp = mp.mpf(str(gap_j))
     Ec_mp = mp.mpf(str(Ec_val))
-    D_mp = mp.mpf(str(D_local))
+    Rt_mp = mp.mpf(str(Rt))
+    dE_mp = mp.mpf(str(dE))
 
-    # Ej = tanh * gap / 8Rt
-    tanh_val = mp.tanh(D_mp / (mp.mpf('2') * T_mp))
-    Ej = tanh_val * D_mp / (mp.mpf('8') * Rt_mp)
+    # 1. Junction Effective Temperature
+    T_ij = (T_i_mp + T_j_mp) / mp.mpf('2.0')
 
-    # Calculate P(E) Gaussian broadening
-    gauss = mp.exp(-((dE_mp + Ec_mp) ** 2) / (mp.mpf('4') * Ec_mp * T_mp))
-    gauss = gauss / mp.sqrt(mp.pi * mp.mpf('4') * Ec_mp * T_mp)
+    # 2. Extract smaller and larger gaps
+    gap_S = min(gap_i_mp, gap_j_mp)
+    if gap_S < 1e-6:
+        return 0.0  # Cooper pairs cannot exist if either side is a normal metal
+    gap_L = max(gap_i_mp, gap_j_mp)
 
-    return float(gauss * Ej * Ej * mp.pi)
+    # 3. Ota et al. Effective Gap using Complete Elliptic Integral
+    m_ij = mp.mpf('1.0') - (gap_S / gap_L) ** 2
+    K_elliptic = mp.ellipk(m_ij)
+    Delta_eff = (mp.mpf('2.0') / mp.pi) * gap_S * K_elliptic
+
+    # 4. Calculate Ej
+    tanh_val = mp.tanh(Delta_eff / (mp.mpf('2.0') * T_ij))
+    Ej = tanh_val * Delta_eff / (mp.mpf('8.0') * Rt_mp)
+
+    # 5. P(E) Calculation second harmonic gaussian
+    kappa_2 = mp.mpf('4.0')
+    mu = kappa_2 * Ec_mp
+
+    gauss_arg = -((dE_mp + mu) ** 2) / (mp.mpf('4.0') * mu * T_ij)
+    if gauss_arg < -100:
+        gauss = mp.mpf('0.0')
+    else:
+        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * mp.mpf('4.0') * mu * T_ij)
+
+    return float(gauss * (Ej * mp.pi) ** 2)
 
 
 def dos(E, D):
+    """BCS Density of states with strict cutoff."""
     if mpmath.fabs(E) <= D:
         return mp.mpf('0')
     val = E * E - D * D
@@ -144,15 +196,18 @@ def dos(E, D):
 
 
 def f(x, t):
-    if x / t > mp.mpf('1e50'):
+    """Safe Fermi-Dirac distribution."""
+    if x / t > mp.mpf('50'):
         return exp(-x / t)
-    if x / t < mp.mpf('-1e50'):
+    if x / t < mp.mpf('-50'):
         return mp.mpf('1')
     expon = exp(x / t)
     return mp.mpf('1') / (mp.mpf('1') + expon)
 
 
 def qp_integrand(T, dE, Ec_val, D):
+    """S-I-S Quasiparticle sub-integrand builder."""
+
     def conv(E, Etag):
         n_E = dos(E, D)
         if n_E == mp.mpf('0'):
@@ -170,17 +225,224 @@ def qp_integrand(T, dE, Ec_val, D):
     return conv
 
 
-def _calc_segments_gapped_master(args, dps):
+# ============================================================================
+# MASTER SOLVERS (N-I-S & S-I-S)
+# ============================================================================
+
+def _calc_segments_NIS_master(args, dps):
     """
-    Advanced adaptive segmented integration mapping that routes around density-of-states
-    singularities to evaluate quasiparticle rates down to 50 decimal digits of precision.
+    2D INTEGRATION METHOD (N-I-S BOUNDARY)
+    Master top-level worker function to calculate segmented probabilities for quasiparticles
+    transitioning between a Normal Metal electrode and a Superconducting island.
     """
     val = mp.mpf(args[0])
     temp = mp.mpf(args[1])
     Ec_val = mp.mpf(args[2])
     D_val = mp.mpf(args[3])
     eps = mp.mpf(args[4])
-    resistance = mp.mpf(args[5])  # Rl or Rr from exact diag
+    resistance = mp.mpf(args[5])
+
+    mp.dps = dps
+    threshold = mp.mpf('1e-20')
+
+    printing = np.random.uniform(0, 1)
+    if printing < 0.01:
+        print(f"START calculating NIS w = {float(val):.3f} [T={float(temp)}]", flush=True)
+
+    # HOTFIX: THE NORMAL METAL FALLBACK (For D = 0)
+    if D_val <= mp.mpf('1e-6'):
+        func = integrand(temp, val, Ec_val)
+        absval = mp.fabs(val + Ec_val)
+
+        limits = [-mp.inf, -absval, mp.mpf('0'), absval, mp.inf]
+        probability = mp.mpf('0')
+
+        for i in range(len(limits) - 1):
+            a = limits[i]
+            b = limits[i + 1]
+
+            if a == -mp.inf:
+                segment_prob = mp.quad(lambda t, b=b: func(b - t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2),
+                                       [0, 1], method='tanh-sinh')
+            elif b == mp.inf:
+                segment_prob = mp.quad(lambda t, a=a: func(a + t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2),
+                                       [0, 1], method='tanh-sinh')
+            else:
+                width = b - a
+                if width < mp.mpf('1e-8'): continue
+                segment_prob = mp.quad(lambda t, a=a, w=width: func(a + t * w) * w, [0, 1])
+
+            probability += segment_prob
+
+        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
+        return float(rate)
+
+    # EXACT N-I-S INTEGRATION
+    abs_val = mp.fabs(val)
+    sigma = mp.sqrt(2 * Ec_val * temp)
+    bracket_width = 5 * sigma
+    probability = mp.mpf('0')
+    theta_max = mp.mpf('12.0')
+
+    # CASE 1: Near or inside the gap
+    if abs_val < D_val + eps:
+        def mapped_integrand_NIS(theta1, Etag, sign_E):
+            E = sign_E * D_val * mp.cosh(theta1)
+            gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
+            if gauss_arg < -100: return mp.mpf('0')
+            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
+
+            f_E = f(E, temp)
+            f_Etag_w = f(Etag - val, temp)
+
+            # Normal metal DOS is strictly 1.0, so dEtag has no jacobian multiplier.
+            measure = mp.fabs(E)
+            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+        for s1 in [1, -1]:
+            def outer_E_inner_Etag(theta1, s1=s1):
+                E = s1 * D_val * mp.cosh(theta1)
+                peak = E - Ec_val
+
+                # Etag has no gap, we integrate smoothly over the entire real line
+                dynamic_limits = [-mp.inf, mp.mpf(val), peak - bracket_width, peak + bracket_width, mp.inf]
+                sorted_Etag = sorted(list(set(dynamic_limits)))
+                cleaned_Etag = [sorted_Etag[0]]
+                for cp in sorted_Etag[1:]:
+                    if cp - cleaned_Etag[-1] > threshold: cleaned_Etag.append(cp)
+
+                prob_inner = mp.mpf('0')
+                for i in range(len(cleaned_Etag) - 1):
+                    a = cleaned_Etag[i]
+                    b = cleaned_Etag[i + 1]
+                    if a == -mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, b=b: mapped_integrand_NIS(theta1, b - t / (mp.mpf('1') - t), s1) / (
+                                        (mp.mpf('1') - t) ** 2), [0, 1], method='tanh-sinh')
+                    elif b == mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, a=a: mapped_integrand_NIS(theta1, a + t / (mp.mpf('1') - t), s1) / (
+                                        (mp.mpf('1') - t) ** 2), [0, 1], method='tanh-sinh')
+                    else:
+                        width = b - a
+                        if width < mp.mpf('1e-8'): continue
+                        prob_inner += mp.quad(lambda t, a=a, w=width: mapped_integrand_NIS(theta1, a + t * w, s1) * w,
+                                              [0, 1], method='tanh-sinh')
+                return prob_inner
+
+            res = mp.quad(outer_E_inner_Etag, [0, theta_max], method='gauss-legendre')
+            probability += res
+
+        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
+        return float(rate)
+
+    # CASE 2: Far from the gap
+    else:
+        def func_NIS_local(E, Etag):
+            n_E = dos(E, D_val)
+            if n_E == mp.mpf('0'): return mp.mpf('0')
+            gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
+            if gauss_arg < -100: return mp.mpf('0')
+            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
+
+            f_E = f(E, temp)
+            f_Etag_w = f(Etag - val, temp)
+            # n_Etag has been strictly replaced by 1.0
+            return n_E * mp.mpf('1.0') * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+        limits_E_far_neg = [-mp.inf, -abs_val, -D_val - eps]
+        limits_E_far_pos = [D_val + eps, abs_val, mp.inf]
+
+        mappings_E = []
+        for lims in [limits_E_far_neg, limits_E_far_pos]:
+            for i in range(len(lims) - 1):
+                m = get_mapping(lims[i], lims[i + 1], threshold)
+                if m is not None: mappings_E.append(m)
+
+        for m_E in mappings_E:
+            def outer_integrand(t_E, m_E=m_E):
+                if t_E <= 0 or t_E >= 1: return mp.mpf('0')
+
+                E, jac_E = m_E(t_E)
+                peak_center = E - Ec_val
+
+                dynamic_limits = [-mp.inf, mp.mpf(val), peak_center - bracket_width, peak_center + bracket_width,
+                                  mp.inf]
+                sorted_Etag_limits = sorted(list(set(dynamic_limits)))
+                cleaned_limits = [sorted_Etag_limits[0]]
+                for cp in sorted_Etag_limits[1:]:
+                    if cp - cleaned_limits[-1] > threshold: cleaned_limits.append(cp)
+
+                inner_integral = mp.quad(lambda Etag: func_NIS_local(E, Etag), cleaned_limits, method='tanh-sinh')
+                return inner_integral * jac_E
+
+            segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh')
+            probability += segment_prob
+
+        # Inner Integrals (Near the Gap)
+        theta1_max = mp.acosh((D_val + eps) / D_val)
+
+        for s1 in [1, -1]:
+            def outer_integrand_near(theta1, s1=s1):
+                E = s1 * D_val * mp.cosh(theta1)
+                peak_center = E - Ec_val
+                prob_inner = mp.mpf('0')
+
+                dynamic_limits_far = [-mp.inf, mp.mpf(val), peak_center - bracket_width, peak_center + bracket_width,
+                                      mp.inf]
+                sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
+                cleaned_far = [sorted_Etag_far[0]]
+                for cp in sorted_Etag_far[1:]:
+                    if cp - cleaned_far[-1] > threshold: cleaned_far.append(cp)
+
+                for i in range(len(cleaned_far) - 1):
+                    a = cleaned_far[i]
+                    b = cleaned_far[i + 1]
+
+                    def inner_far_Etag(Etag):
+                        gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
+                        if gauss_arg < -100: return mp.mpf('0')
+                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
+                        f_E = f(E, temp)
+                        f_Etag_w = f(Etag - val, temp)
+
+                        measure_E = mp.fabs(E)
+                        return measure_E * mp.mpf('1.0') * f_E * (mp.mpf('1') - f_Etag_w) * gauss
+
+                    if a == -mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, b=b: inner_far_Etag(b - t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2), [0, 1],
+                            method='tanh-sinh')
+                    elif b == mp.inf:
+                        prob_inner += mp.quad(
+                            lambda t, a=a: inner_far_Etag(a + t / (mp.mpf('1') - t)) / ((mp.mpf('1') - t) ** 2), [0, 1],
+                            method='tanh-sinh')
+                    else:
+                        width = b - a
+                        if width < mp.mpf('1e-8'): continue
+                        prob_inner += mp.quad(lambda t, a=a, w=width: inner_far_Etag(a + t * w) * w, [0, 1],
+                                              method='tanh-sinh')
+
+                return prob_inner
+
+            res = mp.quad(outer_integrand_near, [0, theta1_max], method='gauss-legendre')
+            probability += res
+
+        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
+        return float(rate)
+
+
+def _calc_segments_gapped_master(args, dps):
+    """
+    Advanced adaptive segmented integration mapping that routes around density-of-states
+    singularities to evaluate S-I-S quasiparticle rates down to 50 decimal digits of precision.
+    """
+    val = mp.mpf(args[0])
+    temp = mp.mpf(args[1])
+    Ec_val = mp.mpf(args[2])
+    D_val = mp.mpf(args[3])
+    eps = mp.mpf(args[4])
+    resistance = mp.mpf(args[5])
 
     mp.dps = dps
     threshold = mp.mpf('1e-20')
@@ -199,7 +461,7 @@ def _calc_segments_gapped_master(args, dps):
             Etag = sign_Etag * D_val * mp.cosh(theta2) + val
 
             gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-            if gauss_arg < -200:
+            if gauss_arg < -100:
                 return mp.mpf('0')
             gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
 
@@ -223,28 +485,16 @@ def _calc_segments_gapped_master(args, dps):
         limits_E_far_neg = [-mp.inf, -abs_val, -D_val - eps]
         limits_E_far_pos = [D_val + eps, abs_val, mp.inf]
 
-        def get_mapping(a, b):
-            if a == -mp.inf:
-                return lambda t: (b - t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
-            elif b == mp.inf:
-                return lambda t: (a + t / (mp.mpf('1') - t), mp.mpf('1') / ((mp.mpf('1') - t) ** 2))
-            else:
-                width = b - a
-                if width < threshold:
-                    return None
-                return lambda t: (a + t * width, width)
-
         mappings_E = []
         for lims in [limits_E_far_neg, limits_E_far_pos]:
             for i in range(len(lims) - 1):
-                m_func = get_mapping(lims[i], lims[i + 1])
+                m_func = get_mapping(lims[i], lims[i + 1], threshold)
                 if m_func is not None:
                     mappings_E.append(m_func)
 
         for m_E in mappings_E:
             def outer_integrand(t_E, m_E=m_E):
-                if t_E <= 0 or t_E >= 1:
-                    return mp.mpf('0')
+                if t_E <= 0 or t_E >= 1: return mp.mpf('0')
 
                 E, jac_E = m_E(t_E)
                 peak_center = E - Ec_val
@@ -257,8 +507,7 @@ def _calc_segments_gapped_master(args, dps):
                 sorted_Etag_limits = sorted(list(set(dynamic_limits)))
                 cleaned_limits = [sorted_Etag_limits[0]]
                 for cp in sorted_Etag_limits[1:]:
-                    if cp - cleaned_limits[-1] > threshold:
-                        cleaned_limits.append(cp)
+                    if cp - cleaned_limits[-1] > threshold: cleaned_limits.append(cp)
 
                 inner_integral = mp.quad(lambda Etag: func(E, Etag), cleaned_limits, method='tanh-sinh')
                 return inner_integral * jac_E
@@ -278,8 +527,7 @@ def _calc_segments_gapped_master(args, dps):
                     def inner_near_Etag(theta2, s2=s2):
                         Etag = val + s2 * D_val * mp.cosh(theta2)
                         gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-                        if gauss_arg < -200:
-                            return mp.mpf('0')
+                        if gauss_arg < -100: return mp.mpf('0')
                         gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
                         f_E = f(E, temp)
                         f_Etag_w = f(Etag - val, temp)
@@ -297,22 +545,19 @@ def _calc_segments_gapped_master(args, dps):
                 sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
                 cleaned_far = [sorted_Etag_far[0]]
                 for cp in sorted_Etag_far[1:]:
-                    if cp - cleaned_far[-1] > threshold:
-                        cleaned_far.append(cp)
+                    if cp - cleaned_far[-1] > threshold: cleaned_far.append(cp)
 
                 for i in range(len(cleaned_far) - 1):
                     a = cleaned_far[i]
                     b = cleaned_far[i + 1]
                     mid = (a + b) / mp.mpf('2.0')
-
-                    if val - D_val - eps < mid < val + D_val + eps:
-                        continue
+                    if val - D_val - eps < mid < val + D_val + eps: continue
 
                     def inner_far_Etag(Etag):
                         n_Etag = dos(Etag - val, D_val)
                         if n_Etag == mp.mpf('0'): return mp.mpf('0')
                         gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-                        if gauss_arg < -200: return mp.mpf('0')
+                        if gauss_arg < -100: return mp.mpf('0')
                         gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
 
                         measure_E = mp.fabs(E)
@@ -325,28 +570,38 @@ def _calc_segments_gapped_master(args, dps):
             res = mp.quad(outer_integrand_near, [0, theta1_max], method='gauss-legendre')
             probability += res
 
-        # Apply standard (1 / (e^2 R_T)) multiplier for standard quasiparticles
         rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
         return float(rate)
 
 
 # ============================================================================
-# MEMOIZATION CACHE
+# MEMOIZATION CACHES & WRAPPERS
 # ============================================================================
+
+@functools.lru_cache(maxsize=None)
+def _cached_NIS_master_call(dE_str, T_str, Ec_str, D_gap_str, eps_str, resistance_str):
+    args = [dE_str, T_str, Ec_str, D_gap_str, eps_str, resistance_str]
+    return float(_calc_segments_NIS_master(args, DPS))
+
+
 @functools.lru_cache(maxsize=None)
 def _cached_gapped_master_call(dE_str, T_str, Ec_str, D_gap_str, eps_str, resistance_str):
-    """Hidden cached caller to prevent redundant 50-DPS integrations."""
     args = [dE_str, T_str, Ec_str, D_gap_str, eps_str, resistance_str]
     return float(_calc_segments_gapped_master(args, DPS))
 
 
-def Gamma(dE, T, resistance, D_local):
-    """Wrapper mapping to Quasiparticle integrator with explicit D_local passed."""
+def Gamma_NIS(dE, T, resistance, D_local):
+    """Wrapper mapping to N-I-S Quasiparticle integrator with explicit D_local passed."""
     if D_local <= 1e-8:
-        # If D is strictly 0 (above Tc), standard Normal Metal integrators should ideally be used.
-        # But setting D to a microscopic non-zero prevents divide-by-zero if passed to SC DOS logic.
         D_local = 1e-12
+    mp.dps = DPS
+    return _cached_NIS_master_call(str(dE), str(T), str(Ec), str(D_local), '1e-10', str(resistance))
 
+
+def Gamma_SIS(dE, T, resistance, D_local):
+    """Wrapper mapping to S-I-S Quasiparticle integrator with explicit D_local passed."""
+    if D_local <= 1e-8:
+        D_local = 1e-12
     mp.dps = DPS
     return _cached_gapped_master_call(str(dE), str(T), str(Ec), str(D_local), '1e-10', str(resistance))
 
@@ -375,17 +630,19 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
         # Calculate the steady state gate charge for state n just once per loop
         Qg_current = Qn(Vl, n)
 
-        G_L_plus[n] = Gamma(W(n, Qg_current, Vl, 1, "left"), T_l, Rl, D_l)
-        G_L_minus[n] = Gamma(W(n, Qg_current, Vl, -1, "left"), Tdot, Rl, D_dot)
-        G_R_plus[n] = Gamma(W(n, Qg_current, Vl, 1, "right"), T_r, Rr, D_r)
-        G_R_minus[n] = Gamma(W(n, Qg_current, Vl, -1, "right"), Tdot, Rr, D_dot)
+        # 1e Hopping Rates (Assuming Boundary Electrodes are Normal Metals, meaning transitions are N-I-S)
+        G_L_plus[n] = Gamma_NIS(W(n, Qg_current, Vl, 1, "left"), T_l, Rl, D_dot)
+        G_L_minus[n] = Gamma_NIS(W(n, Qg_current, Vl, -1, "left"), Tdot, Rl, D_dot)
+        G_R_plus[n] = Gamma_NIS(W(n, Qg_current, Vl, 1, "right"), T_r, Rr, D_dot)
+        G_R_minus[n] = Gamma_NIS(W(n, Qg_current, Vl, -1, "right"), Tdot, Rr, D_dot)
 
+        # 2e Hopping Rates (Cooper pairs using Ota et al. Asymmetric formulation)
         if n + 2 <= N:
-            G_L_plus2[n] = Gamma_cp(W(n, Qg_current, Vl, 2, "left"), T_l, Ec, Rl, D_l)
-            G_R_plus2[n] = Gamma_cp(W(n, Qg_current, Vl, 2, "right"), T_r, Ec, Rr, D_r)
+            G_L_plus2[n] = Gamma_cp(W(n, Qg_current, Vl, 2, "left"), T_l, Tdot, D_l, D_dot, Ec, Rl)
+            G_R_plus2[n] = Gamma_cp(W(n, Qg_current, Vl, 2, "right"), T_r, Tdot, D_r, D_dot, Ec, Rr)
         if n - 2 >= 0:
-            G_L_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "left"), Tdot, Ec, Rl, D_dot)
-            G_R_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "right"), Tdot, Ec, Rr, D_dot)
+            G_L_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "left"), Tdot, T_l, D_dot, D_l, Ec, Rl)
+            G_R_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "right"), Tdot, T_r, D_dot, D_r, Ec, Rr)
 
         gc.collect()
 
@@ -427,7 +684,6 @@ def worker_single_point(task_args):
     m, v_idx, V, N_states_task, T0, cp_dir, flip = task_args
 
     # --- RESILIENCE CHECK ---
-    # Construct path and check if calculation is already done
     cp_path = Path(cp_dir) / f"grad_{m}_vidx_{v_idx}_flip_{flip}.npy"
     if cp_path.exists():
         print(f"Worker SKIPPING grad {m}, Vl = {V:.3f} V, flip = {flip} (Already computed).", flush=True)
