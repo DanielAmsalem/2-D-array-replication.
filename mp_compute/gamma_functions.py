@@ -709,3 +709,258 @@ def Get_Steady_State(
 
         I_vec[cycle] = I_avg
     return SteadyStateResult(loop_index, error_count, I_vec, Jx, Jy)
+
+
+def Get_Steady_State_fixed_bias(
+        loop_index: int,
+        init: ExperimentInitialState,
+        fixed_voltage: float,
+        valid_n_list: list,
+        sim_data: dict,
+        io_lock,
+        flip: bool,
+        periodic_y: bool,
+        gap_ratio: float
+):
+    error_count = 0
+
+    # ---------------------------------------------------------
+    # CONTINUOUS STATES: Initialized OUTSIDE the loop.
+    # Physical charge carries over between gradients to save time!
+    # ---------------------------------------------------------
+    Qg = np.zeros(init.array_size)
+    n = np.zeros(init.array_size)
+
+    # Output vectors scaled to the number of temperature gradients
+    I_vec = np.zeros(len(valid_n_list))
+    Jx, Jy = np.zeros((init.row_num, init.row_num + 1)), np.zeros((init.row_num, init.row_num + 1))
+
+    # ---------------------------------------------------------
+    # OUTER LOOP: Sweeping Temperature Gradients (n_grad)
+    # ---------------------------------------------------------
+    for step_idx, n_grad in enumerate(valid_n_list):
+
+        # --- 1. JIT MEMORY LOADING ---
+        step_metadata = sim_data[n_grad]
+        with io_lock:
+            table_triplets = np.load(step_metadata["table_path"])
+            table_val = table_triplets["val"]
+            table_prob = table_triplets["prob"]
+            table_T = np.unique(table_triplets["temp"]).tolist()
+
+            # Safely handle Boundary NIS tables if they were generated
+            nis_table_val, nis_table_prob = None, None
+            if "nis_table_path" in step_metadata:
+                nis_triplets = np.load(step_metadata["nis_table_path"])
+                nis_table_val = nis_triplets["val"]
+                nis_table_prob = nis_triplets["prob"]
+
+        # --- 2. DYNAMIC PHYSICS EXTRACTION ---
+        expected_error = step_metadata["expected_error"]
+        gap_array = step_metadata["gap_array"]
+        pos_energy_bound = step_metadata["pos_energy_bound"]
+        neg_energy_bound = step_metadata["neg_energy_bound"]
+        T = step_metadata["T"]
+
+        # --- 3. RUNNING AVERAGE RESET ---
+        # Averages MUST reset to zero to track convergence to the NEW steady state
+        Q_avg, Q_var = np.zeros(init.array_size), np.zeros(init.array_size)
+        n_avg, n_var = np.zeros(init.array_size), np.zeros(init.array_size)
+
+        # --- 4. COUNTER RESET ---
+        k = 0
+        zero_curr_steady_state_counter = 0
+        not_decreasing = 0
+
+        not_in_steady_state = True
+        t = 0
+        t_ss = 0
+        I_avg, I_var = 0, 0
+        dist = 0
+
+        steady_state_timer = init.timeStep
+        steady_state_reps = init.Steady_state_rep * 5
+
+        # ---------------------------------------------------------
+        # INNER LOOP: Monte Carlo / Tau Leaping for a fixed gradient
+        # ---------------------------------------------------------
+        while not_in_steady_state:
+            k += 1
+
+            # Use fixed_voltage instead of cycle_voltage
+            VxCix = F.get_VxCix(fixed_voltage, init.Vright, init.array_size, init.near_left, init.near_right, init.Cix)
+            V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)
+
+            if k == 1 and not loop_index % 5:
+                print(f"T_std={n_grad}/20, {loop_index=}: fixed voltage is {fixed_voltage}", flush=True)
+
+            reaction_index_list = []
+            Gamma = []
+
+            if abs(gap_ratio) < 1e-3:
+                # normal metalic island case
+                Gamma, reaction_index_list = Get_Gamma(
+                    Gamma_=Gamma,
+                    e=init.e,
+                    reaction_index_=reaction_index_list,
+                    n_list=n,
+                    curr_V=V,
+                    cycle_voltage_=fixed_voltage,
+                    array_size=init.array_size,
+                    islands=init.islands,
+                    row_num=init.row_num,
+                    C_inv=init.C_inv,
+                    pos_energy_bound=pos_energy_bound,
+                    neg_energy_bound=neg_energy_bound,
+                    T_gradient=T,
+                    R_t_ij=init.R_t_ij,
+                    R_t_i=init.R_t_i,
+                    near_left=init.near_left,
+                    near_right=init.near_right,
+                    Vright=init.Vright,
+                    Ec=init.Ec,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                    T_table=table_T,
+                    flip=flip,
+                    periodic_y=periodic_y)
+
+                R = np.sum(Gamma)
+                if R > max(fixed_voltage / init.CondRg, 1e-10):
+                    zero_curr_steady_state_counter = 0
+                    eta = 1 - np.random.random()
+                    dt = float(np.log(1 / eta) / R)
+                    if dt <= 0:
+                        raise ValueError
+                    n, l, m, chosen_rate = execute_transition(Gamma, n, reaction_index_list, init.e)
+
+                else:
+                    dt = init.default_dt
+                    firings = np.random.poisson(np.array(Gamma) * dt)
+                    if np.any(firings > 0):
+                        zero_curr_steady_state_counter = 0
+                        n = apply_multiple_transitions(n, reaction_index_list, firings, init.e)
+                    else:
+                        zero_curr_steady_state_counter += 1
+                        if (
+                                zero_curr_steady_state_counter % init.Steady_state_rep == 1 and zero_curr_steady_state_counter > 2):
+                            not_in_steady_state = False
+
+            else:
+                # gapped case
+                Gamma, reaction_index_list = Get_Gamma_gapped(
+                    Gamma_=Gamma,
+                    e=init.e,
+                    reaction_index_=reaction_index_list,
+                    n_list=n,
+                    curr_V=V,
+                    cycle_voltage_=fixed_voltage,
+                    array_size=init.array_size,
+                    islands=init.islands,
+                    row_num=init.row_num,
+                    C_inv=init.C_inv,
+                    pos_energy_bound=pos_energy_bound,
+                    neg_energy_bound=neg_energy_bound,
+                    T_gradient=T,
+                    R_t_ij=init.R_t_ij,
+                    R_t_i=init.R_t_i,
+                    near_left=init.near_left,
+                    near_right=init.near_right,
+                    Vright=init.Vright,
+                    Ec=init.Ec,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                    nis_table_val=nis_table_val,
+                    nis_table_prob=nis_table_prob,
+                    T_table=table_T,
+                    flip=flip,
+                    periodic_y=periodic_y,
+                    gap_array=gap_array)
+
+                R = np.sum(Gamma)
+                if R > max(fixed_voltage / init.CondRg, 1e-10):
+                    zero_curr_steady_state_counter = 0
+                    eta = 1 - np.random.random()
+                    dt = float(np.log(1 / eta) / R)
+                    if dt <= 0:
+                        raise ValueError
+                    n, l, m, chosen_rate = execute_gapped_transition(Gamma, n, reaction_index_list, init.e)
+
+                else:
+                    dt = init.default_dt
+                    firings = np.random.poisson(np.array(Gamma) * dt)
+                    if np.any(firings > 0):
+                        zero_curr_steady_state_counter = 0
+                        n = apply_multiple_transitions(n, reaction_index_list, firings, init.e)
+                    else:
+                        zero_curr_steady_state_counter += 1
+                        if (
+                                zero_curr_steady_state_counter % init.Steady_state_rep == 1 and zero_curr_steady_state_counter > 2):
+                            not_in_steady_state = False
+
+            # solve ODE to update Qg
+            Qg = F.developQ(Qg, dt, n, VxCix, init)
+
+            # update statistics
+            if steady_state_reps <= 0:
+                I_right, I_down = F.Get_current_from_gamma(Gamma, reaction_index_list, init.near_right, init.near_left,
+                                                           init.row_num, periodic_y=periodic_y)
+                I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t_ss, dt)
+                t_ss += dt
+
+            Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
+            n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
+
+            # check distance against the dynamically updated expected_error
+            steady_Q = F.return_Qn_for_n(n_avg, VxCix, init)
+            dist_new = np.max(np.abs(steady_Q - Q_avg))
+            max_diff_index = np.argmax(dist_new)
+
+            if k > 100:
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))) / np.sqrt(len(Q_avg))
+
+                if dist_new - dist > min(std, expected_error):
+                    not_decreasing += 1
+                    steady_state_reps = init.Steady_state_rep * 5
+                    t_ss = 0
+                    I_avg, I_var = 0, 0
+
+                    if not not_decreasing % init.max_count:
+                        error_count += 1
+                        not_in_steady_state = False
+
+                elif abs(dist_new) < expected_error:
+                    steady_state_reps -= 1
+                    if steady_state_reps <= 0:
+                        steady_state_timer -= dt
+
+                        # Capture the heatmap unconditionally at steady state
+                        Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index_list, init.near_right, init.near_left,
+                                                     init.row_num, n, periodic_y=periodic_y)
+                        Jx += Jx_
+                        Jy += Jy_
+
+                        if steady_state_timer <= 0:
+                            not_in_steady_state = False
+
+                else:
+                    steady_state_timer = init.timeStep
+                    steady_state_reps = init.Steady_state_rep * 5
+                    t_ss = 0
+                    I_avg, I_var = 0, 0
+
+            dist = dist_new
+            t += dt
+
+        # Log final current for this specific temperature gradient
+        I_vec[step_idx] = I_avg
+
+        # --- 5. EXPLICIT MEMORY FREE ---
+        # Allow Python's GC to destroy the 15MB arrays before the next iteration
+        del table_triplets
+        del table_val
+        del table_prob
+        if nis_table_val is not None:
+            del nis_triplets, nis_table_val, nis_table_prob
+
+    return SteadyStateResult(loop_index, error_count, I_vec, Jx, Jy)
