@@ -85,7 +85,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
                      list(range(20, 40, 2)) +
                      list(range(40, 80, 4)) +
                      list(range(80, 200, 16)) +
-                     list(range(200, 501, 30))
+                     list(range(200, 500, 30)) +
+                     list(range(500, 2001, 50))
                      )
 
     # MESSAGES
@@ -97,6 +98,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
     print(f"stdR = {stdR}")
     print(f"sig = {sig}")
     print(f"Fixed Voltage Bias = {FIXED_VOLTAGE}", flush=True)
+    print(f"Intended Gradients: min(n)={min(n_list_master)}, max(n)={max(n_list_master)}", flush=True)
     print(f"############# INITIALIZING GRID ##################")
 
     if is_resumed:
@@ -146,7 +148,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
     print("############# PRE-LOADING METADATA (NO TABLES) ##################", flush=True)
     Delta_0 = gap_ratio * init.Ec
 
-    # 1. Parse CSV Bounds Once
+    # Parse CSV Bounds Once
     bounds_dict = {}
     with open(import_export.csv_table_path) as f:
         for row in csv.reader(f):
@@ -155,7 +157,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
                     rep_idx = int(row[0])
                     bounds_dict[rep_idx] = {"neg": float(row[1]), "pos": float(row[2])}
 
-    # 2. Build Memory-Resident Data Dictionary for all n
+    # Build Memory-Resident Data Dictionary for all n
     simulation_data_dict = {}
     valid_n_list = []
 
@@ -193,13 +195,21 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
 
     print(f"Pre-loaded metadata for {len(valid_n_list)} temperature profiles.", flush=True)
 
+    # 2. Print VERIFIED bounds
+    if valid_n_list:
+        print(f"---> Verified target gradients: min(n) = {min(valid_n_list)} | max(n) = {max(valid_n_list)}",
+              flush=True)
+    else:
+        print("---> CRITICAL ERROR: No valid gradients found! Check your CSV bounds and .npz file paths.", flush=True)
+        return
+
     print("############# RUNNING MULTIPROCESSING ARRAY ##################", flush=True)
     marker_file = import_export.results_dir_path / f".completed_task{TASK_ID}"
     if marker_file.exists():
         print(f"Task {TASK_ID} already completed. Exiting.", flush=True)
         return
 
-    # 3. CREATE THE I/O LOCK
+    # CREATE THE I/O LOCK
     manager = multiprocessing.Manager()
     io_lock = manager.Lock()
 
@@ -214,7 +224,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             fixed_voltage=FIXED_VOLTAGE,
             valid_n_list=valid_n_list,
             sim_data=simulation_data_dict,
-            io_lock=io_lock,  # <--- NEW I/O LOCK ARGUMENT
+            io_lock=io_lock,  # <--- I/O LOCK ARGUMENT
             flip=flip,
             periodic_y=periodic_y,
             gap_ratio=gap_ratio
@@ -267,16 +277,16 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             N_valid = len(valid_results)
             print(f"Task {TASK_ID} finished computing. Aggregating {N_valid} valid loops.", flush=True)
 
-            # 1. Stack all individual I_vec arrays into a 2D matrix of shape (N_valid, cycles)
+            # Stack all individual I_vec arrays into a 2D matrix of shape (N_valid, cycles)
             all_I_vecs = np.array([res.I_vec for res in valid_results])
 
-            # 2. Vectorized Mean: Calculate average across the 0th axis (columns/loops)
+            # Vectorized Mean: Calculate average across the 0th axis (columns/loops)
             avg_currents = np.mean(all_I_vecs, axis=0)
 
-            # 3. Vectorized Standard Deviation (ddof=1 gives unbiased sample variance)
+            # Vectorized Standard Deviation (ddof=1 gives unbiased sample variance)
             std_currents = np.std(all_I_vecs, axis=0, ddof=1)
 
-            # 4. Standard Error of the Mean (What you actually plot for error bars)
+            # Standard Error of the Mean (What you actually plot for error bars)
             err_currents = std_currents / np.sqrt(N_valid)
 
             # Output specific task CSV
@@ -364,7 +374,7 @@ if __name__ == "__main__":
                        range(501)]
         csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
     else:
-        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(501)]
+        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(2001)]
         csv_table_path = MP_COMPUTE_PATH / f"table_Cg{Cg}.csv"
 
     main(
