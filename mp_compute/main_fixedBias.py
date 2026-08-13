@@ -80,14 +80,17 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
     stdR = 2
     sig = 0.05
 
-    # HARDCODED TEMPERATURE SWEEP TARGETS
-    n_list_master = (list(range(1, 20)) +
-                     list(range(20, 40, 2)) +
-                     list(range(40, 80, 4)) +
-                     list(range(80, 200, 16)) +
-                     list(range(200, 500, 30)) +
-                     list(range(500, 2001, 50))
-                     )
+    # TEMPERATURE SWEEP TARGETS
+    n_list_up = (list(range(1, 20)) +
+                 list(range(20, 40, 2)) +
+                 list(range(40, 80, 4)) +
+                 list(range(80, 200, 16)) +
+                 list(range(200, 500, 30)) +
+                 list(range(500, 2001, 50))
+                 )
+
+    # Concatenate the up-sweep and the down-sweep (skipping the duplicate peak)
+    n_list_master = n_list_up + n_list_up[-2::-1]
 
     # MESSAGES
     print(f"############# MAIN PARAMETERS ##################")
@@ -159,9 +162,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
 
     # Build Memory-Resident Data Dictionary for all n
     simulation_data_dict = {}
-    valid_n_list = []
+    unique_n_values = sorted(list(set(n_list_master)))
 
-    for n in n_list_master:
+    for n in unique_n_values:
         if n not in bounds_dict:
             print(f"Warning: n={n} missing from bounds table. Skipping.")
             continue
@@ -177,7 +180,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             print(f"Warning: Table file missing for n={n}. Skipping.")
             continue
 
-        # PRE-CALCULATE PHYSICS, BUT DO NOT LOAD THE .NPZ
+        # PRE-CALCULATE PHYSICS ONCE PER UNIQUE GRADIENT
         gap_array = F.exact_bcs_gap(T_list, Delta_0)
         expected_err = F.calc_expected_dist_std(T_list, init.T0, gap_array, init.R_t_ij, init.Ec)
 
@@ -191,14 +194,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             "pos_energy_bound": bounds_dict[n]["pos"],
             "neg_energy_bound": bounds_dict[n]["neg"]
         }
-        valid_n_list.append(n)
 
-    print(f"Pre-loaded metadata for {len(valid_n_list)} temperature profiles.", flush=True)
+    print(f"Pre-loaded metadata for {len(simulation_data_dict)} unique temperature profiles.", flush=True)
 
-    # 2. Print VERIFIED bounds
-    if valid_n_list:
-        print(f"---> Verified target gradients: min(n) = {min(valid_n_list)} | max(n) = {max(valid_n_list)}",
-              flush=True)
+    # Build the actual chronological sequence of gradients to compute
+    sweep_sequence = [n for n in n_list_master if n in simulation_data_dict]
+
+    if sweep_sequence:
+        print(f"---> Verified Sequence Length: {len(sweep_sequence)} steps (Up and Down).", flush=True)
     else:
         print("---> CRITICAL ERROR: No valid gradients found! Check your CSV bounds and .npz file paths.", flush=True)
         return
@@ -222,9 +225,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             Get_Steady_State_fixed_bias,
             init=init,
             fixed_voltage=FIXED_VOLTAGE,
-            valid_n_list=valid_n_list,
+            sweep_sequence=sweep_sequence,
             sim_data=simulation_data_dict,
-            io_lock=io_lock,  # <--- I/O LOCK ARGUMENT
+            io_lock=io_lock,
             flip=flip,
             periodic_y=periodic_y,
             gap_ratio=gap_ratio
@@ -293,12 +296,13 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
             out_csv_path = import_export.results_dir_path / f"fixed_bias_task{TASK_ID}.csv"
             with open(out_csv_path, mode="w", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["n", "T_std", "delta_T", "I_avg", "I_err"])
+                # Added 'step_idx' to track chronological order
+                writer.writerow(["step_idx", "n", "T_std", "delta_T", "I_avg", "I_err"])
 
-                for idx, n in enumerate(valid_n_list):
+                for idx, n in enumerate(sweep_sequence):
                     T_std = simulation_data_dict[n]["T_std"]
                     delta_T = 0.001 + 0.006 * (n / 20)
-                    writer.writerow([n, T_std, delta_T, avg_currents[idx], err_currents[idx]])
+                    writer.writerow([idx, n, T_std, delta_T, avg_currents[idx], err_currents[idx]])
 
             print(f"Saved local task output to {out_csv_path.name}")
 
