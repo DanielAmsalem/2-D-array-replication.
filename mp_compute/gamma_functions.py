@@ -715,7 +715,7 @@ def Get_Steady_State_fixed_bias(
         loop_index: int,
         init: ExperimentInitialState,
         fixed_voltage: float,
-        valid_n_list: list,
+        sweep_sequence: list,  # <--- Renamed to match the up-and-down sequence
         sim_data: dict,
         io_lock,
         flip: bool,
@@ -726,19 +726,19 @@ def Get_Steady_State_fixed_bias(
 
     # ---------------------------------------------------------
     # CONTINUOUS STATES: Initialized OUTSIDE the loop.
-    # Physical charge carries over between gradients to save time!
+    # Physical charge carries over between gradients to simulate hysteresis!
     # ---------------------------------------------------------
     Qg = np.zeros(init.array_size)
     n = np.zeros(init.array_size)
 
-    # Output vectors scaled to the number of temperature gradients
-    I_vec = np.zeros(len(valid_n_list))
+    # Output vectors scaled to the total number of sequence steps
+    I_vec = np.zeros(len(sweep_sequence))
     Jx, Jy = np.zeros((init.row_num, init.row_num + 1)), np.zeros((init.row_num, init.row_num + 1))
 
     # ---------------------------------------------------------
-    # OUTER LOOP: Sweeping Temperature Gradients (n_grad)
+    # OUTER LOOP: Sweeping Temperature Gradients (Up then Down)
     # ---------------------------------------------------------
-    for step_idx, n_grad in enumerate(valid_n_list):
+    for step_idx, n_grad in enumerate(sweep_sequence):  # <--- Iterate over the sequence
 
         # --- 1. JIT MEMORY LOADING ---
         step_metadata = sim_data[n_grad]
@@ -791,8 +791,9 @@ def Get_Steady_State_fixed_bias(
             VxCix = F.get_VxCix(fixed_voltage, init.Vright, init.array_size, init.near_left, init.near_right, init.Cix)
             V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)
 
-            if k == 1 and not loop_index % 5:
-                print(f"T_std={n_grad}/20, {loop_index=}: fixed voltage is {fixed_voltage}", flush=True)
+            if k == 1:
+                # Clarified the print statement to reflect sequential tracking
+                print(f"Step {step_idx} | T_std={n_grad}/20, {loop_index=}: fixed voltage is {fixed_voltage}", flush=True)
 
             reaction_index_list = []
             Gamma = []
@@ -952,11 +953,10 @@ def Get_Steady_State_fixed_bias(
             dist = dist_new
             t += dt
 
-        # Log final current for this specific temperature gradient
+        # Log final current into the chronologically indexed array
         I_vec[step_idx] = I_avg
 
         # --- 5. EXPLICIT MEMORY FREE ---
-        # Allow Python's GC to destroy the 15MB arrays before the next iteration
         del table_triplets
         del table_val
         del table_prob
