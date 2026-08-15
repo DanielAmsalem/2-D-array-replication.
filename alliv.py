@@ -421,15 +421,6 @@ def run_analysis_mode(base_dir):
     # Process and Plot for each unique physical system
     for sys_key, data in system_groups.items():
 
-        # PRE-FILTER DATA BEFORE COLORMAP & PLOTTING LOGIC
-        if REP_LIST:
-            filtered_data = [d for d in data if d['Repetition'] in REP_LIST]
-        else:
-            filtered_data = data
-
-        if not filtered_data:
-            continue
-
         D, Cg, stdR, sig, T0, midfix, Tmid = sys_key
 
         # --- DYNAMIC FOLDER AND TITLE FORMATTING ---
@@ -448,6 +439,28 @@ def run_analysis_mode(base_dir):
 
         sys_dir = output_dir / sys_folder_name
         sys_dir.mkdir(exist_ok=True)
+
+        # ==========================================================
+        # PHASE 1: DYNAMIC CSV PATHING AND DATA LOADING (Vth Analysis)
+        # ==========================================================
+        vth_base_dir = Path("/home/amsalda/Vth_vs_dT_graphs/")
+        vth_csv_path = vth_base_dir / sys_folder_name / "aggregated_Vth_results.csv"
+        df_vth = None
+
+        if vth_csv_path.exists():
+            df_vth = pd.read_csv(vth_csv_path)
+        else:
+            print(
+                f"Warning: Vth threshold data not found at {vth_csv_path}. Skipping Graph 4 (Density) for this system.")
+
+        # PRE-FILTER DATA BEFORE COLORMAP & PLOTTING LOGIC
+        if REP_LIST:
+            filtered_data = [d for d in data if d['Repetition'] in REP_LIST]
+        else:
+            filtered_data = data
+
+        if not filtered_data:
+            continue
 
         # Sort dynamically maps data from most negative (flip=True) to most positive (flip=False)
         filtered_data = sorted(filtered_data, key=lambda x: x['Delta_T'])
@@ -577,12 +590,55 @@ def run_analysis_mode(base_dir):
             plt.close(fig_down)
 
         # ==========================================================
+        # PHASE 2: DATA MERGING AND ERROR PROPAGATION FOR GRAPH 4
+        # ==========================================================
+        rho_up, rho_down = [], []
+        rho_err_up, rho_err_down = [], []
+        dT_density = []
+        Ec = 0.5/Cg
+
+        if df_vth is not None:
+            for d in data:
+                # Find matching row in Vth dataframe
+                diffs = (df_vth['Delta_T'] - d['Delta_T']).abs()
+                closest_idx = diffs.idxmin()
+
+                # Safety Check: only proceed if we found a valid dT match
+                if diffs[closest_idx] < 1e-4:
+                    vth_row = df_vth.loc[closest_idx]
+
+                    vth_up = vth_row['Vth_Up']
+                    vth_err_up = vth_row['Vth_err_up']
+                    vth_down = vth_row['Vth_Down']
+                    vth_err_down = vth_row['Vth_err_down']
+
+                    n_up = d['Num_Steps_Up']
+                    n_down = d['Num_Steps_Down']
+
+                    denom_up = 4.0 - vth_up
+                    denom_down = 4.0 - vth_down
+
+                    # Compute Density and Error
+                    if denom_up > 0 and denom_down > 0:
+                        r_up = n_up / denom_up
+                        r_down = n_down / denom_down
+
+                        r_err_up = (r_up / denom_up) * vth_err_up
+                        r_err_down = (r_down / denom_down) * vth_err_down
+
+                        rho_up.append(r_up)
+                        rho_down.append(r_down)
+                        rho_err_up.append(r_err_up)
+                        rho_err_down.append(r_err_down)
+                        dT_density.append(d['Delta_T']/Ec)
+
+        # ==========================================================
         # GRAPH 3: Number of Steps vs. Temperature Gradient (Delta T)
         # ==========================================================
         # Note: This is drawn outside the 'with_error' multiplier loop using raw 'data'
         fig_steps, ax_steps = plt.subplots(figsize=(10, 8))
 
-        dT_vals = [d['Delta_T'] for d in data]
+        dT_vals = [d['Delta_T']/Ec for d in data]
         steps_up = [d['Num_Steps_Up'] for d in data]
         steps_down = [d['Num_Steps_Down'] for d in data]
 
@@ -592,7 +648,7 @@ def run_analysis_mode(base_dir):
         ax_steps.scatter(dT_vals, steps_down, marker='s', color='dodgerblue',
                          s=50, edgecolors='k', label='Down Sweep', zorder=2)
 
-        ax_steps.set_xlabel(r'Temperature Gradient $\Delta T \left[ \frac{e^2}{k_B \langle C \rangle} \right]$',
+        ax_steps.set_xlabel(r'Temperature Gradient $\Delta T/E_c$',
                             labelpad=15)
         ax_steps.set_ylabel(r'Number of Steps', labelpad=15)
         ax_steps.yaxis.set_major_locator(MaxNLocator(integer=True))
@@ -608,6 +664,37 @@ def run_analysis_mode(base_dir):
         out_name_steps = 'Steps_vs_DeltaT.pdf'
         plt.savefig(sys_dir / out_name_steps, format='pdf', bbox_inches='tight')
         plt.close(fig_steps)
+
+        # ==========================================================
+        # PHASE 3: GRAPH 4 - Density of Steps vs. Temperature Gradient
+        # ==========================================================
+        if df_vth is not None and len(dT_density) > 0:
+            fig_density, ax_density = plt.subplots(figsize=(10, 8))
+
+            ax_density.errorbar(dT_density, rho_up, yerr=rho_err_up, fmt='o',
+                                color='crimson', markeredgecolor='k', markersize=7,
+                                capsize=2, elinewidth=1.5, linestyle='None',
+                                label='Up Sweep', zorder=2)
+
+            ax_density.errorbar(dT_density, rho_down, yerr=rho_err_down, fmt='s',
+                                color='dodgerblue', markeredgecolor='k', markersize=7,
+                                capsize=2, elinewidth=1.5, linestyle='None',
+                                label='Down Sweep', zorder=2)
+
+            ax_density.set_xlabel(r'Temperature Gradient $\Delta T/E_c$',
+                                  labelpad=15)
+            ax_density.set_ylabel(r'Density of Steps $\left[ \frac{\langle C \rangle}{e} \right]$', labelpad=15)
+
+            density_title = rf"Density of Steps as a Function of $\Delta T$" + f"\n{title_str}"
+            ax_density.set_title(density_title, pad=20)
+
+            ax_density.grid(True, linestyle='--', linewidth=0.5, color='lightgray', zorder=1)
+            ax_density.legend(loc='upper left', fontsize=16, framealpha=0.9, edgecolor='gray')
+
+            plt.tight_layout()
+            out_name_density = 'Density_vs_DeltaT.pdf'
+            plt.savefig(sys_dir / out_name_density, format='pdf', bbox_inches='tight')
+            plt.close(fig_density)
 
         print(f"Generated Vector PDFs in: {sys_dir}", flush=True)
 
