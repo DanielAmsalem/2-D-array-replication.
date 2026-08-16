@@ -15,14 +15,18 @@ import datetime
 import warnings
 import Functions as F
 import numpy as np
-from define_objects import IMPORT_EXPORT, ExperimentInitialState
-# NOTE: We will assume a new return object and function in gamma_functions
+import math
+
+# Added the new dataclass to the import!
+from define_objects import IMPORT_EXPORT, ExperimentInitialState, SteadyStateVaryVResult
 from gamma_functions import Get_Steady_State_varyV
 from preparation import (
     prepare_initial_state,
     validate_table_triplets_file,
     update_init_Cg_Rg
 )
+from preparation import prepare_table_triplets_gapped, prepare_table_triplets, output_table_triplets, \
+    prepare_table_triplets_NIS
 import curve_plotter
 from dataclasses import asdict
 import orjson
@@ -53,9 +57,9 @@ if match:
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
 
-Cg_list = [2, 5, 10, 20, 50]
+Cg_list = [2, 10]
 Cg_list_gapped = [10]
-gap_list = [2, 0.2]
+gap_list = [2]
 
 
 ##############################################################
@@ -71,7 +75,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     plot_ongoing_voltage_map = False
 
     # EXPERIMENT PARAMETERS
-    loop_count = max(num_workers, 960)
+    loop_count = max(num_workers, 320)
     repetition = 0
     last_repetition_to_do = 501
     repetition_list = list(range(first_rep, last_rep, jumps))
@@ -79,6 +83,30 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     mean_Rg = 100
     stdR = 2
     sig = 0.05
+    repetition = 96
+    if repetition != 96:
+        raise ValueError("Repetition must be 96 due to NIS tables")
+
+    if gap_ratio > 1e-3:
+        if (Cg not in Cg_list_gapped) or (gap_ratio not in gap_list):
+            raise ValueError(f"Cg must be in Cg_list_gapped, Cg = {Cg} ; "
+                             f"gap ratio must be between in gap_list, D = {gap_ratio}")
+        if Cg == 10 and gap_ratio == 2:
+            pos_energy_boundT0 = 0
+            neg_energy_boundT0 = -0.30769
+        else:
+            raise ValueError("whadahel?")
+    else:
+        if Cg not in Cg_list:
+            raise ValueError(f"Cg must be in Cg_list, Cg = {Cg}")
+        elif Cg == 10:
+            pos_energy_boundT0 = -0.01
+            neg_energy_boundT0 = -0.11
+        elif Cg == 2:
+            pos_energy_boundT0 = -0.12
+            neg_energy_boundT0 = -0.37
+        else:
+            raise ValueError("what")
 
     print(f"############# MAIN PARAMETERS ##################")
     print(f"flip = {flip}", flush=True)
@@ -124,7 +152,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     # ---------------------------------------------------------
     V_diff = 4
     steps = 100
-    # Unlike TPmeas, we only need a one-way sweep of baseline voltages
     V_sweep = np.linspace(init.Vright * init.Volts, (init.Vright + V_diff) * init.Volts, num=steps)
     cycles = len(V_sweep)
 
@@ -134,111 +161,158 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     gap_array_baseline = F.exact_bcs_gap(T_baseline, Delta_0)
     expected_err_baseline = F.calc_expected_dist_std(T_baseline, init.T0, gap_array_baseline, init.R_t_ij, init.Ec)
 
+    # LOAD BASELINE (dT=0) INTEGRATION TABLE ONCE
+    # (repetition 0 is universally the uniform temperature file)
+    baseline_table_path = (import_export.export_path /
+                           f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+    nis_null_path_name = (import_export.export_path /
+                              f"64bit_GAP2_0_NIS_table_triplets_Tmid15_4_Tstd20_20_Cg_10.npz")
+    if gap_ratio > 1e-3:
+        baseline_table_path = (import_export.export_path /
+                               f"64bit_GAP{gap_int}_{gap_tenth}table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+
+    ## IMPORT N-I-S TABLES
+    if not validate_table_triplets_file(nis_null_path_name, init,
+                                        [init.T0, 29.8*init.T0]) and gap_ratio > 1e-3:
+        raise ValueError("N-I-S don't match the path...")
+    elif gap_ratio > 1e-3:
+        print("Valid N-I-S Table found. Loading...", flush=True)
+        nis_table_triplets = np.load(nis_null_path_name.as_posix())
+        nis_table_val = nis_table_triplets["val"]
+        nis_table_prob = nis_table_triplets["prob"]
+    else:
+        nis_table_val = None
+        nis_table_prob = None
+
+    ## IMPORT BASELINE TABLES
+    if not validate_table_triplets_file(baseline_table_path, init, [init.T0]):
+        if gap_ratio > 1e-3:
+            table_triplets = prepare_table_triplets_gapped(init, [init.T0],
+                                                           pos_energy_bound=pos_energy_boundT0,
+                                                           neg_energy_bound=neg_energy_boundT0,
+                                                           max_workers=num_workers,
+                                                           gap_ratio=gap_ratio)
+        else:
+            table_triplets = prepare_table_triplets(init, [init.T0],
+                                                    pos_energy_bound=pos_energy_boundT0,
+                                                    neg_energy_bound=neg_energy_boundT0,
+                                                    max_workers=num_workers)
+        output_table_triplets(table_triplets, baseline_table_path)
+        table_val_baseline = table_triplets[:, 0]
+        table_prob_baseline = table_triplets[:, 1]
+        table_T_baseline = [init.T0]
+    else:
+        baseline_table = np.load(baseline_table_path.as_posix())
+        table_val_baseline = baseline_table["val"]
+        table_prob_baseline = baseline_table["prob"]
+        table_T_baseline = np.unique(baseline_table["temp"]).tolist()
+
     print("############# RUN THERMOPOWER VARY-V EXPERIMENT ##################", flush=True)
 
     # ---------------------------------------------------------
     # MAIN EXPERIMENT LOOP (Iterating over dT gradients)
     # ---------------------------------------------------------
-    increasing_T_gradient = True
+    # 1. Define the specific temperature gradient for this run
+    marker_file = import_export.results_dir_path / f".completed_rep{repetition}"
+    if marker_file.exists():
+        exit(f"This code is already executed in this path : {import_export.results_dir_path}")
 
-    while increasing_T_gradient:
-        repetition += 1
-        if repetition > last_repetition_to_do:
-            increasing_T_gradient = False
-            continue
-        if int(repetition) not in repetition_list:
-            continue
+    T_std = repetition * init.T0 / 20
+    T_dT = [init.T0 + i * T_std for i in range(init.row_num)]
+    if flip:
+        T_dT = np.flip(T_dT)
 
-        marker_file = import_export.results_dir_path / f".completed_rep{repetition}"
-        if marker_file.exists():
-            continue
+    # 2. Pre-calculate Gradient Gaps and Errors ONCE
+    gap_array_dT = F.exact_bcs_gap(T_dT, Delta_0)
+    expected_err_dT = F.calc_expected_dist_std(T_dT, init.T0, gap_array_dT, init.R_t_ij, init.Ec)
 
-        # 1. Define the specific temperature gradient for this run
-        T_std = repetition * init.T0 / 20
-        T_dT = [init.T0 + i * T_std for i in range(init.row_num)]
-        if flip:
-            T_dT = np.flip(T_dT)
+    # 3. Load the corresponding Integration Table
+    if not validate_table_triplets_file(import_export.prepare_table_triplets_file_list[repetition], init,
+                                        np.array(T_dT)):
+        raise ImportError(f"no validated table, skipped rep{T_std}")
 
-        # 2. Pre-calculate Gradient Gaps and Errors ONCE (Problem 2 Solved)
-        gap_array_dT = F.exact_bcs_gap(T_dT, Delta_0)
-        expected_err_dT = F.calc_expected_dist_std(T_dT, init.T0, gap_array_dT, init.R_t_ij, init.Ec)
+    table_triplets = np.load(import_export.prepare_table_triplets_file_list[repetition].as_posix())
+    table_val_dT = table_triplets["val"]
+    table_prob_dT = table_triplets["prob"]
+    table_T_dT = np.unique(table_triplets["temp"]).tolist()
 
-        # 3. Load the corresponding Integration Table (Problem 1 Solved)
-        if not validate_table_triplets_file(import_export.prepare_table_triplets_file_list[repetition], init,
-                                            np.array(T_dT)):
-            warnings.warn(f"no validated table, skipped rep{T_std}")
-            continue
+    # 4. Dispatch to Physics Engine
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        t0 = time.time()
 
-        table_triplets = np.load(import_export.prepare_table_triplets_file_list[repetition].as_posix())
-        table_val_dT = table_triplets["val"]
-        table_prob_dT = table_triplets["prob"]
-        table_T_dT = np.unique(table_triplets["temp"]).tolist()
-
-        # 4. Dispatch to Physics Engine
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            t0 = time.time()
-
-            # We pass BOTH the baseline and gradient parameters so the worker can seamlessly
-            # toggle between step 0 and step 2 without recalculating matrices.
-            loaded_state_function = partial(
-                Get_Steady_State_varyV,
-                init=init,
-                V_sweep=V_sweep,
-                cycles=cycles,
-                table_val_dT=table_val_dT,
-                table_prob_dT=table_prob_dT,
-                table_T_dT=table_T_dT,
-                flip=flip,
-                T_baseline=T_baseline,
-                T_dT=T_dT,
-                expected_error_baseline=expected_err_baseline,
-                expected_error_dT=expected_err_dT,
-                periodic_y=periodic_y,
-                plot_ongoing_voltage_map=plot_ongoing_voltage_map,
-                gap_ratio=gap_ratio,
-                gap_array_baseline=gap_array_baseline,
-                gap_array_dT=gap_array_dT
-            )
-
-            # --- CHECKPOINT LOADING / PARTIAL SUBMISSION ---
-            results = [None] * init.loop_count
-            futures = {}
-
-            for i in range(init.loop_count):
-                ckpt_path = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
-                if ckpt_path.exists():
-                    try:
-                        with open(ckpt_path, "rb") as f:
-                            results[i] = pickle.load(f)
-                    except Exception:
-                        ckpt_path.unlink(missing_ok=True)
-
-                if results[i] is None:
-                    futures[executor.submit(loaded_state_function, i)] = i
-
-            # --- FAIL-FAST SUBMISSION WITH INCREMENTAL SAVING ---
-            for future in as_completed(futures):
-                idx = futures[future]
-                res = future.result()
-                results[idx] = res
-
-                with open(checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{idx}.pkl", "wb") as f:
-                    pickle.dump(res, f)
-
-        # 5. Extract and Plot Data (Needs to be adapted for S(V) plotting in curve_plotter)
-        # Instead of I(V), the results now contain DeltaV required at each V_baseline.
-        curve_plotter.thermopower_curve_compute_and_save_csv(
+        # Aligning exactly with the Get_Steady_State_varyV signature
+        loaded_state_function = partial(
+            Get_Steady_State_varyV,
             init=init,
-            filename=run_name,
-            results=results,
             V_sweep=V_sweep,
+            cycles=cycles,
+
+            # Baseline
+            table_val_baseline=table_val_baseline,
+            table_prob_baseline=table_prob_baseline,
+            table_T_baseline=table_T_baseline,
+            T_baseline=np.array(T_baseline),
+            expected_error_baseline=expected_err_baseline,
+            gap_array_baseline=gap_array_baseline,
+
+            # Gradient
+            table_val_dT=table_val_dT,
+            table_prob_dT=table_prob_dT,
+            table_T_dT=table_T_dT,
+            T_dT=np.array(T_dT),
+            expected_error_dT=expected_err_dT,
+            gap_array_dT=gap_array_dT,
+
+            # Constants
+            flip=flip,
+            pos_energy_bound=pos_energy_boundT0,
+            neg_energy_bound=neg_energy_boundT0,
             repetition=repetition,
-            results_path=import_export.results_dir_path
+            periodic_y=periodic_y,
+            gap_ratio=gap_ratio,
+            nis_table_val=nis_table_val,
+            nis_table_prob=nis_table_prob
         )
 
-        marker_file.touch()
-        for f in checkpoint_dir.glob(f"ckpt_varyV_rep{repetition}_idx*.pkl"):
-            f.unlink(missing_ok=True)
+        # --- CHECKPOINT LOADING / PARTIAL SUBMISSION ---
+        results = [None] * init.loop_count
+        futures = {}
+
+        for i in range(init.loop_count):
+            ckpt_path = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
+            if ckpt_path.exists():
+                try:
+                    with open(ckpt_path, "rb") as f:
+                        results[i] = pickle.load(f)
+                except Exception:
+                    ckpt_path.unlink(missing_ok=True)
+
+            if results[i] is None:
+                futures[executor.submit(loaded_state_function, i)] = i
+
+        # --- FAIL-FAST SUBMISSION WITH INCREMENTAL SAVING ---
+        for future in as_completed(futures):
+            idx = futures[future]
+            res = future.result()
+            results[idx] = res
+
+            with open(checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{idx}.pkl", "wb") as f:
+                pickle.dump(res, f)
+
+    # 5. Extract and Plot Data
+    # (Note: You'll need to update curve_plotter to handle DeltaV_vec and I_baseline_vec)
+    curve_plotter.thermopower_curve_compute_and_save_csv(
+        init=init,
+        filename=run_name,
+        results=results,
+        V_sweep=V_sweep,
+        repetition=repetition,
+        results_path=import_export.results_dir_path
+    )
+
+    marker_file.touch()
+    for f in checkpoint_dir.glob(f"ckpt_varyV_rep{repetition}_idx*.pkl"):
+        f.unlink(missing_ok=True)
 
     print(f"plotting all new csv in {import_export.results_dir_path}")
     plot_graph_from_csv(run_names=[f"results_{run_name}"], directory=import_export.results_dir_path)

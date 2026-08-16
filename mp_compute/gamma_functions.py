@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 import scipy.special as sp
 import Functions as F
-from define_objects import ExperimentInitialState, SteadyStateResult
+from define_objects import ExperimentInitialState, SteadyStateResult, SteadyStateVaryVResult
 import matplotlib
 import gc
 
@@ -62,7 +62,7 @@ def Gamma_approx(dE, T_at_junction, Rt, Ec, e, neg_energy_bound, pos_energy_boun
         if dE < -Ec:
             v = -dE - Ec
             if gap_ratio < 1e-3:
-                return v/Rt
+                return v / Rt
             D = gap_ratio * Ec
 
             # EXACT NIS TAIL (T=0)
@@ -966,3 +966,313 @@ def Get_Steady_State_fixed_bias(
         gc.collect()
 
     return SteadyStateResult(loop_index, error_count, I_vec, Jx, Jy)
+
+
+def Get_Steady_State_varyV(
+        loop_index: int,
+        init,  # ExperimentInitialState
+        V_sweep: np.ndarray,
+        cycles: int,
+
+        # Baseline Parameters (Step 0)
+        table_val_baseline,
+        table_prob_baseline,
+        table_T_baseline,
+        T_baseline: np.ndarray,
+        expected_error_baseline: float,
+        gap_array_baseline: np.ndarray,
+
+        # Gradient Parameters (Step 1-5)
+        table_val_dT,
+        table_prob_dT,
+        table_T_dT,
+        T_dT: np.ndarray,
+        expected_error_dT: float,
+        gap_array_dT: np.ndarray,
+
+        # System Constants
+        flip: bool,
+        pos_energy_bound: float,
+        neg_energy_bound: float,
+        repetition: int,
+        periodic_y: bool,
+        gap_ratio: float,
+        nis_table_val=None,
+        nis_table_prob=None
+):
+    total_error_count = 0
+
+    # Output vectors
+    DeltaV_vec = np.zeros(cycles)
+    I_baseline_vec = np.zeros(cycles)
+
+    # General charge distribution vectors initialized once
+    Qg_global = np.zeros(init.array_size)
+    n_global = np.zeros(init.array_size)
+
+    # Determine fixed step size for the feedback loop
+    if len(V_sweep) > 1:
+        dV_step = abs(V_sweep[1] - V_sweep[0])
+    else:
+        dV_step = init.Volts
+
+    # ---------------------------------------------------------
+    # INTERNAL KMC ENGINE (The Micro-Loop)
+    # ---------------------------------------------------------
+    def run_kmc_to_steady_state(current_V, T_params, gap_params, expected_error,
+                                table_val, table_prob, table_T, n_state, Qg_state):
+        k = 0
+        q = 0
+        zero_curr_steady_state_counter = 0
+        not_decreasing = 0
+        not_in_steady_state = True
+        t = 0
+        t_ss = 0
+        I_avg, I_var = 0, 0
+
+        steady_state_timer = init.timeStep
+        steady_state_reps = init.Steady_state_rep * 5
+
+        Q_avg, Q_var = np.zeros(init.array_size), np.zeros(init.array_size)
+        n_avg, n_var = np.zeros(init.array_size), np.zeros(init.array_size)
+
+        # Load starting states
+        n = np.copy(n_state)
+        Qg = np.copy(Qg_state)
+        dist = 0
+        loop_error = False
+
+        while not_in_steady_state:
+            k += 1
+            q += 1
+
+            VxCix = F.get_VxCix(current_V, init.Vright, init.array_size, init.near_left, init.near_right, init.Cix)
+            V = F.getVoltage(n, Qg, init.C_inv, VxCix, init.e)
+
+            reaction_index_list = []
+            Gamma = []
+
+            if abs(gap_ratio) < 1e-3:
+                # Normal metallic island case
+                Gamma, reaction_index_list = Get_Gamma(
+                    Gamma_=Gamma,
+                    e=init.e,
+                    reaction_index_=reaction_index_list,
+                    n_list=n,
+                    curr_V=V,
+                    cycle_voltage_=current_V,
+                    array_size=init.array_size,
+                    islands=init.islands,
+                    row_num=init.row_num,
+                    C_inv=init.C_inv,
+                    pos_energy_bound=pos_energy_bound,
+                    neg_energy_bound=neg_energy_bound,
+                    T_gradient=T_params,
+                    R_t_ij=init.R_t_ij,
+                    R_t_i=init.R_t_i,
+                    near_left=init.near_left,
+                    near_right=init.near_right,
+                    Vright=init.Vright,
+                    Ec=init.Ec,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                    T_table=table_T,
+                    flip=flip,
+                    periodic_y=periodic_y
+                )
+
+                R = np.sum(Gamma)
+                if R > max(current_V / init.CondRg, 1e-10):
+                    zero_curr_steady_state_counter = 0
+                    eta = 1 - np.random.random()
+                    dt = float(np.log(1 / eta) / R)
+                    if dt <= 0: raise ValueError
+                    n, l, m, chosen_rate = execute_transition(Gamma, n, reaction_index_list, init.e)
+                else:
+                    dt = init.default_dt
+                    firings = np.random.poisson(np.array(Gamma) * dt)
+                    if np.any(firings > 0):
+                        zero_curr_steady_state_counter = 0
+                        n = apply_multiple_transitions(n, reaction_index_list, firings, init.e)
+                    else:
+                        zero_curr_steady_state_counter += 1
+                        if zero_curr_steady_state_counter % init.Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
+                            not_in_steady_state = False
+
+            else:
+                # Gapped case
+                Gamma, reaction_index_list = Get_Gamma_gapped(
+                    Gamma_=Gamma,
+                    e=init.e,
+                    reaction_index_=reaction_index_list,
+                    n_list=n,
+                    curr_V=V,
+                    cycle_voltage_=current_V,
+                    array_size=init.array_size,
+                    islands=init.islands,
+                    row_num=init.row_num,
+                    C_inv=init.C_inv,
+                    pos_energy_bound=pos_energy_bound,
+                    neg_energy_bound=neg_energy_bound,
+                    T_gradient=T_params,
+                    R_t_ij=init.R_t_ij,
+                    R_t_i=init.R_t_i,
+                    near_left=init.near_left,
+                    near_right=init.near_right,
+                    Vright=init.Vright,
+                    Ec=init.Ec,
+                    table_val=table_val,
+                    table_prob=table_prob,
+                    nis_table_val=nis_table_val,
+                    nis_table_prob=nis_table_prob,
+                    T_table=table_T,
+                    flip=flip,
+                    periodic_y=periodic_y,
+                    gap_array=gap_params
+                )
+
+                R = np.sum(Gamma)
+                if R > max(current_V / init.CondRg, 1e-10):
+                    zero_curr_steady_state_counter = 0
+                    eta = 1 - np.random.random()
+                    dt = float(np.log(1 / eta) / R)
+                    if dt <= 0: raise ValueError
+                    n, l, m, chosen_rate = execute_gapped_transition(Gamma, n, reaction_index_list, init.e)
+                else:
+                    dt = init.default_dt
+                    firings = np.random.poisson(np.array(Gamma) * dt)
+                    if np.any(firings > 0):
+                        zero_curr_steady_state_counter = 0
+                        n = apply_multiple_transitions(n, reaction_index_list, firings, init.e)
+                    else:
+                        zero_curr_steady_state_counter += 1
+                        if zero_curr_steady_state_counter % init.Steady_state_rep == 1 and zero_curr_steady_state_counter > 2:
+                            not_in_steady_state = False
+
+            # Update Charge ODE
+            Qg = F.developQ(Qg, dt, n, VxCix, init)
+
+            if steady_state_reps <= 0:
+                I_right, I_down = F.Get_current_from_gamma(
+                    Gamma, reaction_index_list, init.near_right, init.near_left, init.row_num, periodic_y=periodic_y
+                )
+                I_avg, I_var = F.update_statistics(I_right, I_avg, I_var, t_ss, dt)
+                t_ss += dt
+
+            Q_avg, Q_var = F.update_statistics(Qg, Q_avg, Q_var, t, dt)
+            n_avg, n_var = F.update_statistics(n, n_avg, n_var, t, dt)
+
+            steady_Q = F.return_Qn_for_n(n_avg, VxCix, init)
+            dist_new = np.max(np.abs(steady_Q - Q_avg))
+            max_diff_index = np.argmax(dist_new)
+
+            if k > 100:
+                std = (np.sqrt(Q_var[max_diff_index] * (k + 1) / (k * t))) / np.sqrt(len(Q_avg))
+
+                if dist_new - dist > min(std, expected_error):
+                    not_decreasing += 1
+                    steady_state_reps = init.Steady_state_rep * 5
+                    t_ss = 0
+                    I_avg, I_var = 0, 0
+
+                    if not not_decreasing % init.max_count:
+                        loop_error = True
+                        not_in_steady_state = False
+
+                elif abs(dist_new) < expected_error:
+                    steady_state_reps -= 1
+                    if steady_state_reps <= 0:
+                        steady_state_timer -= dt
+                        if steady_state_timer <= 0:
+                            # actual variance
+                            I_var = I_var * (k + 1) / (k * t)
+                            not_in_steady_state = False
+                else:
+                    steady_state_timer = init.timeStep
+                    steady_state_reps = init.Steady_state_rep * 5
+                    t_ss = 0
+                    I_avg, I_var = 0, 0
+
+            dist = dist_new
+            t += dt
+
+        return I_avg, I_var, n, Qg, loop_error
+
+    # ---------------------------------------------------------
+    # MACRO EXPERIMENT LOOP (V_sweep iterations)
+    # ---------------------------------------------------------
+    for cycle in range(cycles):
+        V_baseline = float(V_sweep[cycle])
+        if cycle == 0 and not loop_index % 5:
+            print(f"T_std={repetition}/20, {loop_index=}: Starting Vary-V Loop", flush=True)
+
+        # ==============================================================
+        # STEP 0: Establish Baseline State (dT = 0)
+        # ==============================================================
+        I_target, I_var_target, n_global, Qg_global, err = run_kmc_to_steady_state(
+            V_baseline, T_baseline, gap_array_baseline, expected_error_baseline,
+            table_val_baseline, table_prob_baseline, table_T_baseline,
+            n_global, Qg_global
+        )
+        if err: total_error_count += 1
+        I_baseline_vec[cycle] = I_target
+
+        # Save exact physics state for the next baseline cycle
+        n_saved = np.copy(n_global)
+        Qg_saved = np.copy(Qg_global)
+
+        # ==============================================================
+        # STEPS 1 & 2: Apply Temperature Gradient and Measure
+        # ==============================================================
+        V_adj = V_baseline
+        I_new, I_var_new, n_global, Qg_global, err = run_kmc_to_steady_state(
+            V_adj, T_dT, gap_array_dT, expected_error_dT,
+            table_val_dT, table_prob_dT, table_T_dT,
+            n_global, Qg_global
+        )
+        if err: total_error_count += 1
+
+        # ==============================================================
+        # STEPS 3 & 4: Safe Constant-Step Feedback Loop
+        # ==============================================================
+        max_feedback_loops = 30
+        feedback_count = 0
+
+        # Account for stochastic noise in KMC
+        I_tol = max(min(np.sqrt(I_var_new), 0.01), 1e-9)
+
+        if abs(I_new - I_target) > I_tol:
+            # 4a) Current went DOWN -> Need MORE voltage (+dV)
+            # 4b) Current went UP -> Need LESS voltage (-dV)
+            direction = 1 if I_new < I_target else -1
+
+            while abs(I_new - I_target) > I_tol and feedback_count < max_feedback_loops:
+                V_adj += direction * dV_step
+
+                I_new, I_var_new, n_global, Qg_global, err = run_kmc_to_steady_state(
+                    V_adj, T_dT, gap_array_dT, expected_error_dT,
+                    table_val_dT, table_prob_dT, table_T_dT,
+                    n_global, Qg_global
+                )
+                if err: total_error_count += 1
+
+                # Update tolerance dynamically based on new state's variance
+                I_tol = max(np.sqrt(I_var_new), 1e-9)
+
+                # Halt if we crossed the target line to avoid infinite bouncing
+                if (direction == 1 and I_new >= I_target) or (direction == -1 and I_new <= I_target):
+                    break
+
+                feedback_count += 1
+
+        # ==============================================================
+        # STEPS 5 & 6-9: Save DeltaV and Restitute State
+        # ==============================================================
+        DeltaV_vec[cycle] = V_adj - V_baseline
+
+        # Load state back to Step 0 for the next V_baseline step
+        n_global = np.copy(n_saved)
+        Qg_global = np.copy(Qg_saved)
+
+    # Note: Ensure SteadyStateVaryVResult is implemented in define_objects.py
+    return SteadyStateVaryVResult(loop_index, total_error_count, DeltaV_vec, I_baseline_vec)

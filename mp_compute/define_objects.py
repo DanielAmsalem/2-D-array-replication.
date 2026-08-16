@@ -79,3 +79,9 @@ class SteadyStateResult:
     Jx: npt.NDArray
     Jy: npt.NDArray
 
+@dataclass
+class SteadyStateVaryVResult:
+    loop_index: int
+    error_count: int
+    DeltaV_vec: npt.NDArray
+    I_baseline_vec: npt.NDArray
