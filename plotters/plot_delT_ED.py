@@ -29,9 +29,10 @@ T_str = r"$\left[ \frac{e^2}{k_B \langle C \rangle} \right]$"
 S_str = r"$\left[ \frac{k_B}{e} \right]$"
 
 # --- Configuration ---
-FILE_NAME = 'NEW_IV_data_reintegrated_metal_a.csv'
-E_c = 0.05  # Charging energy constant
+FILE_NAME = 'NEW_IV_data_reintegrated_D2_0.csv'
+E_c = 0.025  # Charging energy constant
 m_values = [1, 3, 10, 19]  # Gradient multipliers
+DELTA_V0 = 0.1  # Small offset to linearize the zero-crossing on a log scale
 
 # Define distinct styling for the 4 loops to maintain a clean aesthetic
 colors = ['dodgerblue', 'mediumseagreen', 'tomato', 'mediumpurple']
@@ -63,7 +64,6 @@ def walk_down_for_voltage(V_array, I_target_col, I_0, start_v_idx):
 
     if idx_cross == 0:
         # If it's already higher at the exact same voltage, delta_V is ~0
-        # (or the threshold criteria wasn't strictly broken)
         if abs(search_I[0] - I_0) < 1e-6:
             return 0.0
         return np.nan
@@ -98,7 +98,7 @@ grad_data = {}
 for col in df.columns:
     if 'Grad_' in col and '_I' in col:
         n = int(col.split('_')[1])
-        dt_val = round(n * 0.02, 2)  # Rounded to prevent Python floating-point key mismatch
+        dt_val = round(n * 0.02, 2)
         if dt_val not in grad_data:
             grad_data[dt_val] = []
         grad_data[dt_val].append(df[col].values)
@@ -111,19 +111,23 @@ try:
 except KeyError:
     raise ValueError("Could not find baseline gradient column (dT=0.0) in the CSV.")
 
-# Initialize the Figures before the loop
-fig1, ax1 = plt.subplots(figsize=(10, 8))
-fig2, ax2 = plt.subplots(figsize=(10, 8))
+# Initialize the 4 Figures before the loop
+fig1, ax1 = plt.subplots(figsize=(10, 8))  # Linear Delta V
+fig2, ax2 = plt.subplots(figsize=(10, 8))  # Linear S(V)
+fig3, ax3 = plt.subplots(figsize=(10, 8))  # Semi-log Delta V
+fig4, ax4 = plt.subplots(figsize=(10, 8))  # Semi-log S(V)
 
-# Draw the zero-lines once
+# Draw the zero/baseline lines once
 ax1.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.3)
 ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.8)
+# For the log plots, 0 maps perfectly to 10^0 = 1
+ax3.axhline(1, color='black', linestyle='-', linewidth=0.8, alpha=0.3)
+ax4.axhline(1, color='black', linestyle='-', linewidth=0.8, alpha=0.3)
 
 all_results_dfs = []
 
 print("Starting iteration over specified gradients...", flush=True)
 
-# Loop over the user-defined m values
 for idx, m in enumerate(m_values):
     DT_STEP = round(m * 0.02, 2)
 
@@ -132,15 +136,23 @@ for idx, m in enumerate(m_values):
         continue
 
     I_col_target = grad_data[DT_STEP]
-
     print(f"  --> Calculating for m={m} (dT={DT_STEP})...", flush=True)
     results = []
 
-    # Iterate over every starting voltage
+    # Calculate baseline shift scaling for Thermopower log plot
+    S_0 = DELTA_V0 / DT_STEP
+
     for v_idx, v_val in enumerate(V_array):
         I_0 = I_col_0[v_idx]
         delta_V = walk_down_for_voltage(V_array, I_col_target, I_0, v_idx)
+
+        # Standard Linear Values
         S_V = -delta_V / DT_STEP if not np.isnan(delta_V) else np.nan
+
+        # Semi-log Transformed Values (mapping 0 -> 1)
+        delta_V_shifted = (delta_V + DELTA_V0) / DELTA_V0 if not np.isnan(delta_V) else np.nan
+        # Thermopower is natively negative (-dV/dT). We take the absolute value to cleanly log-plot the magnitude
+        S_V_shifted = (abs(S_V) + S_0) / S_0 if not np.isnan(S_V) else np.nan
 
         results.append({
             'm_value': m,
@@ -148,26 +160,33 @@ for idx, m in enumerate(m_values):
             'Vl': v_val,
             'I_0': I_0,
             'delta_V': delta_V,
-            'S(V)': S_V
+            'S(V)': S_V,
+            'delta_V_shifted': delta_V_shifted,
+            'S_V_shifted': S_V_shifted
         })
 
     res_df = pd.DataFrame(results)
     plot_df = res_df.dropna(subset=['S(V)']).copy()
     all_results_dfs.append(plot_df)
 
-    # Calculate dynamic ratio for the legend
     grad_ratio = DT_STEP / E_c
-    legend_label = rf'$\Delta T / E_c = {grad_ratio:g}$'  # ':g' removes trailing zeros intelligently
+    legend_label = rf'$\Delta T / E_c = {grad_ratio:g}$'
 
-    # Add to GRAPH 1 (Delta V)
+    # GRAPH 1 (Linear Delta V)
     ax1.plot(plot_df['Vl'], plot_df['delta_V'], marker=markers[idx], markersize=6, color='black',
-             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9,
-             label=legend_label)
+             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9, label=legend_label)
 
-    # Add to GRAPH 2 (S(V))
+    # GRAPH 2 (Linear S(V))
     ax2.plot(plot_df['Vl'], plot_df['S(V)'], marker=markers[idx], markersize=6, color='black',
-             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9,
-             label=legend_label)
+             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9, label=legend_label)
+
+    # GRAPH 3 (Semi-log Delta V)
+    ax3.plot(plot_df['Vl'], plot_df['delta_V_shifted'], marker=markers[idx], markersize=6, color='black',
+             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9, label=legend_label)
+
+    # GRAPH 4 (Semi-log S(V))
+    ax4.plot(plot_df['Vl'], plot_df['S_V_shifted'], marker=markers[idx], markersize=6, color='black',
+             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9, label=legend_label)
 
 # Concatenate all results and save them out
 final_data_export = pd.concat(all_results_dfs, ignore_index=True)
@@ -175,33 +194,61 @@ final_data_export.to_csv('thermopower_results_active_feedback_all.csv', index=Fa
 print("All data exported. Finalizing plots...", flush=True)
 
 # ----------------------------------------------------
-# Finalize GRAPH 1: Delta V
+# Finalize GRAPH 1: Linear Delta V
 # ----------------------------------------------------
 ax1.set_xlabel(r'Left Electrode $V_{left}$ ' + Volt_str, labelpad=15)
 ax1.set_ylabel(r'Required Bias Shift $\Delta V$ ' + Volt_str, labelpad=15)
-ax1.set_title(r'Counteracting Bias $\Delta V$ to Maintain $I(V_{left},\Delta T=0)$', pad=20)
-
+ax1.set_title(r'Counteracting Bias $\Delta V$ to Maintain $I(V_{left}, \Delta T=0)$', pad=20)
 legend1 = ax1.legend(fontsize=18, loc='best')
 legend1.get_frame().set_linewidth(0.5)
 ax1.grid(True, linestyle='--', linewidth=0.5, color='lightgray')
 
 fig1.tight_layout()
-fig1.savefig('Delta_V_vs_Voltage_Active_MultiGrad.pdf', format='pdf', bbox_inches='tight')
+fig1.savefig('Delta_V_vs_Voltage_Active_Linear.pdf', format='pdf', bbox_inches='tight')
 plt.close(fig1)
 
 # ----------------------------------------------------
-# Finalize GRAPH 2: Thermopower S(V)
+# Finalize GRAPH 2: Linear Thermopower S(V)
 # ----------------------------------------------------
-ax2.set_xlabel(r'Baseline Voltage $V_{left}$ ' + Volt_str, labelpad=15)
+ax2.set_xlabel(r'Left Electrode $V_{left}$ ' + Volt_str, labelpad=15)
 ax2.set_ylabel(r'Thermopower $S(V)$ ' + S_str, labelpad=15)
-ax2.set_title(r'Thermopower as a function of $V_{left}$', pad=20)
-
+ax2.set_title(r'Thermopower as a Function of Voltage $\Delta=2E_c$', pad=20)
 legend2 = ax2.legend(fontsize=18, loc='best')
 legend2.get_frame().set_linewidth(0.5)
 ax2.grid(True, linestyle='--', linewidth=0.5, color='lightgray')
 
 fig2.tight_layout()
-fig2.savefig('Thermopower_S_vs_Voltage_Active_MultiGrad.pdf', format='pdf', bbox_inches='tight')
+fig2.savefig('Thermopower_S_vs_Voltage_Active_Linear.pdf', format='pdf', bbox_inches='tight')
 plt.close(fig2)
 
-print("Batch processing complete: Multi-gradient active feedback loop exported to vector PDFs.")
+# ----------------------------------------------------
+# Finalize GRAPH 3: Semi-Log Delta V
+# ----------------------------------------------------
+ax3.set_yscale('log')
+ax3.set_xlabel(r'Left Electrode $V_{left}$ ' + Volt_str, labelpad=15)
+ax3.set_ylabel(r'$\ln |\Delta V/V_0|$', labelpad=15)
+ax3.set_title(r'Semi-Log Counteracting Bias ($\Delta V_0 = 0.1$)', pad=20)
+legend3 = ax3.legend(fontsize=18, loc='best')
+legend3.get_frame().set_linewidth(0.5)
+ax3.grid(True, which="both", linestyle='--', linewidth=0.5, color='lightgray')
+
+fig3.tight_layout()
+fig3.savefig('Delta_V_vs_Voltage_Active_SemiLog.pdf', format='pdf', bbox_inches='tight')
+plt.close(fig3)
+
+# ----------------------------------------------------
+# Finalize GRAPH 4: Semi-Log Thermopower Magnitude
+# ----------------------------------------------------
+ax4.set_yscale('log')
+ax4.set_xlabel(r'Left Electrode $V_{left}$ ' + Volt_str, labelpad=15)
+ax4.set_ylabel(r'$\ln |S(V)/S_0|$', labelpad=15)
+ax4.set_title(r'Semi-Log Thermopower as a Function of Voltage, $\Delta=2E_c$', pad=20)
+legend4 = ax4.legend(fontsize=18, loc='best')
+legend4.get_frame().set_linewidth(0.5)
+ax4.grid(True, which="both", linestyle='--', linewidth=0.5, color='lightgray')
+
+fig4.tight_layout()
+fig4.savefig('Thermopower_S_vs_Voltage_Active_SemiLog.pdf', format='pdf', bbox_inches='tight')
+plt.close(fig4)
+
+print("Batch processing complete: Both Linear and Semi-Log versions exported to vector PDFs.")
