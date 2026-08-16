@@ -32,7 +32,7 @@ rcParams['xtick.major.width'] = 0.5
 rcParams['ytick.major.width'] = 0.5
 
 # Font Sizes (Updated to strictly align with guidelines)
-rcParams['axes.titlesize'] = 35
+rcParams['axes.titlesize'] = 25
 rcParams['axes.labelsize'] = 25
 rcParams['xtick.labelsize'] = 20
 rcParams['ytick.labelsize'] = 20
@@ -392,17 +392,6 @@ def run_analysis_mode(base_dir):
             if len(v_up) == 0:
                 continue
 
-            # --- Step Counting Logic for Graph 3 ---
-            # Evaluate Up-Sweep
-            thresh_up = calculate_mad_threshold(i_up, k_factor=2)
-            true_steps_up = filter_true_steps(i_up, ierr_up, N_LOOPS, thresh_up)
-            num_steps_up = len(true_steps_up) + 1
-
-            # Evaluate Down-Sweep
-            thresh_down = calculate_mad_threshold(i_down, k_factor=2)
-            true_steps_down = filter_true_steps(i_down, ierr_down, N_LOOPS, thresh_down)
-            num_steps_down = len(true_steps_down) + 1
-
             system_groups[sys_key].append({
                 'Run_Name': run_name,
                 'Repetition': rep,
@@ -414,8 +403,8 @@ def run_analysis_mode(base_dir):
                 'V_down': v_down,
                 'I_down': i_down,
                 'Ierr_down': ierr_down,
-                'Num_Steps_Up': num_steps_up,
-                'Num_Steps_Down': num_steps_down
+                'Num_Steps_Up': 0,    # Step counting deferred to Phase 2
+                'Num_Steps_Down': 0   # Step counting deferred to Phase 2
             })
 
     # Process and Plot for each unique physical system
@@ -450,8 +439,7 @@ def run_analysis_mode(base_dir):
         if vth_csv_path.exists():
             df_vth = pd.read_csv(vth_csv_path)
         else:
-            print(
-                f"Warning: Vth threshold data not found at {vth_csv_path}. Skipping Graph 4 (Density) for this system.")
+            print(f"Warning: Vth threshold data not found at {vth_csv_path}. Skipping Graph 4 (Density) for this system.")
 
         # PRE-FILTER DATA BEFORE COLORMAP & PLOTTING LOGIC
         if REP_LIST:
@@ -590,15 +578,19 @@ def run_analysis_mode(base_dir):
             plt.close(fig_down)
 
         # ==========================================================
-        # PHASE 2: DATA MERGING AND ERROR PROPAGATION FOR GRAPH 4
+        # PHASE 2: DATA MERGING, STEP COUNTING, AND ERROR PROPAGATION
         # ==========================================================
         rho_up, rho_down = [], []
         rho_err_up, rho_err_down = [], []
         dT_density = []
         Ec = 0.5/Cg
 
-        if df_vth is not None:
-            for d in data:
+        for d in data:
+            has_vth = False
+            vth_up = 0.0
+            vth_down = 0.0
+
+            if df_vth is not None:
                 # Find matching row in Vth dataframe
                 diffs = (df_vth['Delta_T'] - d['Delta_T']).abs()
                 closest_idx = diffs.idxmin()
@@ -611,26 +603,53 @@ def run_analysis_mode(base_dir):
                     vth_err_up = vth_row['Vth_err_up']
                     vth_down = vth_row['Vth_Down']
                     vth_err_down = vth_row['Vth_err_down']
+                    has_vth = True
 
-                    n_up = d['Num_Steps_Up']
-                    n_down = d['Num_Steps_Down']
+            # --- STEP COUNTING LOGIC (VTH MASKING) ---
+            if has_vth:
+                # Mask out sub-threshold current to isolate true plateau noise for the MAD algorithm
+                mask_up = d['V_up'] >= vth_up
+                mask_down = d['V_down'] >= vth_down
 
-                    denom_up = 4.0 - vth_up
-                    denom_down = 4.0 - vth_down
+                active_I_up = d['I_up'][mask_up]
+                active_I_down = d['I_down'][mask_down]
 
-                    # Compute Density and Error
-                    if denom_up > 0 and denom_down > 0:
-                        r_up = n_up / denom_up
-                        r_down = n_down / denom_down
+                # Fallback safeguard in case threshold bounds are anomalously close to max sweep
+                if len(active_I_up) < 2: active_I_up = d['I_up']
+                if len(active_I_down) < 2: active_I_down = d['I_down']
 
-                        r_err_up = (r_up / denom_up) * vth_err_up
-                        r_err_down = (r_down / denom_down) * vth_err_down
+                thresh_up = calculate_mad_threshold(active_I_up, k_factor=2.0)
+                thresh_down = calculate_mad_threshold(active_I_down, k_factor=2.0)
+            else:
+                # Fallback: Compute standard threshold if Vth data isn't present
+                thresh_up = calculate_mad_threshold(d['I_up'], k_factor=2.0)
+                thresh_down = calculate_mad_threshold(d['I_down'], k_factor=2.0)
 
-                        rho_up.append(r_up)
-                        rho_down.append(r_down)
-                        rho_err_up.append(r_err_up)
-                        rho_err_down.append(r_err_down)
-                        dT_density.append(d['Delta_T']/Ec)
+            # Once the accurate threshold is established, verify steps on the full array
+            d['Num_Steps_Up'] = len(filter_true_steps(d['I_up'], d['Ierr_up'], N_LOOPS, thresh_up)) + 1
+            d['Num_Steps_Down'] = len(filter_true_steps(d['I_down'], d['Ierr_down'], N_LOOPS, thresh_down)) + 1
+            # -----------------------------------------
+
+            if has_vth:
+                n_up = d['Num_Steps_Up']
+                n_down = d['Num_Steps_Down']
+
+                denom_up = 4.0 - vth_up
+                denom_down = 4.0 - vth_down
+
+                # Compute Density and Error
+                if denom_up > 0 and denom_down > 0:
+                    r_up = n_up / denom_up
+                    r_down = n_down / denom_down
+
+                    r_err_up = (r_up / denom_up) * vth_err_up
+                    r_err_down = (r_down / denom_down) * vth_err_down
+
+                    rho_up.append(r_up)
+                    rho_down.append(r_down)
+                    rho_err_up.append(r_err_up)
+                    rho_err_down.append(r_err_down)
+                    dT_density.append(d['Delta_T']/Ec)
 
         # ==========================================================
         # GRAPH 3: Number of Steps vs. Temperature Gradient (Delta T)
