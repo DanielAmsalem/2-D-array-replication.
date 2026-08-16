@@ -29,170 +29,179 @@ T_str = r"$\left[ \frac{e^2}{k_B \langle C \rangle} \right]$"
 S_str = r"$\left[ \frac{k_B}{e} \right]$"
 
 # --- Configuration ---
-FILE_NAME = 'NEW_IV_data_reintegrated_metal.csv'
-T_0 = 0.001  # Replace with your actual T_0 value (in Kelvin)
+FILE_NAME = 'NEW_IV_data_reintegrated_metal_a.csv'
+E_c = 0.05  # Charging energy constant
+m_values = [1, 3, 10, 19]  # Gradient multipliers
 
+# Define distinct styling for the 4 loops to maintain a clean aesthetic
+colors = ['dodgerblue', 'mediumseagreen', 'tomato', 'mediumpurple']
+markers = ['o', 's', '^', 'D']
 
-# ---------------------
 
 # ==========================================
-# 2. Math Functions: Dynamic Bounding Box
+# 2. Math Functions: Vertical Feedback Walk
 # ==========================================
-def dynamic_poly_dt_th(i_row, dt_arr, threshold=1e-7):
+def walk_down_for_voltage(V_array, I_target_col, I_0, start_v_idx):
     """
-    Finds the exact delta T where the current crosses zero.
-    Walks from the most positive gradient (negative current)
-    towards the negative gradient (positive current).
+    Walks downward (increasing voltage) in the target gradient column to find
+    the exact voltage required to restore the original current (I_0).
+
+    Returns:
+        delta_V: The required voltage bias to counteract the gradient.
     """
-    # 1. Start always at the most positive gradient. Current MUST be negative.
-    if i_row[0] > -threshold:
+    # Slice arrays to only search forward (downward in the table) from the current voltage
+    search_I = I_target_col[start_v_idx:]
+    search_V = V_array[start_v_idx:]
+
+    # Find the first index where the new current crosses/exceeds I_0
+    cross_indices = np.where(search_I >= I_0)[0]
+
+    if len(cross_indices) == 0:
+        return np.nan  # Array ended before current recovered to I_0
+
+    idx_cross = cross_indices[0]
+
+    if idx_cross == 0:
+        # If it's already higher at the exact same voltage, delta_V is ~0
+        # (or the threshold criteria wasn't strictly broken)
+        if abs(search_I[0] - I_0) < 1e-6:
+            return 0.0
         return np.nan
 
-    # 2. Walk along the row until current is solidly positive
-    pos_mask = i_row > threshold
-    if not pos_mask.any():
-        return np.nan
-    idx_pos = np.argmax(pos_mask)  # First index where I > 1e-7
+    # Sub-grid linear interpolation to find the exact V where I == I_0
+    V_before = search_V[idx_cross - 1]
+    V_after = search_V[idx_cross]
+    I_before = search_I[idx_cross - 1]
+    I_after = search_I[idx_cross]
 
-    # 3. Find the last point BEFORE idx_pos where current is solidly negative
-    neg_mask = i_row[:idx_pos] < -threshold
-    if not neg_mask.any():
-        return np.nan
-    idx_neg = np.where(neg_mask)[0][-1]
+    if I_after == I_before:
+        V_exact = V_before
+    else:
+        # y = mx + b inversion to find exact x (Voltage)
+        V_exact = V_before + (V_after - V_before) * ((I_0 - I_before) / (I_after - I_before))
 
-    # 4. Use indices from 1 before the negative anchor to 1 after the positive anchor
-    start_idx = max(0, idx_neg - 1)
-    end_idx = min(len(i_row) - 1, idx_pos + 1)
+    # delta V = V_new - V_original
+    delta_V = V_exact - V_array[start_v_idx]
 
-    indices = list(range(start_idx, end_idx + 1))
-
-    # Need at least 2 points to fit a polynomial
-    if len(indices) < 2:
-        return np.nan
-
-    # Dynamically scale degree (Max 3 to avoid Runge's phenomenon oscillations)
-    degree = min(3, len(indices) - 1)
-
-    i_sub = i_row[indices]
-    dt_sub = dt_arr[indices]
-
-    # Exact fit mapping I to dT
-    coeffs = np.polyfit(i_sub, dt_sub, degree)
-    poly = np.poly1d(coeffs)
-
-    # Evaluate at I = 0
-    return poly(0)
+    return delta_V
 
 
 # ==========================================
-# 3. Data Processing
+# 3. Data Processing & 4. Plotting (Combined)
 # ==========================================
 print("Loading and grouping raw data...", flush=True)
 df = pd.read_csv(FILE_NAME)
 V_array = df['Vl (V)'].values
 
-# Extract all gradient arrays
+# Extract and average gradients
 grad_data = {}
 for col in df.columns:
     if 'Grad_' in col and '_I' in col:
         n = int(col.split('_')[1])
-        dt_val = n * (T_0 / 2.0)
+        dt_val = round(n * 0.02, 2)  # Rounded to prevent Python floating-point key mismatch
         if dt_val not in grad_data:
             grad_data[dt_val] = []
         grad_data[dt_val].append(df[col].values)
 
-# Average duplicates to ensure clean arrays
 for dt in grad_data:
     grad_data[dt] = np.mean(grad_data[dt], axis=0)
 
-# Sort strictly from MOST POSITIVE dT to MOST NEGATIVE dT
-sorted_dts = sorted(grad_data.keys(), reverse=True)
-dTs = np.array(sorted_dts)
+try:
+    I_col_0 = grad_data[0.0]
+except KeyError:
+    raise ValueError("Could not find baseline gradient column (dT=0.0) in the CSV.")
 
-# Build the 2D Current matrix: Rows = Voltage, Columns = Current
-I_matrix = np.array([grad_data[dt] for dt in sorted_dts]).T
-
-results = []
-print("Calculating row-wise inverse polynomials...", flush=True)
-
-# Iterate over every row (fixed Voltage)
-for v_idx, v_val in enumerate(V_array):
-    i_row = I_matrix[v_idx, :]
-    dt_th = dynamic_poly_dt_th(i_row, dTs)
-
-    results.append({
-        'Vl': v_val,
-        'dT_th_Final': dt_th
-    })
-
-res_df = pd.DataFrame(results)
-
-# Filter for plotting to avoid plotting NaNs
-plot_df = res_df.dropna(subset=['dT_th_Final']).copy()
-
-# Compute final Thermopower S(V) using stable Central Difference
-# S = -dV / d(dT). Using np.gradient directly on valid data arrays
-dV_grad = np.gradient(plot_df['Vl'])
-dT_grad = np.gradient(plot_df['dT_th_Final'])
-
-# Safely invert the derivative
-plot_df['S(V)'] = np.where(dT_grad != 0, -dV_grad / dT_grad, np.nan)
-
-# Drop any NaN results from the derivative
-plot_df = plot_df.dropna(subset=['S(V)'])
-
-# Save the mathematical output cleanly
-plot_df.to_csv('thermopower_results_V_domain_dynamic.csv', index=False)
-print("Data exported. Generating Plots...", flush=True)
-
-# ==========================================
-# 4. KC Standard Plotting
-# ==========================================
-
-# ----------------------------------------------------
-# GRAPH 1: Delta T_th vs Voltage
-# ----------------------------------------------------
+# Initialize the Figures before the loop
 fig1, ax1 = plt.subplots(figsize=(10, 8))
+fig2, ax2 = plt.subplots(figsize=(10, 8))
 
-ax1.plot(plot_df['Vl'], plot_df['dT_th_Final'], marker='o', markersize=6, color='black',
-         markerfacecolor='dodgerblue', linestyle='-', linewidth=1.5, alpha=0.9,
-         label=r'Extracted $\Delta T_{th}$')
-
+# Draw the zero-lines once
 ax1.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.3)
+ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.8)
 
-ax1.set_xlabel(r'Left Voltage $V_l$ ' + Volt_str, labelpad=15)
-ax1.set_ylabel(r'Threshold Temperature Gradient $\Delta T_{th}$ ' + T_str, labelpad=15)
-ax1.set_title(r'Threshold Gradient $\Delta T_{th}$ as a function of $V_l$', pad=20)
+all_results_dfs = []
+
+print("Starting iteration over specified gradients...", flush=True)
+
+# Loop over the user-defined m values
+for idx, m in enumerate(m_values):
+    DT_STEP = round(m * 0.02, 2)
+
+    if DT_STEP not in grad_data:
+        print(f"Warning: Gradient dT={DT_STEP} not found. Skipping m={m}.")
+        continue
+
+    I_col_target = grad_data[DT_STEP]
+
+    print(f"  --> Calculating for m={m} (dT={DT_STEP})...", flush=True)
+    results = []
+
+    # Iterate over every starting voltage
+    for v_idx, v_val in enumerate(V_array):
+        I_0 = I_col_0[v_idx]
+        delta_V = walk_down_for_voltage(V_array, I_col_target, I_0, v_idx)
+        S_V = -delta_V / DT_STEP if not np.isnan(delta_V) else np.nan
+
+        results.append({
+            'm_value': m,
+            'dT_step': DT_STEP,
+            'Vl': v_val,
+            'I_0': I_0,
+            'delta_V': delta_V,
+            'S(V)': S_V
+        })
+
+    res_df = pd.DataFrame(results)
+    plot_df = res_df.dropna(subset=['S(V)']).copy()
+    all_results_dfs.append(plot_df)
+
+    # Calculate dynamic ratio for the legend
+    grad_ratio = DT_STEP / E_c
+    legend_label = rf'$\Delta T / E_c = {grad_ratio:g}$'  # ':g' removes trailing zeros intelligently
+
+    # Add to GRAPH 1 (Delta V)
+    ax1.plot(plot_df['Vl'], plot_df['delta_V'], marker=markers[idx], markersize=6, color='black',
+             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9,
+             label=legend_label)
+
+    # Add to GRAPH 2 (S(V))
+    ax2.plot(plot_df['Vl'], plot_df['S(V)'], marker=markers[idx], markersize=6, color='black',
+             markerfacecolor=colors[idx], linestyle='-', linewidth=1.5, alpha=0.9,
+             label=legend_label)
+
+# Concatenate all results and save them out
+final_data_export = pd.concat(all_results_dfs, ignore_index=True)
+final_data_export.to_csv('thermopower_results_active_feedback_all.csv', index=False)
+print("All data exported. Finalizing plots...", flush=True)
+
+# ----------------------------------------------------
+# Finalize GRAPH 1: Delta V
+# ----------------------------------------------------
+ax1.set_xlabel(r'Left Electrode $V_{left}$ ' + Volt_str, labelpad=15)
+ax1.set_ylabel(r'Required Bias Shift $\Delta V$ ' + Volt_str, labelpad=15)
+ax1.set_title(r'Counteracting Bias $\Delta V$ to Maintain $I(V_{left},\Delta T=0)$', pad=20)
 
 legend1 = ax1.legend(fontsize=18, loc='best')
 legend1.get_frame().set_linewidth(0.5)
 ax1.grid(True, linestyle='--', linewidth=0.5, color='lightgray')
 
-plt.tight_layout()
-plt.savefig('dT_th_vs_Voltage_Dynamic.pdf', format='pdf', bbox_inches='tight')
+fig1.tight_layout()
+fig1.savefig('Delta_V_vs_Voltage_Active_MultiGrad.pdf', format='pdf', bbox_inches='tight')
 plt.close(fig1)
 
 # ----------------------------------------------------
-# GRAPH 2: Thermopower S(V) vs Voltage
+# Finalize GRAPH 2: Thermopower S(V)
 # ----------------------------------------------------
-fig2, ax2 = plt.subplots(figsize=(10, 8))
-
-ax2.plot(plot_df['Vl'], plot_df['S(V)'], marker='s', markersize=6, color='black',
-         markerfacecolor='mediumseagreen', linestyle='-', linewidth=1.5, alpha=0.9,
-         label=r'$S(V_l)$')
-
-ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.8)
-
-ax2.set_xlabel(r'Left Voltage $V_l$ ' + Volt_str, labelpad=15)
-ax2.set_ylabel(r'Thermopower $S(V_l) = -dV_l / d(\Delta T_{th})$ ' + S_str, labelpad=15)
-ax2.set_title(r'Thermopower $S(V_l)$ as a function of $V_l$', pad=20)
+ax2.set_xlabel(r'Baseline Voltage $V_{left}$ ' + Volt_str, labelpad=15)
+ax2.set_ylabel(r'Thermopower $S(V)$ ' + S_str, labelpad=15)
+ax2.set_title(r'Thermopower as a function of $V_{left}$', pad=20)
 
 legend2 = ax2.legend(fontsize=18, loc='best')
 legend2.get_frame().set_linewidth(0.5)
 ax2.grid(True, linestyle='--', linewidth=0.5, color='lightgray')
 
-plt.tight_layout()
-plt.savefig('Thermopower_S_vs_Voltage_Dynamic.pdf', format='pdf', bbox_inches='tight')
+fig2.tight_layout()
+fig2.savefig('Thermopower_S_vs_Voltage_Active_MultiGrad.pdf', format='pdf', bbox_inches='tight')
 plt.close(fig2)
 
-print("Batch processing complete: Row-wise Inverse Fits calculated and exported to vector PDFs.")
+print("Batch processing complete: Multi-gradient active feedback loop exported to vector PDFs.")
