@@ -1,5 +1,6 @@
 import bisect
 import sys
+import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -1014,7 +1015,7 @@ def Get_Steady_State_varyV(
     if len(V_sweep) > 1:
         dV_step = abs(V_sweep[1] - V_sweep[0])
     else:
-        dV_step = init.Volts
+        dV_step = init.Volts * 4/100
 
     # ---------------------------------------------------------
     # INTERNAL KMC ENGINE (The Micro-Loop)
@@ -1203,8 +1204,8 @@ def Get_Steady_State_varyV(
     # ---------------------------------------------------------
     for cycle in range(cycles):
         V_baseline = float(V_sweep[cycle])
-        if cycle == 0 and not loop_index % 5:
-            print(f"T_std={repetition}/20, {loop_index=}: Starting Vary-V Loop", flush=True)
+        if not loop_index % 5:
+            print(f"T_std={repetition}/20, {loop_index=}: cycle voltage is {cycle}", flush=True)
 
         # ==============================================================
         # STEP 0: Establish Baseline State (dT = 0)
@@ -1238,7 +1239,7 @@ def Get_Steady_State_varyV(
         max_feedback_loops = 30
         feedback_count = 0
 
-        # Account for stochastic noise in KMC
+        # Account for stochastic noise in KMC (clamp between 1e-9 and 0.01)
         I_tol = max(min(np.sqrt(I_var_new), 0.01), 1e-9)
 
         if abs(I_new - I_target) > I_tol:
@@ -1246,7 +1247,7 @@ def Get_Steady_State_varyV(
             # 4b) Current went UP -> Need LESS voltage (-dV)
             direction = 1 if I_new < I_target else -1
 
-            while abs(I_new - I_target) > I_tol and feedback_count < max_feedback_loops:
+            while abs(I_new - I_target) > I_tol:
                 V_adj += direction * dV_step
 
                 I_new, I_var_new, n_global, Qg_global, err = run_kmc_to_steady_state(
@@ -1256,14 +1257,21 @@ def Get_Steady_State_varyV(
                 )
                 if err: total_error_count += 1
 
-                # Update tolerance dynamically based on new state's variance
-                I_tol = max(np.sqrt(I_var_new), 1e-9)
+                # Update tolerance dynamically, keeping the exact same bounds!
+                I_tol = max(min(np.sqrt(I_var_new), 0.01), 1e-9)
 
                 # Halt if we crossed the target line to avoid infinite bouncing
                 if (direction == 1 and I_new >= I_target) or (direction == -1 and I_new <= I_target):
                     break
 
                 feedback_count += 1
+
+                # Abort safely if we hit the limit
+                if feedback_count >= max_feedback_loops:
+                    warnings.warn(
+                        f"Rep {repetition}: Couldn't find DeltaV to oppose DeltaT within {max_feedback_loops} steps.")
+                    V_adj = np.nan  # Use np.nan instead of None!
+                    break
 
         # ==============================================================
         # STEPS 5 & 6-9: Save DeltaV and Restitute State

@@ -38,21 +38,17 @@ from plot_graph_from_csv import plot_graph_from_csv
 
 ####### SLURM parameter parsing from job name ######
 job_name = os.environ.get('SLURM_JOB_NAME', 'TPvaryV1_11_4_Cg2')
-pattern = r"(Reverse_?)?TPvaryV(\d+)_(\d+)_(\d+)_Cg(\d+)_D(\d+)_(\d+)"
+pattern = r"(Reverse_?)?TPvaryV_Cg(\d+)_D(\d+)_(\d+)"
 match = re.search(pattern, job_name)
 
 if match:
     is_reverse = match.group(1) is not None
-    x = int(match.group(2))
-    last_rep = int(match.group(3))
-    jumps = int(match.group(4))
-    Cg = int(match.group(5))
-    gap_int = int(match.group(6))
-    gap_tenth = int(match.group(7))
+    Cg = int(match.group(2))
+    gap_int = int(match.group(3))
+    gap_tenth = int(match.group(4))
     gap_ratio = gap_int + gap_tenth / 10
 
-    repetition_list = list(range(x, last_rep, jumps))
-    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, x={x}, last_rep={last_rep}, jumps={jumps}, Cg={Cg}",
+    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, Cg={Cg}, D={gap_ratio}",
           flush=True)
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
@@ -78,7 +74,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     loop_count = max(num_workers, 320)
     repetition = 0
     last_repetition_to_do = 501
-    repetition_list = list(range(first_rep, last_rep, jumps))
     T0_unitless = 0.001
     mean_Rg = 100
     stdR = 2
@@ -113,7 +108,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     print(f"loop max: {loop_count}", flush=True)
     print(f"gap_ratio = {gap_ratio}", flush=True)
     print(f"Cg = {Cg}")
-    print(f"repeating for dT=n*Tstd, n = {repetition_list}", flush=True)
 
     # ---------------------------------------------------------
     # STATE INITIALIZATION (Resuming or Creating New)
@@ -378,6 +372,6 @@ if __name__ == "__main__":
         ),
         run_name=run_name_flat,
         mean_Cg=Cg,
-        first_rep=x,
+        first_rep=None,
         is_resumed=is_resumed
     )
