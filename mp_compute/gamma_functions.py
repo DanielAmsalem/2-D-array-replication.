@@ -7,6 +7,7 @@ import scipy.special as sp
 import Functions as F
 from define_objects import ExperimentInitialState, SteadyStateResult
 import matplotlib
+import gc
 
 matplotlib.use("Agg")  # for clustrer, TkAgg for Pc
 import matplotlib.pyplot as plt
@@ -735,25 +736,24 @@ def Get_Steady_State_fixed_bias(
     I_vec = np.zeros(len(sweep_sequence))
     Jx, Jy = np.zeros((init.row_num, init.row_num + 1)), np.zeros((init.row_num, init.row_num + 1))
 
-    # ---------------------------------------------------------
-    # OUTER LOOP: Sweeping Temperature Gradients (Up then Down)
-    # ---------------------------------------------------------
-    for step_idx, n_grad in enumerate(sweep_sequence):  # <--- Iterate over the sequence
+    # Identify the peak gradient index to only capture the heatmap once
+    peak_step_idx = len(sweep_sequence) // 2
 
-        # --- 1. JIT MEMORY LOADING ---
+    for step_idx, n_grad in enumerate(sweep_sequence):
+
         step_metadata = sim_data[n_grad]
         with io_lock:
-            table_triplets = np.load(step_metadata["table_path"])
-            table_val = table_triplets["val"]
-            table_prob = table_triplets["prob"]
-            table_T = np.unique(table_triplets["temp"]).tolist()
+            with np.load(step_metadata["table_path"]) as table_triplets:
+                table_val = table_triplets["val"].copy()
+                table_prob = table_triplets["prob"].copy()
+                table_T = np.unique(table_triplets["temp"]).tolist()
 
             # Safely handle Boundary NIS tables if they were generated
             nis_table_val, nis_table_prob = None, None
             if "nis_table_path" in step_metadata:
-                nis_triplets = np.load(step_metadata["nis_table_path"])
-                nis_table_val = nis_triplets["val"]
-                nis_table_prob = nis_triplets["prob"]
+                with np.load(step_metadata["nis_table_path"]) as nis_triplets:
+                    nis_table_val = nis_triplets["val"].copy()
+                    nis_table_prob = nis_triplets["prob"].copy()
 
         # --- 2. DYNAMIC PHYSICS EXTRACTION ---
         expected_error = step_metadata["expected_error"]
@@ -935,11 +935,12 @@ def Get_Steady_State_fixed_bias(
                     if steady_state_reps <= 0:
                         steady_state_timer -= dt
 
-                        # Capture the heatmap unconditionally at steady state
-                        Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index_list, init.near_right, init.near_left,
-                                                     init.row_num, n, periodic_y=periodic_y)
-                        Jx += Jx_
-                        Jy += Jy_
+                        # Fix: Only capture heatmap at the peak gradient
+                        if step_idx == peak_step_idx:
+                            Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index_list, init.near_right, init.near_left,
+                                                         init.row_num, n, periodic_y=periodic_y)
+                            Jx += Jx_
+                            Jy += Jy_
 
                         if steady_state_timer <= 0:
                             not_in_steady_state = False
@@ -953,14 +954,15 @@ def Get_Steady_State_fixed_bias(
             dist = dist_new
             t += dt
 
-        # Log final current into the chronologically indexed array
         I_vec[step_idx] = I_avg
 
-        # --- 5. EXPLICIT MEMORY FREE ---
-        del table_triplets
+        # Aggressively reclaim memory
         del table_val
         del table_prob
+        del table_T
         if nis_table_val is not None:
-            del nis_triplets, nis_table_val, nis_table_prob
+            del nis_table_val
+            del nis_table_prob
+        gc.collect()
 
     return SteadyStateResult(loop_index, error_count, I_vec, Jx, Jy)

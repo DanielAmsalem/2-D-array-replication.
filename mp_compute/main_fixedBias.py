@@ -1,395 +1,268 @@
-import os
-import multiprocessing
-
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = min(total_cpus - 5, 80)
-print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
-
-# SLURM Job Array Parsing
-task_id_str = os.environ.get('SLURM_ARRAY_TASK_ID', '0')
-TASK_ID = int(task_id_str)
-LOOPS_PER_TASK = 80
-START_LOOP_IDX = TASK_ID * LOOPS_PER_TASK
-END_LOOP_IDX = START_LOOP_IDX + LOOPS_PER_TASK
-print(f"Executing Task ID: {TASK_ID} | Loop range: {START_LOOP_IDX} to {END_LOOP_IDX - 1}", flush=True)
-
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from functools import partial
-from pathlib import Path
-import datetime
-import warnings
-import Functions as F
 import numpy as np
-from define_objects import IMPORT_EXPORT, SteadyStateResult, ExperimentInitialState
-# Importing the new Get_Steady_State function
-from gamma_functions import Get_Steady_State_fixed_bias
-from preparation import (
-    prepare_initial_state,
-    update_init_Cg_Rg
-)
-from dataclasses import asdict
-import orjson
-import csv
-import math
-import time
-import re
-import pickle
+import matplotlib.pyplot as plt
+import pandas as pd
+import json
+from pathlib import Path
 
-####### slurm parameter parsing from job name ######
-job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Cg2')
-pattern = r"(Reverse_?)?fixedBias_Cg(\d+)"
-match = re.search(pattern, job_name)
+# ==========================================================
+# KC'S FIGURE GUIDELINES ENFORCEMENT (Strict Parameterization)
+# ==========================================================
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
+plt.rcParams['font.family'] = 'sans-serif'
 
-if match:
-    is_reverse = match.group(1) is not None
-    Cg = int(match.group(2))
-    gap_int = 0
-    gap_tenth = 0
-    gap_ratio = 0
+# "I like to have the axes and boxes surrounding a plot NOT stand out... I use 0.5 pt"
+plt.rcParams['axes.linewidth'] = 0.5
+plt.rcParams['xtick.major.width'] = 0.5
+plt.rcParams['ytick.major.width'] = 0.5
+plt.rcParams['xtick.minor.width'] = 0.5
+plt.rcParams['ytick.minor.width'] = 0.5
 
-    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, Cg={Cg}, D={gap_ratio}", flush=True)
-else:
-    raise NameError(f"Job Name is improperly formatted : {job_name}")
-
-Cg_list = [2, 10]
-Cg_list_gapped = [10]
-gap_list = [2, 0.2]
+# "20 pt for the numbers, 25 pt for the axis labels"
+plt.rcParams['xtick.labelsize'] = 20
+plt.rcParams['ytick.labelsize'] = 20
+plt.rcParams['axes.labelsize'] = 25
+plt.rcParams['legend.fontsize'] = 16
 
 
-##############################################################
+def discover_latest_runs(base_dir="."):
+    """
+    Scans the base directory for 'results_*' folders.
+    Sorts them by newest first. Reads 'checkpoint_meta.json' to ensure it is a
+    fixed bias run, and determines if it's the forward or reverse sweep.
+    """
+    base_path = Path(base_dir)
+    fwd_folder = None
+    rev_folder = None
 
-def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> None:
-    # Set up dedicated checkpoint directory
-    checkpoint_dir = import_export.results_dir_path / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # Sort folders by modification time (newest first)
+    directories = sorted(
+        [d for d in base_path.glob("results_*") if d.is_dir()],
+        key=lambda x: x.stat().st_mtime,
+        reverse=True
+    )
 
-    # RUN TYPE
-    flip = is_reverse
-    rep_json = True if TASK_ID == 0 else False  # Only task 0 writes the init json
-    periodic_y = True
+    for folder in directories:
+        # Stop searching if we already found the latest of both
+        if fwd_folder is not None and rev_folder is not None:
+            break
 
-    # NEW FIXED EXPERIMENT PARAMETERS
-    FIXED_VOLTAGE = 0.0  # V=0 or any constant V you require for this sweep
-    loop_count = 960  # Fixed at 12 tasks * 80 loops
-    T0_unitless = 0.001
-    mean_Rg = 100
-    stdR = 2
-    sig = 0.05
+        # ONLY look at the explicitly created checkpoint metadata
+        meta_file = folder / "checkpoint_meta.json"
 
-    # TEMPERATURE SWEEP TARGETS
-    n_list_up = (list(range(1, 20)) +
-                 list(range(20, 40, 2)) +
-                 list(range(40, 80, 4)) +
-                 list(range(80, 200, 16)) +
-                 list(range(200, 500, 30)) +
-                 list(range(500, 2001, 50))
-                 )
+        if not meta_file.exists():
+            continue  # Skip folders without metadata
 
-    # Concatenate the up-sweep and the down-sweep (skipping the duplicate peak)
-    n_list_master = n_list_up + n_list_up[-2::-1]
+        try:
+            with open(meta_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
 
-    # MESSAGES
-    print(f"############# MAIN PARAMETERS ##################")
-    print(f"flip = {flip}", flush=True)
-    print(f"Total Loops across Array: {loop_count}", flush=True)
-    print(f"gap_ratio = {gap_ratio}", flush=True)
-    print(f"Cg = {Cg}")
-    print(f"stdR = {stdR}")
-    print(f"sig = {sig}")
-    print(f"Fixed Voltage Bias = {FIXED_VOLTAGE}", flush=True)
-    print(f"Intended Gradients: min(n)={min(n_list_master)}, max(n)={max(n_list_master)}", flush=True)
-    print(f"############# INITIALIZING GRID ##################")
+            # Filter out standard I(V) curve results that don't have 'fixedBias' in the job name
+            job_name = data.get("slurm_job_name", "")
+            if "fixedBias" not in job_name:
+                continue
 
-    if is_resumed:
-        run_to_get_init_from = run_name
-        results_dir_of_past_run = import_export.results_dir_path
-    else:
-        run_to_get_init_from = "20260606_22h05m04s"
-        results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
+            # Check if it's the forward or reverse run based on our metadata format
+            if "is_reverse" in data:
+                is_flip = str(data["is_reverse"]).strip().lower() == "true"
 
-    infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
-    if infile.exists():
-        json_txt = infile.read_text()
-        raw_fields = orjson.loads(json_txt)
-        init_str = ExperimentInitialState(**raw_fields)
-        init = F.fix_types(init_str, loop_count)
+                if is_flip and rev_folder is None:
+                    rev_folder = folder
+                    print(f"--> Auto-detected Reverse Run (is_reverse=True): {folder.name}")
+                elif not is_flip and fwd_folder is None:
+                    fwd_folder = folder
+                    print(f"--> Auto-detected Forward Run (is_reverse=False): {folder.name}")
 
-        init = F.swap_in_init("flip", flip, init)
-        if gap_ratio > 1e-3 and init.resolution != 1e-4:
-            init = F.swap_in_init("resolution", 1e-4, init)
+        except Exception:
+            # Silently pass over unreadable or corrupted JSON files
+            pass
 
-        if init.T0 != T0_unitless:
-            init = F.swap_in_init("T0", T0_unitless, init)
+    return fwd_folder, rev_folder
 
-        if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
-            init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
 
-        if np.any(init.R_t_ij < 0.1):
-            min_Rt = np.min(init.R_t_ij)
-            shift_amount = 0.1 - min_Rt
-            R_t_ij_shifted = init.R_t_ij + shift_amount
-            init = F.swap_in_init("R_t_ij", R_t_ij_shifted, init)
+def load_and_split_hysteresis_data(folder_path):
+    """
+    Reads CSV files, aggregates by step_idx to preserve chronology,
+    and splits the data into chronological Up-Sweep and Down-Sweep DataFrames.
+    """
+    if folder_path is None:
+        return None, None
 
-        print(f"Success: Initialized state from {run_to_get_init_from}", flush=True)
-    else:
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
-                                     Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
-        print("CREATED NEW INIT FILE", flush=True)
+    folder = Path(folder_path)
+    csv_files = list(folder.glob("fixed_bias_task*.csv"))
 
-    # Task 0 writes the JSON config for the entire array
-    if rep_json:
-        outfile = Path(import_export.results_dir_path / f"{run_name}.json")
-        raw_fields = asdict(init)
-        serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
-        outfile.write_text(serialized_init_data)
-        print("STORED INIT IN JSON", flush=True)
+    if not csv_files:
+        print(f"Warning: No fixed_bias_task CSV files found in {folder.name}")
+        return None, None
 
-    print("############# PRE-LOADING METADATA (NO TABLES) ##################", flush=True)
-    Delta_0 = gap_ratio * init.Ec
+    print(f"Aggregating {len(csv_files)} batch files from {folder.name}...")
 
-    # Parse CSV Bounds Once
-    bounds_dict = {}
-    with open(import_export.csv_table_path) as f:
-        for row in csv.reader(f):
-            if row and row[0].strip().lstrip('-').isdigit():
-                if len(row) >= 3 and row[1].strip() != "" and row[2].strip() != "":
-                    rep_idx = int(row[0])
-                    bounds_dict[rep_idx] = {"neg": float(row[1]), "pos": float(row[2])}
+    df_list = [pd.read_csv(f) for f in csv_files]
+    full_df = pd.concat(df_list, ignore_index=True)
+    print(f"there are {len(df_list)} csv's found", flush=True)
 
-    # Build Memory-Resident Data Dictionary for all n
-    simulation_data_dict = {}
-    unique_n_values = sorted(list(set(n_list_master)))
+    if "step_idx" not in full_df.columns:
+        raise ValueError(
+            "CRITICAL: 'step_idx' column missing. This script requires the updated up-and-down sweep sequence.")
 
-    for n in unique_n_values:
-        if n not in bounds_dict:
-            print(f"Warning: n={n} missing from bounds table. Skipping.")
-            continue
+    # ==========================================================
+    # FIX 1: Group strictly by step_idx to perfectly merge all 48 tasks
+    # ==========================================================
+    grouped = full_df.groupby("step_idx").agg({
+        "delta_T": "mean",
+        "I_avg": ["mean", "std", "count"]
+    })
 
-        # Calculate strict T profile for this n
-        T_std = n * init.T0 / 20
-        T_list = [init.T0 + i * T_std for i in range(init.row_num)]
-        if flip:
-            T_list = np.flip(T_list).tolist()
+    # Flatten multi-level column names from the agg function
+    grouped.columns = ["delta_T", "mean", "std", "count"]
+    grouped = grouped.reset_index()
 
-        table_path = import_export.prepare_table_triplets_file_list[n]
-        if not table_path.exists():
-            print(f"Warning: Table file missing for n={n}. Skipping.")
-            continue
+    # Calculate Standard Error of the Mean (SEM) = std / sqrt(N)
+    grouped['sem'] = grouped['std'] / np.sqrt(grouped['count'])
+    grouped['sem'] = grouped['sem'].fillna(0)
 
-        # PRE-CALCULATE PHYSICS ONCE PER UNIQUE GRADIENT
-        gap_array = F.exact_bcs_gap(T_list, Delta_0)
-        expected_err = F.calc_expected_dist_std(T_list, init.T0, gap_array, init.R_t_ij, init.Ec)
+    # 2. Sort chronologically by step
+    grouped = grouped.sort_values("step_idx").reset_index(drop=True)
 
-        # Populate Dictionary with Path instead of raw tables
-        simulation_data_dict[n] = {
-            "T": T_list,
-            "T_std": T_std,
-            "gap_array": gap_array,
-            "expected_error": expected_err,
-            "table_path": table_path.as_posix(),  # Pass the string path!
-            "pos_energy_bound": bounds_dict[n]["pos"],
-            "neg_energy_bound": bounds_dict[n]["neg"]
-        }
+    # ==========================================================
+    # FIX 2: Find peak magnitude using absolute value so negative sweeps split properly
+    # ==========================================================
+    peak_idx = grouped['delta_T'].abs().idxmax()
 
-    print(f"Pre-loaded metadata for {len(simulation_data_dict)} unique temperature profiles.", flush=True)
+    # Slicing with .loc safely includes the peak in BOTH arrays so the plotted line connects flawlessly
+    sweep_up = grouped.loc[:peak_idx]
+    sweep_down = grouped.loc[peak_idx:]
 
-    # Build the actual chronological sequence of gradients to compute
-    sweep_sequence = [n for n in n_list_master if n in simulation_data_dict]
+    return sweep_up, sweep_down
 
-    if sweep_sequence:
-        print(f"---> Verified Sequence Length: {len(sweep_sequence)} steps (Up and Down).", flush=True)
-    else:
-        print("---> CRITICAL ERROR: No valid gradients found! Check your CSV bounds and .npz file paths.", flush=True)
+
+def plot_thermopower_current(fwd_folder, rev_folder, output_path):
+    # Unpack the Up and Down sweeps for both physical gradients
+    fwd_up, fwd_down = load_and_split_hysteresis_data(fwd_folder)
+    rev_up, rev_down = load_and_split_hysteresis_data(rev_folder)
+
+    if fwd_up is None and rev_up is None:
+        print("CRITICAL ERROR: No data found to plot. Exiting.")
         return
 
-    print("############# RUNNING MULTIPROCESSING ARRAY ##################", flush=True)
-    marker_file = import_export.results_dir_path / f".completed_task{TASK_ID}"
-    if marker_file.exists():
-        print(f"Task {TASK_ID} already completed. Exiting.", flush=True)
-        return
+    Ec = 0.05
+    line_width = 2.0  # Slightly thicker line since markers are removed
 
-    # CREATE THE I/O LOCK
-    manager = multiprocessing.Manager()
-    io_lock = manager.Lock()
+    # Base title and y-axis strings
+    base_title = r"$I(\Delta T)$ Current Under Temperature Gradient at $V=0$"
+    y_label = r"Current $\left[ \frac{e}{\langle R \rangle \langle C \rangle} \right]$"
 
-    t0 = time.time()
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        print(f"Task {TASK_ID} running with {executor._max_workers} workers", flush=True)
+    # ==========================================================
+    # GRAPH 1: Positive Gradient Alone (\Delta T > 0)
+    # ==========================================================
+    if fwd_up is not None:
+        fig1, ax1 = plt.subplots(figsize=(12, 8))
 
-        # Bind the unified parameters to our new fixed_bias steady state calculator
-        loaded_state_function = partial(
-            Get_Steady_State_fixed_bias,
-            init=init,
-            fixed_voltage=FIXED_VOLTAGE,
-            sweep_sequence=sweep_sequence,
-            sim_data=simulation_data_dict,
-            io_lock=io_lock,
-            flip=flip,
-            periodic_y=periodic_y,
-            gap_ratio=gap_ratio
+        ax1.errorbar(
+            fwd_up["delta_T"] / Ec, fwd_up["mean"], yerr=fwd_up["sem"],
+            marker='None', linestyle='-', color='crimson', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T > 0$ (Increasing)'
+        )
+        ax1.errorbar(
+            fwd_down["delta_T"] / Ec, fwd_down["mean"], yerr=fwd_down["sem"],
+            marker='None', linestyle='--', color='dodgerblue', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T > 0$ (Decreasing)'
         )
 
-        results = [None] * init.loop_count
-        futures = {}
+        ax1.set_title(base_title, fontsize=28, pad=20)
+        ax1.set_xlabel(r"$\Delta T/E_c$", labelpad=15)
+        ax1.set_ylabel(y_label, labelpad=15)
+        ax1.legend(loc="best")
+        ax1.grid(True, linestyle=':', alpha=0.5, linewidth=0.5)
 
-        # Safely cap bounds in case we requested fewer loops total
-        safe_end_idx = min(END_LOOP_IDX, init.loop_count)
+        plt.tight_layout()
+        out_file1 = Path(output_path) / "Thermopower_I_vs_deltaT_fixedV0_pos.pdf"
+        plt.savefig(out_file1, format='pdf', bbox_inches='tight')
+        plt.close(fig1)
+        print(f"Generated: {out_file1.name}")
 
-        for i in range(START_LOOP_IDX, safe_end_idx):
-            ckpt_path = checkpoint_dir / f"ckpt_task{TASK_ID}_idx{i}.pkl"
-            if ckpt_path.exists():
-                try:
-                    with open(ckpt_path, "rb") as f:
-                        results[i] = pickle.load(f)
-                except Exception as e:
-                    print(f"Warning: Failed to load {ckpt_path}, recomputing. Error: {e}")
-                    ckpt_path.unlink(missing_ok=True)
+    # ==========================================================
+    # GRAPH 2: Negative Gradient Alone (\Delta T < 0) mapped to +X
+    # ==========================================================
+    if rev_up is not None:
+        fig2, ax2 = plt.subplots(figsize=(12, 8))
 
-            if results[i] is None:
-                futures[executor.submit(loaded_state_function, i)] = i
+        ax2.errorbar(
+            rev_up["delta_T"] / Ec, rev_up["mean"], yerr=rev_up["sem"],
+            marker='None', linestyle='-', color='darkorange', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T < 0$ (Increasing magnitude)'
+        )
+        ax2.errorbar(
+            rev_down["delta_T"] / Ec, rev_down["mean"], yerr=rev_down["sem"],
+            marker='None', linestyle='--', color='purple', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T < 0$ (Decreasing magnitude)'
+        )
 
-        completed_count = (safe_end_idx - START_LOOP_IDX) - len(futures)
-        if completed_count > 0:
-            print(f"Checkpoint Resume: Task {TASK_ID} pre-loaded {completed_count} workers. {len(futures)} submitted.",
-                  flush=True)
+        ax2.set_title(base_title, fontsize=28, pad=20)
+        ax2.set_xlabel(r"$|\Delta T|/E_c$", labelpad=15)
+        ax2.set_ylabel(y_label, labelpad=15)
+        ax2.legend(loc="best")
+        ax2.grid(True, linestyle=':', alpha=0.5, linewidth=0.5)
 
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                res = future.result()
-                results[idx] = res
+        plt.tight_layout()
+        out_file2 = Path(output_path) / "Thermopower_I_vs_deltaT_fixedV0_neg.pdf"
+        plt.savefig(out_file2, format='pdf', bbox_inches='tight')
+        plt.close(fig2)
+        print(f"Generated: {out_file2.name}")
 
-                # Save checkpoint instantly
-                ckpt_path = checkpoint_dir / f"ckpt_task{TASK_ID}_idx{idx}.pkl"
-                with open(ckpt_path, "wb") as f:
-                    pickle.dump(res, f)
+    # ==========================================================
+    # GRAPH 3: Combined Overlay (Mapped to Absolute Magnitude)
+    # ==========================================================
+    if fwd_up is not None and rev_up is not None:
+        fig3, ax3 = plt.subplots(figsize=(12, 8))
 
-            except Exception as e:
-                print(f"\nCRITICAL ERROR: Worker {idx} in Task {TASK_ID} crashed!", flush=True)
-                for f_cancel in futures:
-                    f_cancel.cancel()
-                raise
+        # Plot Forward
+        ax3.errorbar(
+            fwd_up["delta_T"] / Ec, fwd_up["mean"], yerr=fwd_up["sem"],
+            marker='None', linestyle='-', color='crimson', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T > 0$ (Increasing)'
+        )
+        ax3.errorbar(
+            fwd_down["delta_T"] / Ec, fwd_down["mean"], yerr=fwd_down["sem"],
+            marker='None', linestyle='--', color='dodgerblue', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T > 0$ (Decreasing)'
+        )
 
-        # ----------------- DATA AGGREGATION FOR THIS TASK -----------------
-        valid_results = [res for res in results[START_LOOP_IDX:safe_end_idx] if res is not None]
-        if valid_results:
-            N_valid = len(valid_results)
-            print(f"Task {TASK_ID} finished computing. Aggregating {N_valid} valid loops.", flush=True)
+        # Plot Reverse mapped to positive X
+        ax3.errorbar(
+            rev_up["delta_T"] / Ec, rev_up["mean"], yerr=rev_up["sem"],
+            marker='None', linestyle='-', color='darkorange', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T < 0$ (Increasing magnitude)'
+        )
+        ax3.errorbar(
+            rev_down["delta_T"] / Ec, rev_down["mean"], yerr=rev_down["sem"],
+            marker='None', linestyle='--', color='purple', linewidth=line_width,
+            capsize=4, elinewidth=1.5, capthick=1.0, label=r'$\Delta T < 0$ (Decreasing magnitude)'
+        )
 
-            # Stack all individual I_vec arrays into a 2D matrix of shape (N_valid, cycles)
-            all_I_vecs = np.array([res.I_vec for res in valid_results])
+        ax3.set_title(base_title, fontsize=28, pad=20)
+        ax3.set_xlabel(r"$|\Delta T|/E_c$", labelpad=15)
+        ax3.set_ylabel(y_label, labelpad=15)
 
-            # Vectorized Mean: Calculate average across the 0th axis (columns/loops)
-            avg_currents = np.mean(all_I_vecs, axis=0)
+        # Explicitly enforce Top-Left positioning for the combined legend
+        ax3.legend(loc="upper left")
+        ax3.grid(True, linestyle=':', alpha=0.5, linewidth=0.5)
 
-            # Vectorized Standard Deviation (ddof=1 gives unbiased sample variance)
-            std_currents = np.std(all_I_vecs, axis=0, ddof=1)
-
-            # Standard Error of the Mean (What you actually plot for error bars)
-            err_currents = std_currents / np.sqrt(N_valid)
-
-            # Output specific task CSV
-            out_csv_path = import_export.results_dir_path / f"fixed_bias_task{TASK_ID}.csv"
-            with open(out_csv_path, mode="w", newline="") as f:
-                writer = csv.writer(f)
-                # Added 'step_idx' to track chronological order
-                writer.writerow(["step_idx", "n", "T_std", "delta_T", "I_avg", "I_err"])
-
-                for idx, n in enumerate(sweep_sequence):
-                    T_std = simulation_data_dict[n]["T_std"]
-                    delta_T = 0.001 + 0.006 * (n / 20)
-                    writer.writerow([idx, n, T_std, delta_T, avg_currents[idx], err_currents[idx]])
-
-            print(f"Saved local task output to {out_csv_path.name}")
-
-        # Output basic report for task
-        report_path = import_export.results_dir_path / f"report_task{TASK_ID}.txt"
-        with open(report_path, "w") as f:
-            f.write(f"Task ID: {TASK_ID}\n")
-            f.write(f"Run Time: {time.time() - t0} sec\n")
-
-    # Mark as complete and clean up .pkl files
-    marker_file.touch()
-    for f in checkpoint_dir.glob(f"ckpt_task{TASK_ID}_idx*.pkl"):
-        f.unlink(missing_ok=True)
-
-    print(f"Task {TASK_ID} successfully completed all operations.", flush=True)
-
-
-def find_resume_directory(base_dir: Path, current_job_name: str) -> Path:
-    dirs = sorted([d for d in base_dir.glob("results_*") if d.is_dir()], key=lambda x: x.stat().st_mtime, reverse=True)
-    for p in dirs:
-        meta_file = p / "checkpoint_meta.json"
-        if meta_file.exists():
-            try:
-                meta = orjson.loads(meta_file.read_text())
-                if meta.get("slurm_job_name") == current_job_name:
-                    return p
-            except Exception:
-                pass
-    return None
+        plt.tight_layout()
+        out_file3 = Path(output_path) / "Thermopower_I_vs_deltaT_fixedV0_combined.pdf"
+        plt.savefig(out_file3, format='pdf', bbox_inches='tight')
+        plt.close(fig3)
+        print(f"Generated: {out_file3.name}")
 
 
 if __name__ == "__main__":
-    EXPORT_PATH = Path(__file__).parent.parent / "export"
-    MP_COMPUTE_PATH = Path(__file__).parent.parent / "mp_compute"
-    BASE_RESULTS_DIR = Path(__file__).parent.parent
+    # ==========================================================
+    # AUTOMATIC RUN DISCOVERY
+    # ==========================================================
+    print("Scanning directory for recent simulation runs...")
 
-    resume_dir = find_resume_directory(BASE_RESULTS_DIR, job_name)
+    FORWARD_RUN_DIR, REVERSE_RUN_DIR = discover_latest_runs("./")
 
-    if resume_dir:
-        RESULTS_DIR_PATH = resume_dir
-        run_name_flat = resume_dir.name.replace("results_", "")
-        if TASK_ID == 0:
-            print(f"RESUMING existing run at {RESULTS_DIR_PATH} (Run Name: {run_name_flat})", flush=True)
-        is_resumed = True
-    else:
-        # Prevent simultaneous directory creation from multiple array jobs causing race conditions
-        date_ = datetime.datetime.now()
-        run_name_flat = date_.strftime("%Y%m%d_%Hh%Mm%Ss")
-        RESULTS_DIR_PATH = BASE_RESULTS_DIR / f"results_{run_name_flat}"
+    OUTPUT_DIRECTORY = "./"
 
-        try:
-            RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=False)
-            print(f"Created NEW results directory at {RESULTS_DIR_PATH}")
-            is_resumed = False
-
-            # Task 0 (or whichever reaches here first) saves metadata
-            meta_data = {
-                "slurm_job_name": job_name,
-                "created_at": run_name_flat,
-                "Cg": Cg,
-                "gap_ratio": gap_ratio,
-                "is_reverse": is_reverse
-            }
-            meta_file = RESULTS_DIR_PATH / "checkpoint_meta.json"
-            meta_file.write_text(orjson.dumps(meta_data).decode("utf-8"))
-        except FileExistsError:
-            # Another array task beat this one to folder creation, treat as resumed
-            is_resumed = True
-            time.sleep(2)  # Give the creating task a moment to write checkpoint_meta.json
-
-    if gap_ratio > 1e-3:
-        tables_list = [EXPORT_PATH / f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in
-                       range(501)]
-        csv_table_path = MP_COMPUTE_PATH / f"gapped_table_Cg{Cg}_D{gap_int}_{gap_tenth}.csv"
-    else:
-        tables_list = [EXPORT_PATH / f"64bit_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in range(2001)]
-        csv_table_path = MP_COMPUTE_PATH / f"table_Cg{Cg}.csv"
-
-    main(
-        IMPORT_EXPORT(
-            plot_results=True,
-            export_path=EXPORT_PATH,
-            prepare_table_triplets_file_list=tables_list,
-            csv_table_path=csv_table_path,
-            results_dir_path=RESULTS_DIR_PATH
-        ),
-        run_name=run_name_flat,
-        mean_Cg=Cg,
-        is_resumed=is_resumed
-    )
+    plot_thermopower_current(FORWARD_RUN_DIR, REVERSE_RUN_DIR, OUTPUT_DIRECTORY)

@@ -37,27 +37,29 @@ import pickle
 from plot_graph_from_csv import plot_graph_from_csv
 
 ####### slurm parameter parsing from job name ######
-job_name = os.environ.get('SLURM_JOB_NAME', 'TPmeas1_11_4_Tmid15_4_Cg10_D2_0')
-pattern = r"(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Tmid(\d+)_(\d+)_Cg(\d+)_D(\d+)_(\d+)"
+job_name = os.environ.get('SLURM_JOB_NAME', 'FlipSample_TPmeas1_11_4_Tmid15_4_Cg10_D2_0')
+pattern = r"(FlipSample_?)?(Reverse_?)?TPmeas(\d+)_(\d+)_(\d+)_Tmid(\d+)_(\d+)_Cg(\d+)_D(\d+)_(\d+)"
 match = re.search(pattern, job_name)
 
 if match:
-    # match.group(1) will be 'Reverse' or 'Reverse_' if it exists, otherwise None
-    is_reverse = match.group(1) is not None
-    x = int(match.group(2))
-    last_rep = int(match.group(3))
-    jumps = int(match.group(4))
-    Tmid_units = int(match.group(5))
-    Tmid_pastdigit = int(match.group(6))
+    # Safely unpack the updated regex groups
+    is_flip_sample = match.group(1) is not None
+    is_reverse = match.group(2) is not None
+    x = int(match.group(3))
+    last_rep = int(match.group(4))
+    jumps = int(match.group(5))
+    Tmid_units = int(match.group(6))
+    Tmid_pastdigit = int(match.group(7))
     Tmid = Tmid_units + Tmid_pastdigit / (10 ** len(str(Tmid_pastdigit)))
-    Cg = int(match.group(7))
-    gap_int = int(match.group(8))
-    gap_tenth = int(match.group(9))
+    Cg = int(match.group(8))
+    gap_int = int(match.group(9))
+    gap_tenth = int(match.group(10))
     gap_ratio = gap_int + gap_tenth / 10
 
     repetition_list = list(range(x, last_rep, jumps))
-    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, repetition_list={repetition_list}, Cg={Cg}, "
-          f"Tmid={Tmid}, D={gap_ratio}", flush=True)
+    print(
+        f"Parsed from Job Name '{job_name}': flip_sample={is_flip_sample}, flip_T={is_reverse}, repetition_list={repetition_list}, Cg={Cg}, "
+        f"Tmid={Tmid}, D={gap_ratio}", flush=True)
 
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
@@ -69,8 +71,37 @@ gap_list = [2]
 
 ##############################################################
 
+def apply_geometric_flip(init_obj: ExperimentInitialState) -> ExperimentInitialState:
+    """
+    Physically rotates the simulation arrays 180 degrees left-to-right.
+    This simulates negative V bias (V_right > V_left) by mapping V_left's
+    properties strictly to the topological right of the sample array.
+    """
+    print("FLIP_SAMPLE is True: Physically rotating the sample 180 degrees...", flush=True)
+    P = np.arange(init_obj.row_num)[::-1]
 
-def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed_shadow=False) -> None:
+    # 1. Symmetrically swap island-to-island matrices
+    new_C_inv = init_obj.C_inv[P][:, P]
+    new_R_t_ij = init_obj.R_t_ij[P][:, P]
+
+    # 2. Map islands to new physical locations AND swap Left/Right electrode connections ([:, ::-1])
+    # Col 0 is Left coupling, Col 1 is Right coupling.
+    new_R_t_i = init_obj.R_t_i[P][:, ::-1]
+
+    # NOTE: We DO NOT change near_left or near_right!
+    # Index 0 is always structurally 'Left'. By permuting the matrices,
+    # the physical island that used to be on the Right is now sitting at Index 0.
+
+    # Apply to init securely
+    temp_init = F.swap_in_init("C_inv", new_C_inv, init_obj)
+    temp_init = F.swap_in_init("R_t_ij", new_R_t_ij, temp_init)
+    temp_init = F.swap_in_init("R_t_i", new_R_t_i, temp_init)
+
+    print("Sample geometrically mirrored successfully.", flush=True)
+    return temp_init
+
+
+def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample, is_resumed_shadow=False) -> None:
     # Set up dedicated checkpoint directory
     checkpoint_dir = import_export.results_dir_path / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -119,7 +150,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed_
             f"Failed to find n=0 bounds in the CSV table located at {import_export.csv_table_path} check CSV contents")
 
     # EXPERIMENT PARAMETERS
-    loop_count = max(num_workers, 960)
+    loop_count = max(num_workers, 320)
     repetition = 0  # int : m -> the first gradient to check will be dT=(m+1)Tstd
 
     ######## CHANGABLES ###############
@@ -138,7 +169,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed_
 
     # MESSAGES
     print(f"############# MAIN PARAMETERS ##################")
-    print(f"flip = {flip}", flush=True)
+    print(f"flip_T = {flip}", flush=True)
+    print(f"flip_sample = {flip_sample}", flush=True)
     print(f"loop max: {loop_count}", flush=True)
     print(f"gap_ratio = {gap_ratio}", flush=True)
     print(f"Cg = {Cg}")
@@ -199,6 +231,12 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed_
         if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
             print(f"Mismatch in Cg or Rg from past run. Updating physics matrices...", flush=True)
             init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
+            # CRITICAL CATCH: update_init_Cg_Rg completely reconstructs the matrices, destroying any geometric flip!
+            # If flip_sample is true, we must re-apply the geometric rotation to the newly generated arrays.
+            if flip_sample:
+                print("Re-applying geometric flip because matrices were just regenerated!", flush=True)
+                init = apply_geometric_flip(init)
+
             print(f"Successfully updated Cg to {init.Cg[0]} and Rg to {init.Rg[0]}. New Ec = {init.Ec}", flush=True)
 
         # Check if ANY element in the matrix is below the threshold
@@ -216,6 +254,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed_
         init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
                                      Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
         print("CREATED NEW INIT FILE")
+
+        # Apply the negative voltage physics flip purely structurally
+        if flip_sample:
+            init = apply_geometric_flip(init)
 
     ### report init state to report file
     if rep_json:
@@ -656,10 +698,11 @@ if __name__ == "__main__":
         print(f"Created NEW results directory at {RESULTS_DIR_PATH}")
         is_resumed = False
 
-        # Save exact metadata to allow future resumption, strictly tracking Tmid and D parameters
+        # Save exact metadata to allow future resumption, strictly tracking Tmid, D, and flip_sample parameters
         meta_data = {
             "slurm_job_name": job_name,
             "created_at": run_name_flat,
+            "flip_sample": is_flip_sample,
             "Cg": Cg,
             "Tmid_units": Tmid_units,
             "Tmid_pastdigit": Tmid_pastdigit,
@@ -693,5 +736,6 @@ if __name__ == "__main__":
         run_name=run_name_flat,
         mean_Cg=Cg,
         first_rep=x,
+        flip_sample=is_flip_sample,
         is_resumed_shadow=is_resumed
     )
