@@ -1,12 +1,22 @@
 import os
 
+LOOPS_PER_TASK = 80
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = min(total_cpus - 5, 80)
+num_workers = min(total_cpus - 5, LOOPS_PER_TASK)
 print(f"worker number set to {num_workers} ; for {total_cpus} cpus", flush=True)
+
+# -------------------------------------------------------------
+# SLURM JOB ARRAY PARSING
+# -------------------------------------------------------------
+task_id_str = os.environ.get('SLURM_ARRAY_TASK_ID', '0')
+TASK_ID = int(task_id_str)
+START_LOOP_IDX = TASK_ID * LOOPS_PER_TASK
+END_LOOP_IDX = START_LOOP_IDX + LOOPS_PER_TASK
+print(f"Executing Task ID: {TASK_ID} | Loop range: {START_LOOP_IDX} to {END_LOOP_IDX - 1}", flush=True)
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
@@ -16,8 +26,6 @@ import warnings
 import Functions as F
 import numpy as np
 import math
-
-# Added the new dataclass to the import!
 from define_objects import IMPORT_EXPORT, ExperimentInitialState, SteadyStateVaryVResult
 from gamma_functions import Get_Steady_State_varyV
 from preparation import (
@@ -27,14 +35,12 @@ from preparation import (
 )
 from preparation import prepare_table_triplets_gapped, prepare_table_triplets, output_table_triplets, \
     prepare_table_triplets_NIS
-import curve_plotter
 from dataclasses import asdict
 import orjson
 import csv
 import time
 import re
 import pickle
-from plot_graph_from_csv import plot_graph_from_csv
 
 ####### SLURM parameter parsing from job name ######
 job_name = os.environ.get('SLURM_JOB_NAME', 'TPvaryV1_11_4_Cg2')
@@ -61,19 +67,16 @@ gap_list = [2]
 ##############################################################
 
 def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=False) -> None:
-    # Set up dedicated checkpoint directory
     checkpoint_dir = import_export.results_dir_path / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # RUN TYPE
     flip = is_reverse
     periodic_y = True
-    plot_ongoing_voltage_map = False
+    rep_json = True if TASK_ID == 0 else False  # Only task 0 writes the init json
 
     # EXPERIMENT PARAMETERS
-    loop_count = max(num_workers, 320)
-    repetition = 0
-    last_repetition_to_do = 501
+    loop_count = max(320, END_LOOP_IDX)  # Dynamically size for arrays
     T0_unitless = 0.001
     mean_Rg = 100
     stdR = 2
@@ -105,7 +108,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
     print(f"############# MAIN PARAMETERS ##################")
     print(f"flip = {flip}", flush=True)
-    print(f"loop max: {loop_count}", flush=True)
+    print(f"Total Loops for this specific Array Worker: {loop_count}", flush=True)
     print(f"gap_ratio = {gap_ratio}", flush=True)
     print(f"Cg = {Cg}")
 
@@ -137,9 +140,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
                                      Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
 
-    # Output init to JSON
-    outfile = Path(import_export.results_dir_path / f"{run_name}.json")
-    outfile.write_text(orjson.dumps(asdict(init), option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"))
+    if rep_json:
+        outfile = Path(import_export.results_dir_path / f"{run_name}.json")
+        outfile.write_text(orjson.dumps(asdict(init), option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"))
 
     # ---------------------------------------------------------
     # DEFINE MACRO VOLTAGE SWEEP (Baseline Voltages)
@@ -204,12 +207,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     print("############# RUN THERMOPOWER VARY-V EXPERIMENT ##################", flush=True)
 
     # ---------------------------------------------------------
-    # MAIN EXPERIMENT LOOP (Iterating over dT gradients)
+    # MAIN EXPERIMENT LOGIC
     # ---------------------------------------------------------
-    # 1. Define the specific temperature gradient for this run
-    marker_file = import_export.results_dir_path / f".completed_rep{repetition}"
+    marker_file = import_export.results_dir_path / f".completed_task{TASK_ID}"  # TASK SPECIFIC MARKER
     if marker_file.exists():
-        exit(f"This code is already executed in this path : {import_export.results_dir_path}")
+        exit(f"Task {TASK_ID} already completed in this path : {import_export.results_dir_path}")
 
     T_std = repetition * init.T0 / 20
     T_dT = [init.T0 + i * T_std for i in range(init.row_num)]
@@ -234,7 +236,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         t0 = time.time()
 
-        # Aligning exactly with the Get_Steady_State_varyV signature
         loaded_state_function = partial(
             Get_Steady_State_varyV,
             init=init,
@@ -272,8 +273,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         results = [None] * init.loop_count
         futures = {}
 
-        for i in range(init.loop_count):
-            ckpt_path = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
+        # Safely cap bounds in case we requested fewer loops total
+        safe_end_idx = min(END_LOOP_IDX, init.loop_count)
+
+        for i in range(START_LOOP_IDX, safe_end_idx):
+            ckpt_path = checkpoint_dir / f"ckpt_varyV_task{TASK_ID}_idx{i}.pkl"
             if ckpt_path.exists():
                 try:
                     with open(ckpt_path, "rb") as f:
@@ -290,26 +294,24 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             res = future.result()
             results[idx] = res
 
-            with open(checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{idx}.pkl", "wb") as f:
+            with open(checkpoint_dir / f"ckpt_varyV_task{TASK_ID}_idx{idx}.pkl", "wb") as f:
                 pickle.dump(res, f)
 
-    # 5. Extract and Plot Data
-    # (Note: You'll need to update curve_plotter to handle DeltaV_vec and I_baseline_vec)
-    curve_plotter.thermopower_curve_compute_and_save_csv(
-        init=init,
-        filename=run_name,
-        results=results,
-        V_sweep=V_sweep,
-        repetition=repetition,
-        results_path=import_export.results_dir_path
-    )
+    # 5. Extract Data Locally for this Task
+    valid_results = [res for res in results[START_LOOP_IDX:safe_end_idx] if res is not None]
+
+    if valid_results:
+        # Save raw output data so a post-processing script can aggregate them easily.
+        out_pkl_path = import_export.results_dir_path / f"varyV_raw_task{TASK_ID}.pkl"
+        with open(out_pkl_path, "wb") as f:
+            pickle.dump({'V_sweep': V_sweep, 'results': valid_results}, f)
+        print(f"Task {TASK_ID} successfully saved raw results to {out_pkl_path.name}")
 
     marker_file.touch()
-    for f in checkpoint_dir.glob(f"ckpt_varyV_rep{repetition}_idx*.pkl"):
+    for f in checkpoint_dir.glob(f"ckpt_varyV_task{TASK_ID}_idx*.pkl"):
         f.unlink(missing_ok=True)
 
-    print(f"plotting all new csv in {import_export.results_dir_path}")
-    plot_graph_from_csv(run_names=[f"results_{run_name}"], directory=import_export.results_dir_path)
+    print(f"Task {TASK_ID} completed.", flush=True)
 
 
 def find_resume_directory(base_dir: Path, current_job_name: str) -> Path:
@@ -337,22 +339,32 @@ if __name__ == "__main__":
     if resume_dir:
         RESULTS_DIR_PATH = resume_dir
         run_name_flat = resume_dir.name.replace("results_", "")
-        print(f"RESUMING existing run at {RESULTS_DIR_PATH}", flush=True)
+        if TASK_ID == 0:
+            print(f"RESUMING existing run at {RESULTS_DIR_PATH}", flush=True)
         is_resumed = True
     else:
         date_ = datetime.datetime.now()
         run_name_flat = date_.strftime("%Y%m%d_%Hh%Mm%Ss")
         RESULTS_DIR_PATH = BASE_RESULTS_DIR / f"results_{run_name_flat}"
-        RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=True)
-        is_resumed = False
 
-        meta_data = {
-            "slurm_job_name": job_name,
-            "created_at": run_name_flat,
-            "Cg": Cg,
-            "gap_ratio": gap_ratio,
-        }
-        (RESULTS_DIR_PATH / "checkpoint_meta.json").write_text(orjson.dumps(meta_data).decode("utf-8"))
+        try:
+            # Race condition safe folder creation
+            RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=False)
+            print(f"Created NEW results directory at {RESULTS_DIR_PATH}")
+            is_resumed = False
+
+            # Task 0 (or whichever reaches here first) saves metadata
+            meta_data = {
+                "slurm_job_name": job_name,
+                "created_at": run_name_flat,
+                "Cg": Cg,
+                "gap_ratio": gap_ratio,
+            }
+            (RESULTS_DIR_PATH / "checkpoint_meta.json").write_text(orjson.dumps(meta_data).decode("utf-8"))
+        except FileExistsError:
+            # Another array task beat this one to folder creation, treat as resumed
+            is_resumed = True
+            time.sleep(2)  # Give the creating task a moment to write checkpoint_meta.json
 
     if gap_ratio > 1e-3:
         tables_list = [EXPORT_PATH / f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in
