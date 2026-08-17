@@ -202,99 +202,118 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
         return
 
     base_data = fwd_data if fwd_data is not None else rev_data
-    dT_total = base_data["dT"]
     rep = base_data["rep"]
 
-    fig, ax1 = plt.subplots(figsize=(10, 7))
+    # --- Nested plotting function allows us to build either combined or separated graphs easily ---
+    def generate_plot(plot_fwd, plot_rev, file_suffix):
+        fig, ax1 = plt.subplots(figsize=(10, 7))
 
-    color_s = 'tab:red'
-    color_s_rev = 'darkorange'
+        color_s = 'tab:red'
+        color_s_rev = 'darkorange'
 
-    ax1.set_xlabel(r'Voltage Bias $V$ $\left[ \frac{e}{\langle C \rangle} \right]$', labelpad=15)
-    ax1.set_ylabel(r'Thermopower |S(V)| $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
+        ax1.set_xlabel(r'Voltage Bias $V$ $\left[ \frac{e}{\langle C \rangle} \right]$', labelpad=15)
+        ax1.set_ylabel(r'Thermopower |S(V)| $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
 
-    if fwd_data is not None:
-        df_f = fwd_data["df"]
+        if plot_fwd is not None:
+            df_f = plot_fwd["df"]
 
-        # --- NEW MIDFIX FLIP LOGIC ---
+            # --- MIDFIX FLIP LOGIC ---
+            if is_midfix:
+                s_vals = df_f["Thermopower_S(V)"]
+                s_label = r'$S(V)$, $\Delta T>0$'
+            else:
+                s_vals = -df_f["Thermopower_S(V)"]
+                s_label = r'$-S(V)$, $\Delta T>0$'
+
+            line1 = ax1.errorbar(
+                df_f["V_baseline_(V)"], s_vals, yerr=df_f["Thermopower_err"],
+                fmt='-o', color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
+                label=s_label
+            )
+
+        if plot_rev is not None:
+            df_r = plot_rev["df"]
+            line_r = ax1.errorbar(
+                df_r["V_baseline_(V)"], df_r["Thermopower_S(V)"], yerr=df_r["Thermopower_err"],
+                fmt='-s', color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
+                label=r'$S(V)$, $\Delta T<0$'
+            )
+
+        # APPLY X-AXIS LIMITS FOR MIDFIX
         if is_midfix:
-            s_vals = df_f["Thermopower_S(V)"]
-            s_label = r'$S(V)$, $\Delta T>0$'
-        else:
-            s_vals = -df_f["Thermopower_S(V)"]
-            s_label = r'$-S(V)$, $\Delta T>0$'
+            ax1.set_xlim(0.8, 4.0)
 
-        line1 = ax1.errorbar(
-            df_f["V_baseline_(V)"], s_vals, yerr=df_f["Thermopower_err"],
-            fmt='-o', color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-            label=s_label
-        )
+        ax1.tick_params(axis='y', length=6, width=0.5)
+        ax1.tick_params(axis='x', length=6, width=0.5)
 
-    if rev_data is not None:
-        df_r = rev_data["df"]
-        line_r = ax1.errorbar(
-            df_r["V_baseline_(V)"], df_r["Thermopower_S(V)"], yerr=df_r["Thermopower_err"],
-            fmt='-s', color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-            label=r'$S(V)$, $\Delta T<0$'
-        )
+        ax2 = ax1.twinx()
+        color_i = 'tab:blue'
+        color_i_rev = 'purple'
+        ax2.set_ylabel(r'Current $I(V)$ $\left[ \frac{e}{\langle R \rangle \langle C \rangle} \right]$', color='black',
+                       labelpad=15)
 
-    ax1.tick_params(axis='y', length=6, width=0.5)
-    ax1.tick_params(axis='x', length=6, width=0.5)
+        if plot_fwd is not None:
+            df_f = plot_fwd["df"]
+            line2, = ax2.plot(df_f["V_baseline_(V)"], df_f["I_baseline_avg_(e/s)"], '--',
+                              color=color_i, linewidth=1.5, alpha=0.8, label=r'$I(V)$, $\Delta T>0$')
 
-    ax2 = ax1.twinx()
-    color_i = 'tab:blue'
-    color_i_rev = 'purple'
-    ax2.set_ylabel(r'Current $I(V)$ $\left[ \frac{e}{\langle R \rangle \langle C \rangle} \right]$', color='black',
-                   labelpad=15)
+        if plot_rev is not None:
+            df_r = plot_rev["df"]
+            line2_r, = ax2.plot(df_r["V_baseline_(V)"], df_r["I_baseline_avg_(e/s)"], ':',
+                                color=color_i_rev, linewidth=1.5, alpha=0.8, label=r'$I(V)$, $\Delta T<0$')
 
-    if fwd_data is not None:
-        line2, = ax2.plot(df_f["V_baseline_(V)"], df_f["I_baseline_avg_(e/s)"], '--',
-                          color=color_i, linewidth=1.5, alpha=0.8, label=r'$I(V)$, $\Delta T>0$')
+        ax2.tick_params(axis='y', length=6, width=0.5)
+        for spine in ax2.spines.values():
+            spine.set_linewidth(0.5)
 
-    if rev_data is not None:
-        line2_r, = ax2.plot(df_r["V_baseline_(V)"], df_r["I_baseline_avg_(e/s)"], ':',
-                            color=color_i_rev, linewidth=1.5, alpha=0.8, label=r'$I(V)$, $\Delta T<0$')
+        # --- NO TITLE ---
 
-    ax2.tick_params(axis='y', length=6, width=0.5)
-    for spine in ax2.spines.values():
-        spine.set_linewidth(0.5)
+        fig.tight_layout()
 
-    # --- NO TITLE ---
-    # As requested, the title has been removed completely.
+        # ==========================================================
+        # EXPORT 1: PDF WITHOUT I(V) IN THE LEGEND
+        # ==========================================================
+        lines, labels = ax1.get_legend_handles_labels()
 
-    fig.tight_layout()
+        legend_no_iv = ax1.legend(lines, labels,
+                                  loc='upper left',
+                                  bbox_to_anchor=(0.02, 0.98),
+                                  frameon=True, edgecolor='black')
+        legend_no_iv.get_frame().set_linewidth(0.5)
+
+        out_file_no_iv = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_{file_suffix}_NoIVLegend.pdf"
+        plt.savefig(out_file_no_iv, format='pdf', bbox_inches='tight')
+        print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file_no_iv.name}")
+
+        # ==========================================================
+        # EXPORT 2: PDF WITH I(V) IN THE LEGEND
+        # ==========================================================
+        lines2, labels2 = ax2.get_legend_handles_labels()
+
+        legend_with_iv = ax1.legend(lines + lines2, labels + labels2,
+                                    loc='upper left',
+                                    bbox_to_anchor=(0.02, 0.98),
+                                    frameon=True, edgecolor='black')
+        legend_with_iv.get_frame().set_linewidth(0.5)
+
+        out_file_with_iv = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_{file_suffix}_WithIVLegend.pdf"
+        plt.savefig(out_file_with_iv, format='pdf', bbox_inches='tight')
+        print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file_with_iv.name}")
+
+        plt.close()
 
     # ==========================================================
-    # EXPORT 1: PDF WITHOUT I(V) IN THE LEGEND
+    # EXECUTION: Determine single/combined graphing layout
     # ==========================================================
-    lines, labels = ax1.get_legend_handles_labels()
-
-    legend_no_iv = ax1.legend(lines, labels,
-                              loc='upper left',
-                              bbox_to_anchor=(0.02, 0.98),
-                              frameon=True, edgecolor='black')
-    legend_no_iv.get_frame().set_linewidth(0.5)
-
-    out_file_no_iv = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_Combined_NoIVLegend.pdf"
-    plt.savefig(out_file_no_iv, format='pdf', bbox_inches='tight')
-    print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file_no_iv.name}")
-
-    # ==========================================================
-    # EXPORT 2: PDF WITH I(V) IN THE LEGEND
-    # ==========================================================
-    lines2, labels2 = ax2.get_legend_handles_labels()
-
-    legend_with_iv = ax1.legend(lines + lines2, labels + labels2,
-                                loc='upper left',
-                                bbox_to_anchor=(0.02, 0.98),
-                                frameon=True, edgecolor='black')
-    legend_with_iv.get_frame().set_linewidth(0.5)
-
-    out_file_with_iv = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_Combined_WithIVLegend.pdf"
-    plt.savefig(out_file_with_iv, format='pdf', bbox_inches='tight')
-    print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file_with_iv.name}")
-
-    plt.close()
+    if is_midfix:
+        # Generate entirely separate plots for forward and reverse sweeps
+        if fwd_data is not None:
+            generate_plot(plot_fwd=fwd_data, plot_rev=None, file_suffix="Forward")
+        if rev_data is not None:
+            generate_plot(plot_fwd=None, plot_rev=rev_data, file_suffix="Reverse")
+    else:
+        # Legacy behavior: overlay them on a single combined plot
+        generate_plot(plot_fwd=fwd_data, plot_rev=rev_data, file_suffix="Combined")
 
 
 if __name__ == "__main__":
