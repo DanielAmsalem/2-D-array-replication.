@@ -174,37 +174,33 @@ def aggregate_task_data(folder_path):
     with open(meta_file, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
+    repetition = meta.get("repetition", 40)
+    Cg = meta.get("Cg", 2)
+    gap_ratio = float(meta.get("gap_ratio", 0.0))
+
     # Fetch init.json to explicitly check if this is the flipped gradient run
     run_name = folder.name.replace("results_", "")
     init_file = folder / f"{run_name}.json"
     with open(init_file, 'r', encoding='utf-8') as q:
         init = json.load(q)
 
-    repetition = meta.get("repetition", 40)
-    Cg = meta.get("Cg", 2)
-    gap_ratio = float(meta.get("gap_ratio", 0.0))
-    is_flip = str(init.get("flip", "false")).strip().lower() == "true"
-
     # Assuming standard T0=0.001 and 7 islands
     T0 = 0.001
     T_std = repetition * T0 / 20
 
-    # SIGN CORRECTION: If flip=True, T_right < T_left, making deltaT strictly negative
+    # ALWAYS POSITIVE: Delta T magnitude used for both forward and reverse
     dT_total = (7 - 1) * T_std
-    if is_flip:
-        dT_total = -dT_total
 
-    # Since we plot -S(V) and S = -DeltaV/DeltaT, then -S(V) is exactly DeltaV/DeltaT
-    Seebeck_coeff = DeltaV_avg / dT_total
-    # CRITICAL: Error bars must be strictly positive. Divide by absolute value of dT.
-    Seebeck_err = DeltaV_err / abs(dT_total)
+    # S(V) calculated strictly as DeltaV / |DeltaT|
+    Seebeck_coeff = -DeltaV_avg / dT_total
+    Seebeck_err = DeltaV_err / dT_total
 
     df = pd.DataFrame({
         "V_baseline_(V)": V_sweep,
         "DeltaV_avg_(V)": DeltaV_avg,
         "DeltaV_err_(V)": DeltaV_err,
         "I_baseline_avg_(e/s)": I_baseline_avg,
-        "Thermopower_-S(V)": Seebeck_coeff,
+        "Thermopower_S(V)": Seebeck_coeff,
         "Thermopower_err": Seebeck_err
     })
 
@@ -213,13 +209,13 @@ def aggregate_task_data(folder_path):
     df.to_csv(csv_filename, index=False)
     print(f"Saved aggregated data to {csv_filename.name}")
 
-    return {"df": df, "Cg": Cg, "dT": abs(dT_total), "rep": repetition, "D": gap_ratio}
+    return {"df": df, "Cg": Cg, "dT": dT_total, "rep": repetition, "D": gap_ratio}
 
 
 def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     """
-    Plots the aggregated Thermopower S(V) and Current I(V) from the varying-voltage feedback loop.
-    Overlays the Forward and Reverse (flipped gradient) runs if both exist.
+    Plots the aggregated Thermopower and Current from the varying-voltage feedback loop.
+    Overlays the Forward and Reverse (flipped gradient) runs on a single combined graph.
     """
     fwd_data = aggregate_task_data(fwd_folder)
     rev_data = aggregate_task_data(rev_folder)
@@ -231,23 +227,26 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     # We will use the params from whichever folder exists
     base_data = fwd_data if fwd_data is not None else rev_data
     Cg = base_data["Cg"]
-    dT_total = base_data["dT"]  # Note: aggregate_task_data now passes abs(dT) for the title
+    dT_total = base_data["dT"]
     rep = base_data["rep"]
     gap_ratio = base_data["D"]
 
     fig, ax1 = plt.subplots(figsize=(10, 7))
 
-    # --- Primary Axis: Thermopower -S(V) ---
+    # --- Primary Axis: Thermopower Response ---
     color_s = 'tab:red'
     color_s_rev = 'darkorange'
 
     ax1.set_xlabel(r'Voltage Bias $V$ $\left[ \frac{e}{\langle C \rangle} \right]$', labelpad=15)
-    ax1.set_ylabel(r'Thermopower $-S(V)$ $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
+
+    # Generic y-label since the plot contains both S(V) and -S(V)
+    ax1.set_ylabel(r'Thermopower |S(V)| $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
 
     if fwd_data is not None:
         df_f = fwd_data["df"]
+        # Because we divided by -|dT|, the calculated data physically represents S(V)
         line1 = ax1.errorbar(
-            df_f["V_baseline_(V)"], df_f["Thermopower_-S(V)"], yerr=df_f["Thermopower_err"],
+            df_f["V_baseline_(V)"], df_f["Thermopower_S(V)"], yerr=df_f["Thermopower_err"],
             fmt='-o', color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
             label=r'$-S(V)$, $\Delta T>0$'
         )
@@ -255,9 +254,9 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     if rev_data is not None:
         df_r = rev_data["df"]
         line_r = ax1.errorbar(
-            df_r["V_baseline_(V)"], df_r["Thermopower_-S(V)"], yerr=df_r["Thermopower_err"],
+            df_r["V_baseline_(V)"], df_r["Thermopower_S(V)"], yerr=df_r["Thermopower_err"],
             fmt='-s', color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-            label=r'$-S(V)$, $\Delta T<0$'
+            label=r'$S(V)$, $\Delta T<0$'
         )
 
     ax1.tick_params(axis='y', length=6, width=0.5)
@@ -291,10 +290,11 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     else:
         d_str = rf"Superconducting ($\Delta = {gap_ratio}E_c$)"
 
-    ax1.set_title(f'Thermopower & Current vs. Voltage Bias | {d_str}\n' + rf'$|\Delta T|={dT_total / Ec:.2f}E_c$',
-                  pad=20)
+    ax1.set_title(
+        f'Thermopower & Current vs. Voltage Bias | {d_str} \n' + rf'$|\Delta T|={dT_total / Ec:.2f}E_c$',
+        pad=20)
 
-    # Combine all legends logically
+    # Combine all legends logically into one box
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
 
@@ -305,7 +305,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     fig.tight_layout()
 
     # Append D to filename to avoid overwrites
-    out_file = Path(output_path) / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}.pdf"
+    out_file = Path(output_path) / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_Combined.pdf"
     plt.savefig(out_file, format='pdf', bbox_inches='tight')
     plt.close()
     print(f"Publication vector PDF saved to: {out_file.name}")
