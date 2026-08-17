@@ -174,24 +174,37 @@ def aggregate_task_data(folder_path):
     with open(meta_file, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
+    # Fetch init.json to explicitly check if this is the flipped gradient run
+    run_name = folder.name.replace("results_", "")
+    init_file = folder / f"{run_name}.json"
+    with open(init_file, 'r', encoding='utf-8') as q:
+        init = json.load(q)
+
     repetition = meta.get("repetition", 40)
     Cg = meta.get("Cg", 2)
     gap_ratio = float(meta.get("gap_ratio", 0.0))
+    is_flip = str(init.get("flip", "false")).strip().lower() == "true"
 
     # Assuming standard T0=0.001 and 7 islands
     T0 = 0.001
     T_std = repetition * T0 / 20
-    dT_total = (7 - 1) * T_std
 
-    Seebeck_coeff = -DeltaV_avg / dT_total  # minus means we calculte -S(V) as our deltaT is T_right-T_left
-    Seebeck_err = DeltaV_err / dT_total
+    # SIGN CORRECTION: If flip=True, T_right < T_left, making deltaT strictly negative
+    dT_total = (7 - 1) * T_std
+    if is_flip:
+        dT_total = -dT_total
+
+    # Since we plot -S(V) and S = -DeltaV/DeltaT, then -S(V) is exactly DeltaV/DeltaT
+    Seebeck_coeff = DeltaV_avg / dT_total
+    # CRITICAL: Error bars must be strictly positive. Divide by absolute value of dT.
+    Seebeck_err = DeltaV_err / abs(dT_total)
 
     df = pd.DataFrame({
         "V_baseline_(V)": V_sweep,
         "DeltaV_avg_(V)": DeltaV_avg,
         "DeltaV_err_(V)": DeltaV_err,
         "I_baseline_avg_(e/s)": I_baseline_avg,
-        "Thermopower_S(V)": Seebeck_coeff,
+        "Thermopower_-S(V)": Seebeck_coeff,
         "Thermopower_err": Seebeck_err
     })
 
@@ -200,7 +213,7 @@ def aggregate_task_data(folder_path):
     df.to_csv(csv_filename, index=False)
     print(f"Saved aggregated data to {csv_filename.name}")
 
-    return {"df": df, "Cg": Cg, "dT": dT_total, "rep": repetition, "D": gap_ratio}
+    return {"df": df, "Cg": Cg, "dT": abs(dT_total), "rep": repetition, "D": gap_ratio}
 
 
 def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
@@ -218,13 +231,13 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     # We will use the params from whichever folder exists
     base_data = fwd_data if fwd_data is not None else rev_data
     Cg = base_data["Cg"]
-    dT_total = base_data["dT"]
+    dT_total = base_data["dT"]  # Note: aggregate_task_data now passes abs(dT) for the title
     rep = base_data["rep"]
     gap_ratio = base_data["D"]
 
     fig, ax1 = plt.subplots(figsize=(10, 7))
 
-    # --- Primary Axis: Thermopower S(V) ---
+    # --- Primary Axis: Thermopower -S(V) ---
     color_s = 'tab:red'
     color_s_rev = 'darkorange'
 
@@ -234,7 +247,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     if fwd_data is not None:
         df_f = fwd_data["df"]
         line1 = ax1.errorbar(
-            df_f["V_baseline_(V)"], df_f["Thermopower_S(V)"], yerr=df_f["Thermopower_err"],
+            df_f["V_baseline_(V)"], df_f["Thermopower_-S(V)"], yerr=df_f["Thermopower_err"],
             fmt='-o', color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
             label=r'$-S(V)$, $\Delta T>0$'
         )
@@ -242,7 +255,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     if rev_data is not None:
         df_r = rev_data["df"]
         line_r = ax1.errorbar(
-            df_r["V_baseline_(V)"], df_r["Thermopower_S(V)"], yerr=df_r["Thermopower_err"],
+            df_r["V_baseline_(V)"], df_r["Thermopower_-S(V)"], yerr=df_r["Thermopower_err"],
             fmt='-s', color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
             label=r'$-S(V)$, $\Delta T<0$'
         )
