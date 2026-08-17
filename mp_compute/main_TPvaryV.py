@@ -43,25 +43,27 @@ import re
 import pickle
 
 ####### SLURM parameter parsing from job name ######
-job_name = os.environ.get('SLURM_JOB_NAME', 'TPvaryV1_11_4_Cg2')
-pattern = r"(Reverse_?)?TPvaryV_Cg(\d+)_D(\d+)_(\d+)"
+# Fix 1: Added repetition to the regex so folders don't collide
+job_name = os.environ.get('SLURM_JOB_NAME', 'TPvaryV_rep40_Cg2_D0_0')
+pattern = r"(Reverse_?)?TPvaryV_rep(\d+)_Cg(\d+)_D(\d+)_(\d+)"
 match = re.search(pattern, job_name)
 
 if match:
     is_reverse = match.group(1) is not None
-    Cg = int(match.group(2))
-    gap_int = int(match.group(3))
-    gap_tenth = int(match.group(4))
+    REPETITION = int(match.group(2))
+    Cg = int(match.group(3))
+    gap_int = int(match.group(4))
+    gap_tenth = int(match.group(5))
     gap_ratio = gap_int + gap_tenth / 10
 
-    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, Cg={Cg}, D={gap_ratio}",
+    print(f"Parsed from Job Name '{job_name}': flip={is_reverse}, rep={REPETITION}, Cg={Cg}, D={gap_ratio}",
           flush=True)
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
 
 Cg_list = [2, 10]
 Cg_list_gapped = [10]
-gap_list = [2]
+gap_list = []
 
 
 ##############################################################
@@ -81,9 +83,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     mean_Rg = 100
     stdR = 2
     sig = 0.05
-    repetition = 96
-    if repetition != 96:
-        raise ValueError("Repetition must be 96 due to NIS tables")
+    repetition = REPETITION
 
     if gap_ratio > 1e-3:
         if (Cg not in Cg_list_gapped) or (gap_ratio not in gap_list):
@@ -94,6 +94,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             neg_energy_boundT0 = -0.30769
         else:
             raise ValueError("whadahel?")
+        raise NotImplementedError(
+            "Gapped execution requires dynamic N-I-S string building. Disabled for metal-only tests.")
+
     else:
         if Cg not in Cg_list:
             raise ValueError(f"Cg must be in Cg_list, Cg = {Cg}")
@@ -159,41 +162,18 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     expected_err_baseline = F.calc_expected_dist_std(T_baseline, init.T0, gap_array_baseline, init.R_t_ij, init.Ec)
 
     # LOAD BASELINE (dT=0) INTEGRATION TABLE ONCE
-    # (repetition 0 is universally the uniform temperature file)
     baseline_table_path = (import_export.export_path /
                            f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
-    nis_null_path_name = (import_export.export_path /
-                              f"64bit_GAP2_0_NIS_table_triplets_Tmid15_4_Tstd20_20_Cg_10.npz")
-    if gap_ratio > 1e-3:
-        baseline_table_path = (import_export.export_path /
-                               f"64bit_GAP{gap_int}_{gap_tenth}table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
 
-    ## IMPORT N-I-S TABLES
-    if not validate_table_triplets_file(nis_null_path_name, init,
-                                        [init.T0, 29.8*init.T0]) and gap_ratio > 1e-3:
-        raise ValueError("N-I-S don't match the path...")
-    elif gap_ratio > 1e-3:
-        print("Valid N-I-S Table found. Loading...", flush=True)
-        nis_table_triplets = np.load(nis_null_path_name.as_posix())
-        nis_table_val = nis_table_triplets["val"]
-        nis_table_prob = nis_table_triplets["prob"]
-    else:
-        nis_table_val = None
-        nis_table_prob = None
+    nis_table_val = None
+    nis_table_prob = None
 
     ## IMPORT BASELINE TABLES
     if not validate_table_triplets_file(baseline_table_path, init, [init.T0]):
-        if gap_ratio > 1e-3:
-            table_triplets = prepare_table_triplets_gapped(init, [init.T0],
-                                                           pos_energy_bound=pos_energy_boundT0,
-                                                           neg_energy_bound=neg_energy_boundT0,
-                                                           max_workers=num_workers,
-                                                           gap_ratio=gap_ratio)
-        else:
-            table_triplets = prepare_table_triplets(init, [init.T0],
-                                                    pos_energy_bound=pos_energy_boundT0,
-                                                    neg_energy_bound=neg_energy_boundT0,
-                                                    max_workers=num_workers)
+        table_triplets = prepare_table_triplets(init, [init.T0],
+                                                pos_energy_bound=pos_energy_boundT0,
+                                                neg_energy_bound=neg_energy_boundT0,
+                                                max_workers=num_workers)
         output_table_triplets(table_triplets, baseline_table_path)
         table_val_baseline = table_triplets[:, 0]
         table_prob_baseline = table_triplets[:, 1]
@@ -209,7 +189,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     # ---------------------------------------------------------
     # MAIN EXPERIMENT LOGIC
     # ---------------------------------------------------------
-    marker_file = import_export.results_dir_path / f".completed_task{TASK_ID}"  # TASK SPECIFIC MARKER
+    marker_file = import_export.results_dir_path / f".completed_task{TASK_ID}"
     if marker_file.exists():
         exit(f"Task {TASK_ID} already completed in this path : {import_export.results_dir_path}")
 
@@ -277,7 +257,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         safe_end_idx = min(END_LOOP_IDX, init.loop_count)
 
         for i in range(START_LOOP_IDX, safe_end_idx):
-            ckpt_path = checkpoint_dir / f"ckpt_varyV_task{TASK_ID}_idx{i}.pkl"
+            # Fix 4: Bound the checkpoint name directly to the repetition and index
+            ckpt_path = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
             if ckpt_path.exists():
                 try:
                     with open(ckpt_path, "rb") as f:
@@ -294,21 +275,23 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             res = future.result()
             results[idx] = res
 
-            with open(checkpoint_dir / f"ckpt_varyV_task{TASK_ID}_idx{idx}.pkl", "wb") as f:
+            with open(checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{idx}.pkl", "wb") as f:
                 pickle.dump(res, f)
 
     # 5. Extract Data Locally for this Task
     valid_results = [res for res in results[START_LOOP_IDX:safe_end_idx] if res is not None]
 
     if valid_results:
-        # Save raw output data so a post-processing script can aggregate them easily.
         out_pkl_path = import_export.results_dir_path / f"varyV_raw_task{TASK_ID}.pkl"
         with open(out_pkl_path, "wb") as f:
             pickle.dump({'V_sweep': V_sweep, 'results': valid_results}, f)
         print(f"Task {TASK_ID} successfully saved raw results to {out_pkl_path.name}")
 
     marker_file.touch()
-    for f in checkpoint_dir.glob(f"ckpt_varyV_task{TASK_ID}_idx*.pkl"):
+
+    # Cleanup safely tied to specific repetition and indexes owned by this task
+    for i in range(START_LOOP_IDX, safe_end_idx):
+        f = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
         f.unlink(missing_ok=True)
 
     print(f"Task {TASK_ID} completed.", flush=True)
@@ -348,23 +331,21 @@ if __name__ == "__main__":
         RESULTS_DIR_PATH = BASE_RESULTS_DIR / f"results_{run_name_flat}"
 
         try:
-            # Race condition safe folder creation
             RESULTS_DIR_PATH.mkdir(parents=True, exist_ok=False)
             print(f"Created NEW results directory at {RESULTS_DIR_PATH}")
             is_resumed = False
 
-            # Task 0 (or whichever reaches here first) saves metadata
             meta_data = {
                 "slurm_job_name": job_name,
                 "created_at": run_name_flat,
                 "Cg": Cg,
                 "gap_ratio": gap_ratio,
+                "repetition": REPETITION
             }
             (RESULTS_DIR_PATH / "checkpoint_meta.json").write_text(orjson.dumps(meta_data).decode("utf-8"))
         except FileExistsError:
-            # Another array task beat this one to folder creation, treat as resumed
             is_resumed = True
-            time.sleep(2)  # Give the creating task a moment to write checkpoint_meta.json
+            time.sleep(2)
 
     if gap_ratio > 1e-3:
         tables_list = [EXPORT_PATH / f"64bit_GAP{gap_int}_{gap_tenth}_table_triplets_Tstd{n}_20_Cg_{Cg}.npz" for n in
