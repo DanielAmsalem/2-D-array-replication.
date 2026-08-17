@@ -39,14 +39,19 @@ rcParams['ytick.labelsize'] = 20
 rcParams['legend.fontsize'] = 16
 
 debug = True
+
+
 def discover_latest_varyV_runs(base_dir="."):
     """
     Scans the base directory for the newest 'results_*' folders containing 'TPvaryV'.
-    Separates them into forward (flip=False) and reverse (flip=True) runs.
+    Groups them by their superconducting gap ratio (D) into forward (flip=False)
+    and reverse (flip=True) pairings.
     """
     base_path = Path(base_dir)
-    fwd_folder = None
-    rev_folder = None
+
+    # Dictionary to hold the paired runs grouped by gap_ratio (D)
+    # Format: { 0.0: {'fwd': folderA, 'rev': folderB}, 2.0: {'fwd': folderC, 'rev': None} }
+    runs_by_D = {}
 
     # Sort folders by newest modification time
     directories = sorted(
@@ -58,44 +63,47 @@ def discover_latest_varyV_runs(base_dir="."):
 
     for folder in directories:
         run_name = str(folder).split("results_")[1]
-        if fwd_folder is not None and rev_folder is not None:
-            break
 
         meta_file = folder / "checkpoint_meta.json"
         init_file = folder / f"{run_name}.json"
-        if not meta_file.exists():
-            if debug: print(f"no meta in {folder}", flush=True)
+
+        if not meta_file.exists() or not init_file.exists():
+            if debug: print(f"Missing config files in {folder.name}", flush=True)
             continue
 
         try:
             with open(meta_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                meta = json.load(f)
 
             with open(init_file, 'r', encoding='utf-8') as q:
                 init = json.load(q)
 
-            job_name = data.get("slurm_job_name", "")
+            job_name = meta.get("slurm_job_name", "")
             if "TPvaryV" not in job_name:
-                if debug: print(f"bad job name in {folder}", flush=True)
+                if debug: print(f"Skipping non-VaryV job in {folder.name}", flush=True)
                 continue
 
-            # Check flip status
-            if "flip" in init:
-                is_flip = str(init["flip"]).strip().lower() == "true"
+            # Extract the D value to group the runs
+            gap_ratio = float(meta.get("gap_ratio", 0.0))
+            is_flip = str(init.get("flip", "false")).strip().lower() == "true"
 
-                if is_flip and rev_folder is None:
-                    rev_folder = folder
-                    print(f"--> Auto-detected Reverse Run (is_reverse=True): {folder.name}")
-                elif not is_flip and fwd_folder is None:
-                    fwd_folder = folder
-                    print(f"--> Auto-detected Forward Run (is_reverse=False): {folder.name}")
-            else:
-                if debug: print(f"no is_reverse {folder}", flush=True)
+            # Initialize the dictionary key for this gap ratio if it doesn't exist
+            if gap_ratio not in runs_by_D:
+                runs_by_D[gap_ratio] = {'fwd': None, 'rev': None}
+
+            # Assign to the newest available slot for this specific D value
+            if is_flip and runs_by_D[gap_ratio]['rev'] is None:
+                runs_by_D[gap_ratio]['rev'] = folder
+                print(f"--> Auto-detected Reverse Run (D={gap_ratio}): {folder.name}")
+            elif not is_flip and runs_by_D[gap_ratio]['fwd'] is None:
+                runs_by_D[gap_ratio]['fwd'] = folder
+                print(f"--> Auto-detected Forward Run (D={gap_ratio}): {folder.name}")
+
         except Exception as a:
-            if debug: print(f"exception {a} in processing {folder}", flush=True)
+            if debug: print(f"Exception {a} while processing {folder.name}", flush=True)
             pass
 
-    return fwd_folder, rev_folder
+    return runs_by_D
 
 
 def aggregate_task_data(folder_path):
@@ -161,20 +169,21 @@ def aggregate_task_data(folder_path):
     DeltaV_err = np.std(DeltaV_matrix, axis=0) / np.sqrt(successful_loops)
     I_baseline_avg = np.mean(I_base_matrix, axis=0)
 
-    # We must recover metadata to calculate exact thermopower
+    # We must recover metadata to calculate exact thermopower and format outputs
     meta_file = folder / "checkpoint_meta.json"
     with open(meta_file, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
     repetition = meta.get("repetition", 40)
     Cg = meta.get("Cg", 2)
+    gap_ratio = float(meta.get("gap_ratio", 0.0))
 
     # Assuming standard T0=0.001 and 7 islands
     T0 = 0.001
     T_std = repetition * T0 / 20
     dT_total = (7 - 1) * T_std
 
-    Seebeck_coeff = DeltaV_avg / dT_total ### no minus as our deltaT is T_right-T_left
+    Seebeck_coeff = -DeltaV_avg / dT_total  # minus means we calculte -S(V) as our deltaT is T_right-T_left
     Seebeck_err = DeltaV_err / dT_total
 
     df = pd.DataFrame({
@@ -186,12 +195,12 @@ def aggregate_task_data(folder_path):
         "Thermopower_err": Seebeck_err
     })
 
-    # Save the aggregated CSV locally
-    csv_filename = folder / f"VaryV_rep{repetition}_Global_Aggregated.csv"
+    # Save the aggregated CSV locally with D explicitly in the filename
+    csv_filename = folder / f"VaryV_rep{repetition}_Cg{Cg}_D{gap_ratio}_Global_Aggregated.csv"
     df.to_csv(csv_filename, index=False)
     print(f"Saved aggregated data to {csv_filename.name}")
 
-    return {"df": df, "Cg": Cg, "dT": dT_total, "rep": repetition}
+    return {"df": df, "Cg": Cg, "dT": dT_total, "rep": repetition, "D": gap_ratio}
 
 
 def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
@@ -203,7 +212,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     rev_data = aggregate_task_data(rev_folder)
 
     if fwd_data is None and rev_data is None:
-        print("CRITICAL ERROR: No valid data found to plot. Exiting.")
+        print("CRITICAL ERROR: No valid data found to plot for this D value. Skipping.")
         return
 
     # We will use the params from whichever folder exists
@@ -211,6 +220,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     Cg = base_data["Cg"]
     dT_total = base_data["dT"]
     rep = base_data["rep"]
+    gap_ratio = base_data["D"]
 
     fig, ax1 = plt.subplots(figsize=(10, 7))
 
@@ -219,14 +229,14 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
     color_s_rev = 'darkorange'
 
     ax1.set_xlabel(r'Voltage Bias $V$ $\left[ \frac{e}{\langle C \rangle} \right]$', labelpad=15)
-    ax1.set_ylabel(r'Thermopower $S(V)$ $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
+    ax1.set_ylabel(r'Thermopower $-S(V)$ $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
 
     if fwd_data is not None:
         df_f = fwd_data["df"]
         line1 = ax1.errorbar(
             df_f["V_baseline_(V)"], df_f["Thermopower_S(V)"], yerr=df_f["Thermopower_err"],
             fmt='-o', color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-            label=r'$S(V)$, $\Delta T>0$'
+            label=r'$-S(V)$, $\Delta T>0$'
         )
 
     if rev_data is not None:
@@ -234,7 +244,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
         line_r = ax1.errorbar(
             df_r["V_baseline_(V)"], df_r["Thermopower_S(V)"], yerr=df_r["Thermopower_err"],
             fmt='-s', color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-            label=r'$S(V)$, $\Delta T<0$'
+            label=r'$-S(V)$, $\Delta T<0$'
         )
 
     ax1.tick_params(axis='y', length=6, width=0.5)
@@ -260,20 +270,29 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
         spine.set_linewidth(0.5)
 
     # --- Title and Legend ---
-    Ec = 0.5/Cg
-    ax1.set_title('Thermopower & Current vs. Voltage Bias\n' + rf'$|\Delta T|={dT_total/Ec:.2f}E_c$', pad=20)
+    Ec = 0.5 / Cg
+
+    # Clearly differentiate Physical Regimes in the Title
+    if gap_ratio < 1e-3:
+        d_str = r"Metallic ($\Delta = 0$)"
+    else:
+        d_str = rf"Superconducting ($\Delta = {gap_ratio}E_c$)"
+
+    ax1.set_title(f'Thermopower & Current vs. Voltage Bias | {d_str}\n' + rf'$|\Delta T|={dT_total / Ec:.2f}E_c$',
+                  pad=20)
 
     # Combine all legends logically
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    # Change 'best' to 'upper left'
+
     legend = ax1.legend(lines + lines2, labels + labels2,
                         loc='upper left', frameon=True, edgecolor='black')
     legend.get_frame().set_linewidth(0.5)
 
     fig.tight_layout()
 
-    out_file = Path(output_path) / f"Publication_VaryV_rep{rep}_Cg{Cg}.pdf"
+    # Append D to filename to avoid overwrites
+    out_file = Path(output_path) / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}.pdf"
     plt.savefig(out_file, format='pdf', bbox_inches='tight')
     plt.close()
     print(f"Publication vector PDF saved to: {out_file.name}")
@@ -282,7 +301,20 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, output_path):
 if __name__ == "__main__":
     print("Scanning directory for recent VaryV simulation runs...")
 
-    FORWARD_RUN_DIR, REVERSE_RUN_DIR = discover_latest_varyV_runs("./")
+    runs_by_gap_ratio = discover_latest_varyV_runs("./")
     OUTPUT_DIRECTORY = "./"
 
-    plot_thermopower_varyV(FORWARD_RUN_DIR, REVERSE_RUN_DIR, OUTPUT_DIRECTORY)
+    if not runs_by_gap_ratio:
+        print("No valid TPvaryV runs discovered. Exiting.")
+    else:
+        for d_val, folders in runs_by_gap_ratio.items():
+            print(f"\n{'=' * 60}")
+            print(f"Processing Array Data for D = {d_val}")
+            print(f"{'=' * 60}")
+
+            fwd_dir = folders['fwd']
+            rev_dir = folders['rev']
+
+            plot_thermopower_varyV(fwd_dir, rev_dir, OUTPUT_DIRECTORY)
+
+        print("\nAll regimes processed successfully!")
