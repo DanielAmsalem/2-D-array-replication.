@@ -43,7 +43,6 @@ import re
 import pickle
 
 ####### SLURM parameter parsing from job name ######
-# Fix 1: Added repetition to the regex so folders don't collide
 job_name = os.environ.get('SLURM_JOB_NAME', 'TPvaryV_rep40_Cg2_D0_0')
 pattern = r"(Reverse_?)?TPvaryV_rep(\d+)_Cg(\d+)_D(\d+)_(\d+)"
 match = re.search(pattern, job_name)
@@ -63,7 +62,7 @@ else:
 
 Cg_list = [2, 10]
 Cg_list_gapped = [10]
-gap_list = []
+gap_list = [2.0]
 
 
 ##############################################################
@@ -75,7 +74,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     # RUN TYPE
     flip = is_reverse
     periodic_y = True
-    rep_json = True if TASK_ID == 0 else False  # Only task 0 writes the init json
 
     # EXPERIMENT PARAMETERS
     loop_count = max(320, END_LOOP_IDX)  # Dynamically size for arrays
@@ -93,9 +91,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             pos_energy_boundT0 = 0
             neg_energy_boundT0 = -0.30769
         else:
-            raise ValueError("whadahel?")
-        raise NotImplementedError(
-            "Gapped execution requires dynamic N-I-S string building. Disabled for metal-only tests.")
+            raise ValueError("Unexpected Cg/Gap ratio combination.")
+
+        # --- NEW N-I-S REPETITION LOCK ---
+        if repetition not in [40, 96]:
+            raise ValueError(
+                f"CRITICAL: N-I-S Boundary tables are currently only generated for rep 40 and 96. "
+                f"Requested rep={repetition}. Aborting to prevent invalid SC boundary"
+            )
 
     else:
         if Cg not in Cg_list:
@@ -118,34 +121,64 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     # ---------------------------------------------------------
     # STATE INITIALIZATION (Resuming or Creating New)
     # ---------------------------------------------------------
-    if is_resumed:
-        run_to_get_init_from = run_name
-        results_dir_of_past_run = import_export.results_dir_path
-    else:
-        run_to_get_init_from = "20260606_22h05m04s"
-        results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
+    current_run_json = import_export.results_dir_path / f"{run_name}.json"
 
-    infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
-    if infile.exists():
-        json_txt = infile.read_text()
-        raw_fields = orjson.loads(json_txt)
+    if not is_resumed:
+        # I AM THE CREATOR (Won the mkdir race for a brand new run)
+        print(f"Task {TASK_ID} won the initialization race. Building state...", flush=True)
+
+        run_to_get_init_from = "20260606_22h05m04s"
+        results_dir_of_past_run = Path(__file__).resolve().parent.parent / f"results_{run_to_get_init_from}"
+        past_infile = results_dir_of_past_run / f"{run_to_get_init_from}.json"
+
+        if past_infile.exists():
+            json_txt = past_infile.read_text()
+            raw_fields = orjson.loads(json_txt)
+            init_str = ExperimentInitialState(**raw_fields)
+            init = F.fix_types(init_str, loop_count)
+
+            init = F.swap_in_init("flip", flip, init)
+            if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
+                init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
+
+            if np.any(init.R_t_ij < 0.1):
+                min_Rt = np.min(init.R_t_ij)
+                init = F.swap_in_init("R_t_ij", init.R_t_ij + (0.1 - min_Rt), init)
+
+            print(f"Successfully loaded and modified base state from {past_infile.name}", flush=True)
+        else:
+            init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip,
+                                         periodic_y=periodic_y,
+                                         Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
+            print("!!!NEW INITIAL STATE CREATED FROM SCRATCH!!!", flush=True)
+
+        # ATOMIC WRITE FOR FOLLOWERS
+        # Write to a temp file first, then replace to prevent followers from reading half-written data
+        temp_json = import_export.results_dir_path / f"temp_init_{TASK_ID}.json"
+        temp_json.write_text(orjson.dumps(asdict(init), option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"))
+        temp_json.replace(current_run_json)
+        print(f"Creator Task {TASK_ID} successfully dropped {current_run_json.name} for followers.", flush=True)
+
+    else:
+        # I AM A FOLLOWER (Lost the mkdir race, OR resuming a crashed run from yesterday)
+        print(f"Task {TASK_ID} is a follower. Waiting for Creator to drop {current_run_json.name}...", flush=True)
+
+        while not current_run_json.exists():
+            print("waiting for .json to be created")
+            time.sleep(1)
+
+        # File exists, safely load it with a catch loop in case of instantaneous file system lock
+        while True:
+            try:
+                json_txt = current_run_json.read_text()
+                raw_fields = orjson.loads(json_txt)
+                break
+            except ValueError:
+                time.sleep(0.5)
+
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
-
-        init = F.swap_in_init("flip", flip, init)
-        if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
-            init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
-
-        if np.any(init.R_t_ij < 0.1):
-            min_Rt = np.min(init.R_t_ij)
-            init = F.swap_in_init("R_t_ij", init.R_t_ij + (0.1 - min_Rt), init)
-    else:
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
-                                     Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
-
-    if rep_json:
-        outfile = Path(import_export.results_dir_path / f"{run_name}.json")
-        outfile.write_text(orjson.dumps(asdict(init), option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"))
+        print(f"Task {TASK_ID} successfully loaded synced state from {current_run_json.name}", flush=True)
 
     # ---------------------------------------------------------
     # DEFINE MACRO VOLTAGE SWEEP (Baseline Voltages)
@@ -212,6 +245,30 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     table_prob_dT = table_triplets["prob"]
     table_T_dT = np.unique(table_triplets["temp"]).tolist()
 
+    # 3b. Load and Validate the matching N-I-S Boundary Integration Table
+    if gap_ratio > 1e-3:
+        # String build aligns with the table formatting standard in your repo
+        if repetition == 40:
+            nis_table_path = import_export.export_path / f"64bit_GAP2_0_NIS_table_triplets_Tmid7_0_Tstd20_20_Cg_10.npz"
+        elif repetition == 96:
+            nis_table_path = import_export.export_path / f"64bit_GAP2_0_NIS_table_triplets_Tmid15_4_Tstd20_20_Cg_10.npz"
+        else:
+            raise ValueError(f"invalid repetition {repetition}")
+
+        print(f"Validating N-I-S Boundary Table: {nis_table_path.name}...", flush=True)
+        if not nis_table_path.exists():
+            raise FileNotFoundError(f"CRITICAL: Missing N-I-S table at {nis_table_path}.")
+
+        HighT = init.T0 * (1 + (init.row_num - 1) * repetition / 20)
+        if not validate_table_triplets_file(nis_table_path, init, [init.T0, HighT]):
+            raise ImportError(
+                f"CRITICAL: N-I-S table temperatures do not match current dT gradient for rep {repetition}.")
+
+        nis_triplets = np.load(nis_table_path.as_posix())
+        nis_table_val = nis_triplets["val"]
+        nis_table_prob = nis_triplets["prob"]
+        print("N-I-S Boundary Table Successfully Loaded and Validated.", flush=True)
+
     # 4. Dispatch to Physics Engine
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         t0 = time.time()
@@ -245,6 +302,8 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             repetition=repetition,
             periodic_y=periodic_y,
             gap_ratio=gap_ratio,
+
+            # Boundary N-I-S Tables
             nis_table_val=nis_table_val,
             nis_table_prob=nis_table_prob
         )
@@ -257,7 +316,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         safe_end_idx = min(END_LOOP_IDX, init.loop_count)
 
         for i in range(START_LOOP_IDX, safe_end_idx):
-            # Fix 4: Bound the checkpoint name directly to the repetition and index
+            # Bound the checkpoint name directly to the repetition and index
             ckpt_path = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
             if ckpt_path.exists():
                 try:
