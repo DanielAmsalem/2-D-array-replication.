@@ -1,5 +1,5 @@
 import numpy as np
-import matplotlib.subplots
+# NEVER IMPORT import matplotlib.subplots
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 import pandas as pd
@@ -358,9 +358,17 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
         lines, labels = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
 
+        # Shift the legend to the upper right for combined plots
+        if "Combined" in file_suffix:
+            legend_loc = 'upper right'
+            bbox_anchor = (0.98, 0.98)
+        else:
+            legend_loc = 'upper left'
+            bbox_anchor = (0.02, 0.98)
+
         legend_with_iv = ax1.legend(lines + lines2, labels + labels2,
-                                    loc='upper left',
-                                    bbox_to_anchor=(0.02, 0.98),
+                                    loc=legend_loc,
+                                    bbox_to_anchor=bbox_anchor,
                                     frameon=True, edgecolor='black')
         legend_with_iv.get_frame().set_linewidth(0.5)
 
