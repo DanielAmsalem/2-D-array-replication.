@@ -1011,11 +1011,8 @@ def Get_Steady_State_varyV(
     Qg_global = np.zeros(init.array_size)
     n_global = np.zeros(init.array_size)
 
-    # Determine fixed step size for the feedback loop
-    if len(V_sweep) > 1:
-        dV_step = abs(V_sweep[1] - V_sweep[0])
-    else:
-        dV_step = init.Volts * 4/100
+    # 4 times smaller than the step take in Vsweeps
+    dV_step = init.Volts/100
 
     # ---------------------------------------------------------
     # INTERNAL KMC ENGINE (The Micro-Loop)
@@ -1236,7 +1233,7 @@ def Get_Steady_State_varyV(
         # ==============================================================
         # STEPS 3 & 4: Safe Constant-Step Feedback Loop
         # ==============================================================
-        max_feedback_loops = 30
+        max_feedback_loops = 50 #up to 1V away
         feedback_count = 0
 
         # Account for stochastic noise in KMC (clamp between 1e-9 and 0.01)
