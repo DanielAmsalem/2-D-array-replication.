@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.subplots
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 import pandas as pd
@@ -205,7 +206,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
     rep = base_data["rep"]
 
     # --- Nested plotting function allowing flexible styling via `dasher` ---
-    def generate_plot(plot_fwd, plot_rev, file_suffix, dasher):
+    def generate_plot(plot_fwd, plot_rev, file_suffix, dasher, invert_midfix_rev=False):
         fig, ax1 = plt.subplots(figsize=(10, 7))
 
         color_s = 'tab:red'
@@ -223,7 +224,7 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
 
             if is_midfix:
                 s_vals_f = df_f["Thermopower_S(V)"]
-                s_label_f = r'$S(V)$'
+                s_label_f = r'$S(V)$ ($\Delta T > 0$)' if invert_midfix_rev else r'$S(V)$'
             else:
                 s_vals_f = -df_f["Thermopower_S(V)"]
                 s_label_f = r'$-S(V)$'
@@ -262,8 +263,12 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
             dT_val_r = plot_rev["dT"]
 
             if is_midfix:
-                s_vals_r = df_r["Thermopower_S(V)"]
-                s_label_r = r'$S(V)$'
+                if invert_midfix_rev:
+                    s_vals_r = -df_r["Thermopower_S(V)"]
+                    s_label_r = r'$-S(V)$ ($\Delta T < 0$)'
+                else:
+                    s_vals_r = df_r["Thermopower_S(V)"]
+                    s_label_r = r'$S(V)$'
             else:
                 s_vals_r = -df_r["Thermopower_S(V)"]
                 s_label_r = r'$-S(V)$'
@@ -294,9 +299,12 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
                 label=s_label_r
             )
 
-        # Apply tight X-Axis for Midfix
+        # Apply tight X-Axis for Midfix (Metal vs SC splitting)
         if is_midfix:
-            ax1.set_xlim(0.8, 4)
+            if gap_ratio == 0.0:
+                ax1.set_xlim(0.8, 4)
+            else:
+                ax1.set_xlim(1.5, 3)
 
         ax1.tick_params(axis='y', length=6, width=0.5)
         ax1.tick_params(axis='x', length=6, width=0.5)
@@ -313,13 +321,15 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
         # Non-dashed line, width 2
         if plot_fwd is not None:
             df_f = plot_fwd["df"]
+            label_i_f = r'$I(V)$ ($\Delta T > 0$)' if invert_midfix_rev else r'$I(V)$'
             line2, = ax2.plot(df_f["V_baseline_(V)"], df_f["I_baseline_avg_(e/s)"], linestyle='-',
-                              color=color_i, linewidth=2, alpha=0.8, label=r'$I(V)$')
+                              color=color_i, linewidth=2, alpha=0.8, label=label_i_f)
 
         if plot_rev is not None:
             df_r = plot_rev["df"]
+            label_i_r = r'$I(V)$ ($\Delta T < 0$)' if invert_midfix_rev else r'$I(V)$'
             line2_r, = ax2.plot(df_r["V_baseline_(V)"], df_r["I_baseline_avg_(e/s)"], linestyle='-',
-                                color=color_i_rev, linewidth=2, alpha=0.8, label=r'$I(V)$')
+                                color=color_i_rev, linewidth=2, alpha=0.8, label=label_i_r)
 
         ax2.tick_params(axis='y', length=6, width=0.5)
         for spine in ax2.spines.values():
@@ -331,8 +341,8 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
         Ec = 0.5 / Cg
 
         # Calculate proper title depending on if it's combined or separated
-        if file_suffix == "Combined" and plot_fwd is not None:
-            title_str = 'Thermopower & Current as a Function of Voltage\n' rf'$\Delta T = {abs(plot_fwd["dT"]) / Ec:.2f}E_c$'
+        if "Combined" in file_suffix and plot_fwd is not None:
+            title_str = 'Thermopower & Current as a Function of Voltage\n' rf'$|\Delta T| = {abs(plot_fwd["dT"]) / Ec:.2f}E_c$'
         elif plot_fwd is not None:
             title_str = 'Thermopower & Current as a Function of Voltage\n' rf'$\Delta T = {plot_fwd["dT"] / Ec:.2f}E_c$'
         elif plot_rev is not None:
@@ -370,6 +380,16 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
                 generate_plot(plot_fwd=fwd_data, plot_rev=None, file_suffix="Forward", dasher=use_dasher)
             if rev_data is not None:
                 generate_plot(plot_fwd=None, plot_rev=rev_data, file_suffix="Reverse", dasher=use_dasher)
+
+            # Requirement 2: Midfix + SC regime (D!=0) fifth combined graph logic
+            if gap_ratio != 0.0 and fwd_data is not None and rev_data is not None:
+                generate_plot(
+                    plot_fwd=fwd_data,
+                    plot_rev=rev_data,
+                    file_suffix="Combined_InvertedRev",
+                    dasher=use_dasher,
+                    invert_midfix_rev=True
+                )
         else:
             # Legacy behavior: overlay them on a single combined plot
             generate_plot(plot_fwd=fwd_data, plot_rev=rev_data, file_suffix="Combined", dasher=use_dasher)
