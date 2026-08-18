@@ -34,7 +34,7 @@ rcParams['ytick.labelsize'] = 20
 rcParams['legend.fontsize'] = 16
 
 debug = True
-
+S_min = 0.25
 
 def discover_latest_varyV_runs(base_dir="."):
     base_path = Path(base_dir)
@@ -204,8 +204,8 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
     base_data = fwd_data if fwd_data is not None else rev_data
     rep = base_data["rep"]
 
-    # --- Nested plotting function allows us to build either combined or separated graphs easily ---
-    def generate_plot(plot_fwd, plot_rev, file_suffix):
+    # --- Nested plotting function allowing flexible styling via `dasher` ---
+    def generate_plot(plot_fwd, plot_rev, file_suffix, dasher):
         fig, ax1 = plt.subplots(figsize=(10, 7))
 
         color_s = 'tab:red'
@@ -214,80 +214,138 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
         ax1.set_xlabel(r'Voltage Bias $V$ $\left[ \frac{e}{\langle C \rangle} \right]$', labelpad=15)
         ax1.set_ylabel(r'Thermopower |S(V)| $\left[ \frac{k_B}{e} \right]$', color='black', labelpad=15)
 
+        # -----------------------------------------------
+        # FORWARD SWEEP
+        # -----------------------------------------------
         if plot_fwd is not None:
             df_f = plot_fwd["df"]
+            dT_val_f = plot_fwd["dT"]
 
-            # --- MIDFIX FLIP LOGIC ---
             if is_midfix:
-                s_vals = df_f["Thermopower_S(V)"]
-                s_label = r'$S(V)$, $\Delta T>0$'
+                s_vals_f = df_f["Thermopower_S(V)"]
+                s_label_f = r'$S(V)$'
             else:
-                s_vals = -df_f["Thermopower_S(V)"]
-                s_label = r'$-S(V)$, $\Delta T>0$'
+                s_vals_f = -df_f["Thermopower_S(V)"]
+                s_label_f = r'$-S(V)$'
+
+            V_f = df_f["V_baseline_(V)"]
+            err_f = df_f["Thermopower_err"]
+
+            if dasher:
+                # Filter strictly for absolute S(V) > 0.3
+                mask_f = np.abs(s_vals_f) > S_min
+                V_plot_f = V_f[mask_f]
+                S_plot_f = s_vals_f[mask_f]
+                err_plot_f = err_f[mask_f]
+                fmt_f = 'o'  # Scatter only, no connecting lines
+
+                # Add vertical dashed lines indicating peak alignment
+                for x_val in V_plot_f:
+                    ax1.axvline(x=x_val, color='gray', linestyle='--', linewidth=1.0, alpha=0.5, zorder=0)
+            else:
+                V_plot_f = V_f
+                S_plot_f = s_vals_f
+                err_plot_f = err_f
+                fmt_f = '-o'
 
             line1 = ax1.errorbar(
-                df_f["V_baseline_(V)"], s_vals, yerr=df_f["Thermopower_err"],
-                fmt='-o', color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-                label=s_label
+                V_plot_f, S_plot_f, yerr=err_plot_f,
+                fmt=fmt_f, color=color_s, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
+                label=s_label_f
             )
 
+        # -----------------------------------------------
+        # REVERSE SWEEP
+        # -----------------------------------------------
         if plot_rev is not None:
             df_r = plot_rev["df"]
+            dT_val_r = plot_rev["dT"]
+
+            if is_midfix:
+                s_vals_r = df_r["Thermopower_S(V)"]
+                s_label_r = r'$S(V)$'
+            else:
+                s_vals_r = -df_r["Thermopower_S(V)"]
+                s_label_r = r'$-S(V)$'
+
+            V_r = df_r["V_baseline_(V)"]
+            err_r = df_r["Thermopower_err"]
+
+            if dasher:
+                # Filter strictly for absolute S(V) > 0.3
+                mask_r = np.abs(s_vals_r) > S_min
+                V_plot_r = V_r[mask_r]
+                S_plot_r = s_vals_r[mask_r]
+                err_plot_r = err_r[mask_r]
+                fmt_r = 's'  # Scatter only, no connecting lines
+
+                # Add vertical dashed lines indicating peak alignment
+                for x_val in V_plot_r:
+                    ax1.axvline(x=x_val, color='gray', linestyle='--', linewidth=1.0, alpha=0.5, zorder=0)
+            else:
+                V_plot_r = V_r
+                S_plot_r = s_vals_r
+                err_plot_r = err_r
+                fmt_r = '-s'
+
             line_r = ax1.errorbar(
-                df_r["V_baseline_(V)"], df_r["Thermopower_S(V)"], yerr=df_r["Thermopower_err"],
-                fmt='-s', color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
-                label=r'$S(V)$, $\Delta T<0$'
+                V_plot_r, S_plot_r, yerr=err_plot_r,
+                fmt=fmt_r, color=color_s_rev, linewidth=1.5, elinewidth=1.5, markersize=6, capsize=3,
+                label=s_label_r
             )
 
-        # APPLY X-AXIS LIMITS FOR MIDFIX
+        # Apply tight X-Axis for Midfix
         if is_midfix:
-            ax1.set_xlim(0.8, 4.0)
+            ax1.set_xlim(0.8, 4)
 
         ax1.tick_params(axis='y', length=6, width=0.5)
         ax1.tick_params(axis='x', length=6, width=0.5)
 
+        # -----------------------------------------------
+        # CURRENT I(V) AXIS
+        # -----------------------------------------------
         ax2 = ax1.twinx()
         color_i = 'tab:blue'
         color_i_rev = 'purple'
         ax2.set_ylabel(r'Current $I(V)$ $\left[ \frac{e}{\langle R \rangle \langle C \rangle} \right]$', color='black',
                        labelpad=15)
 
+        # Non-dashed line, width 2
         if plot_fwd is not None:
             df_f = plot_fwd["df"]
-            line2, = ax2.plot(df_f["V_baseline_(V)"], df_f["I_baseline_avg_(e/s)"], '--',
-                              color=color_i, linewidth=1.5, alpha=0.8, label=r'$I(V)$, $\Delta T>0$')
+            line2, = ax2.plot(df_f["V_baseline_(V)"], df_f["I_baseline_avg_(e/s)"], linestyle='-',
+                              color=color_i, linewidth=2, alpha=0.8, label=r'$I(V)$')
 
         if plot_rev is not None:
             df_r = plot_rev["df"]
-            line2_r, = ax2.plot(df_r["V_baseline_(V)"], df_r["I_baseline_avg_(e/s)"], ':',
-                                color=color_i_rev, linewidth=1.5, alpha=0.8, label=r'$I(V)$, $\Delta T<0$')
+            line2_r, = ax2.plot(df_r["V_baseline_(V)"], df_r["I_baseline_avg_(e/s)"], linestyle='-',
+                                color=color_i_rev, linewidth=2, alpha=0.8, label=r'$I(V)$')
 
         ax2.tick_params(axis='y', length=6, width=0.5)
         for spine in ax2.spines.values():
             spine.set_linewidth(0.5)
 
-        # --- NO TITLE ---
+        # -----------------------------------------------
+        # TITLE
+        # -----------------------------------------------
+        Ec = 0.5 / Cg
+
+        # Calculate proper title depending on if it's combined or separated
+        if file_suffix == "Combined" and plot_fwd is not None:
+            title_str = 'Thermopower & Current as a Function of Voltage\n' rf'$\Delta T = {abs(plot_fwd["dT"]) / Ec:.2f}E_c$'
+        elif plot_fwd is not None:
+            title_str = 'Thermopower & Current as a Function of Voltage\n' rf'$\Delta T = {plot_fwd["dT"] / Ec:.2f}E_c$'
+        elif plot_rev is not None:
+            title_str = 'Thermopower & Current as a Function of Voltage\n' rf'$\Delta T = {plot_rev["dT"] / Ec:.2f}E_c$'
+
+        ax1.set_title(title_str, pad=20)
 
         fig.tight_layout()
 
-        # ==========================================================
-        # EXPORT 1: PDF WITHOUT I(V) IN THE LEGEND
-        # ==========================================================
+        # -----------------------------------------------
+        # COMBINED LEGEND EXPORT
+        # -----------------------------------------------
         lines, labels = ax1.get_legend_handles_labels()
-
-        legend_no_iv = ax1.legend(lines, labels,
-                                  loc='upper left',
-                                  bbox_to_anchor=(0.02, 0.98),
-                                  frameon=True, edgecolor='black')
-        legend_no_iv.get_frame().set_linewidth(0.5)
-
-        out_file_no_iv = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_{file_suffix}_NoIVLegend.pdf"
-        plt.savefig(out_file_no_iv, format='pdf', bbox_inches='tight')
-        print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file_no_iv.name}")
-
-        # ==========================================================
-        # EXPORT 2: PDF WITH I(V) IN THE LEGEND
-        # ==========================================================
         lines2, labels2 = ax2.get_legend_handles_labels()
 
         legend_with_iv = ax1.legend(lines + lines2, labels + labels2,
@@ -296,24 +354,25 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
                                     frameon=True, edgecolor='black')
         legend_with_iv.get_frame().set_linewidth(0.5)
 
-        out_file_with_iv = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_{file_suffix}_WithIVLegend.pdf"
-        plt.savefig(out_file_with_iv, format='pdf', bbox_inches='tight')
-        print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file_with_iv.name}")
-
+        dasher_suffix = "Dasher" if dasher else "Standard"
+        out_file = sys_dir / f"Publication_VaryV_rep{rep}_Cg{Cg}_D{gap_ratio}_{file_suffix}_{dasher_suffix}.pdf"
+        plt.savefig(out_file, format='pdf', bbox_inches='tight')
+        print(f"Publication vector PDF saved to: {sys_dir.name}/{out_file.name}")
         plt.close()
 
     # ==========================================================
-    # EXECUTION: Determine single/combined graphing layout
+    # EXECUTION: Loop through True/False dasher configurations
     # ==========================================================
-    if is_midfix:
-        # Generate entirely separate plots for forward and reverse sweeps
-        if fwd_data is not None:
-            generate_plot(plot_fwd=fwd_data, plot_rev=None, file_suffix="Forward")
-        if rev_data is not None:
-            generate_plot(plot_fwd=None, plot_rev=rev_data, file_suffix="Reverse")
-    else:
-        # Legacy behavior: overlay them on a single combined plot
-        generate_plot(plot_fwd=fwd_data, plot_rev=rev_data, file_suffix="Combined")
+    for use_dasher in [False, True]:
+        if is_midfix:
+            # Generate entirely separate plots for forward and reverse sweeps
+            if fwd_data is not None:
+                generate_plot(plot_fwd=fwd_data, plot_rev=None, file_suffix="Forward", dasher=use_dasher)
+            if rev_data is not None:
+                generate_plot(plot_fwd=None, plot_rev=rev_data, file_suffix="Reverse", dasher=use_dasher)
+        else:
+            # Legacy behavior: overlay them on a single combined plot
+            generate_plot(plot_fwd=fwd_data, plot_rev=rev_data, file_suffix="Combined", dasher=use_dasher)
 
 
 if __name__ == "__main__":
