@@ -44,7 +44,7 @@ import pickle
 
 ####### SLURM parameter parsing from job name ######
 job_name = os.environ.get('SLURM_JOB_NAME', 'TPvaryV_rep40_Cg2_D0_0')
-pattern = r"(Reverse_?)?TPvaryV_rep(\d+)_Cg(\d+)_D(\d+)_(\d+)"
+pattern = r"(Reverse_?)?TPvaryV_rep(\d+)_Cg(\d+)_D(\d+)_(\d+)_TmidNonT0"
 match = re.search(pattern, job_name)
 
 if match:
@@ -60,7 +60,7 @@ if match:
 else:
     raise NameError(f"Job Name is improperly formatted : {job_name}")
 
-Cg_list = [2, 10]
+Cg_list = [10]
 Cg_list_gapped = [10]
 gap_list = [2.0]
 
@@ -87,13 +87,14 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         if (Cg not in Cg_list_gapped) or (gap_ratio not in gap_list):
             raise ValueError(f"Cg must be in Cg_list_gapped, Cg = {Cg} ; "
                              f"gap ratio must be between in gap_list, D = {gap_ratio}")
-        if Cg == 10 and gap_ratio == 2:
-            pos_energy_boundT0 = 0
-            neg_energy_boundT0 = -0.30769
+        if Cg == 10 and gap_ratio == 2 and repetition == 40:
+            pos_energy_boundT0 = 0.36 # FOR T0 0
+            neg_energy_boundT0 = -0.461 # FOR T0 -0.30769
+            pos_energy_bounddT = 0.62
+            neg_energy_bounddT = -0.76
         else:
             raise ValueError("Unexpected Cg/Gap ratio combination.")
 
-        # --- NEW N-I-S REPETITION LOCK ---
         if repetition not in [40, 96]:
             raise ValueError(
                 f"CRITICAL: N-I-S Boundary tables are currently only generated for rep 40 and 96. "
@@ -103,12 +104,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     else:
         if Cg not in Cg_list:
             raise ValueError(f"Cg must be in Cg_list, Cg = {Cg}")
-        elif Cg == 10:
-            pos_energy_boundT0 = -0.01
-            neg_energy_boundT0 = -0.11
-        elif Cg == 2:
-            pos_energy_boundT0 = -0.12
-            neg_energy_boundT0 = -0.37
+        if Cg == 10:
+            pos_energy_boundT0 = 0.32
+            neg_energy_boundT0 = -0.42
+            pos_energy_bounddT = 0.6
+            neg_energy_bounddT = -0.71
         else:
             raise ValueError("what")
 
@@ -119,9 +119,16 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     print(f"Cg = {Cg}")
 
     # ---------------------------------------------------------
-    # STATE INITIALIZATION (Resuming or Creating New)
+    # STATE INITIALIZATION & MIDFIX CALCULATION
     # ---------------------------------------------------------
     current_run_json = import_export.results_dir_path / f"{run_name}.json"
+    sliced_baseline_npy = import_export.results_dir_path / "midfix_baseline_arrays.npy"
+
+    # Pre-calculate T_mid locally for all tasks
+    T_std = repetition * T0_unitless / 20
+    center_idx = (7 - 1) / 2.0  # Hardcoded 7 row_num based on earlier scripts
+    T_mid = T0_unitless + center_idx * T_std
+    T_baseline = [T_mid] * 7
 
     if not is_resumed:
         # I AM THE CREATOR (Won the mkdir race for a brand new run)
@@ -152,22 +159,37 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
                                          Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
             print("!!!NEW INITIAL STATE CREATED FROM SCRATCH!!!", flush=True)
 
+        # -- CREATOR EXTRACTS THE BASELINE ARRAYS ONCE --
+        gradient_table_path = import_export.prepare_table_triplets_file_list[repetition]
+        if not gradient_table_path.exists():
+            raise FileNotFoundError(f"Missing required integration table: {gradient_table_path.name}")
+
+        print(f"Slicing T_mid arrays from: {gradient_table_path.name}...", flush=True)
+        big_table = np.load(gradient_table_path.as_posix())
+
+        mask = np.isclose(big_table["temp"], T_mid, rtol=1e-5)
+        if not np.any(mask):
+            print(f"Available temperatures in table: {np.unique(big_table['temp'])}", flush=True)
+            raise ValueError(f"CRITICAL: T_mid ({T_mid}) was not found inside the loaded table.")
+
+        # Save the sliced baseline arrays for the followers
+        with open(sliced_baseline_npy, 'wb') as f:
+            np.save(f, big_table["val"][mask])
+            np.save(f, big_table["prob"][mask])
+
         # ATOMIC WRITE FOR FOLLOWERS
-        # Write to a temp file first, then replace to prevent followers from reading half-written data
         temp_json = import_export.results_dir_path / f"temp_init_{TASK_ID}.json"
         temp_json.write_text(orjson.dumps(asdict(init), option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"))
         temp_json.replace(current_run_json)
         print(f"Creator Task {TASK_ID} successfully dropped {current_run_json.name} for followers.", flush=True)
 
     else:
-        # I AM A FOLLOWER (Lost the mkdir race, OR resuming a crashed run from yesterday)
+        # I AM A FOLLOWER
         print(f"Task {TASK_ID} is a follower. Waiting for Creator to drop {current_run_json.name}...", flush=True)
 
-        while not current_run_json.exists():
-            print("waiting for .json to be created")
-            time.sleep(1)
+        while not current_run_json.exists() or not sliced_baseline_npy.exists():
+            time.sleep(2)
 
-        # File exists, safely load it with a catch loop in case of instantaneous file system lock
         while True:
             try:
                 json_txt = current_run_json.read_text()
@@ -178,44 +200,33 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
-        print(f"Task {TASK_ID} successfully loaded synced state from {current_run_json.name}", flush=True)
+        print(f"Task {TASK_ID} successfully loaded synced state.", flush=True)
 
     # ---------------------------------------------------------
-    # DEFINE MACRO VOLTAGE SWEEP (Baseline Voltages)
+    # DEFINE MACRO VOLTAGE SWEEP
     # ---------------------------------------------------------
     V_diff = 4
     steps = 100
     V_sweep = np.linspace(init.Vright * init.Volts, (init.Vright + V_diff) * init.Volts, num=steps)
     cycles = len(V_sweep)
 
-    # Calculate uniform T0 baseline constants ONCE
-    T_baseline = [init.T0] * init.row_num
+    # ---------------------------------------------------------
+    # MIDFIX BASELINE SETUP
+    # ---------------------------------------------------------
     Delta_0 = gap_ratio * init.Ec
     gap_array_baseline = F.exact_bcs_gap(T_baseline, Delta_0)
     expected_err_baseline = F.calc_expected_dist_std(T_baseline, init.T0, gap_array_baseline, init.R_t_ij, init.Ec)
 
-    # LOAD BASELINE (dT=0) INTEGRATION TABLE ONCE
-    baseline_table_path = (import_export.export_path /
-                           f"64bit_table_triplets_T0_e{round(math.log10(T0_unitless))}_Cg{mean_Cg}.npz")
+    print(f"############# INITIALIZING MIDFIX BASELINE ##################")
+    print(f"Target Midfix Temperature (T_mid) = {T_mid}", flush=True)
 
-    nis_table_val = None
-    nis_table_prob = None
+    # All tasks (Creator and Followers) now safely load the pre-sliced array
+    with open(sliced_baseline_npy, 'rb') as f:
+        table_val_baseline = np.load(f)
+        table_prob_baseline = np.load(f)
+    table_T_baseline = [T_mid]
 
-    ## IMPORT BASELINE TABLES
-    if not validate_table_triplets_file(baseline_table_path, init, [init.T0]):
-        table_triplets = prepare_table_triplets(init, [init.T0],
-                                                pos_energy_bound=pos_energy_boundT0,
-                                                neg_energy_bound=neg_energy_boundT0,
-                                                max_workers=num_workers)
-        output_table_triplets(table_triplets, baseline_table_path)
-        table_val_baseline = table_triplets[:, 0]
-        table_prob_baseline = table_triplets[:, 1]
-        table_T_baseline = [init.T0]
-    else:
-        baseline_table = np.load(baseline_table_path.as_posix())
-        table_val_baseline = baseline_table["val"]
-        table_prob_baseline = baseline_table["prob"]
-        table_T_baseline = np.unique(baseline_table["temp"]).tolist()
+    print(f"Successfully loaded {len(table_val_baseline)} integration steps for the baseline state.", flush=True)
 
     print("############# RUN THERMOPOWER VARY-V EXPERIMENT ##################", flush=True)
 
@@ -226,16 +237,15 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
     if marker_file.exists():
         exit(f"Task {TASK_ID} already completed in this path : {import_export.results_dir_path}")
 
-    T_std = repetition * init.T0 / 20
     T_dT = [init.T0 + i * T_std for i in range(init.row_num)]
     if flip:
         T_dT = np.flip(T_dT)
 
-    # 2. Pre-calculate Gradient Gaps and Errors ONCE
     gap_array_dT = F.exact_bcs_gap(T_dT, Delta_0)
     expected_err_dT = F.calc_expected_dist_std(T_dT, init.T0, gap_array_dT, init.R_t_ij, init.Ec)
 
-    # 3. Load the corresponding Integration Table
+    # Tasks load the gradient table individually here. This is safer because they are just
+    # reading the whole array, not slicing it, reducing memory mapping strain.
     if not validate_table_triplets_file(import_export.prepare_table_triplets_file_list[repetition], init,
                                         np.array(T_dT)):
         raise ImportError(f"no validated table, skipped rep{T_std}")
@@ -247,7 +257,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
     # 3b. Load and Validate the matching N-I-S Boundary Integration Table
     if gap_ratio > 1e-3:
-        # String build aligns with the table formatting standard in your repo
         if repetition == 40:
             nis_table_path = import_export.export_path / f"64bit_GAP2_0_NIS_table_triplets_Tmid7_0_Tstd20_20_Cg_10.npz"
         elif repetition == 96:
@@ -268,6 +277,9 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
         nis_table_val = nis_triplets["val"]
         nis_table_prob = nis_triplets["prob"]
         print("N-I-S Boundary Table Successfully Loaded and Validated.", flush=True)
+    else:
+        nis_table_val = None
+        nis_table_prob = None
 
     # 4. Dispatch to Physics Engine
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -308,15 +320,12 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             nis_table_prob=nis_table_prob
         )
 
-        # --- CHECKPOINT LOADING / PARTIAL SUBMISSION ---
         results = [None] * init.loop_count
         futures = {}
 
-        # Safely cap bounds in case we requested fewer loops total
         safe_end_idx = min(END_LOOP_IDX, init.loop_count)
 
         for i in range(START_LOOP_IDX, safe_end_idx):
-            # Bound the checkpoint name directly to the repetition and index
             ckpt_path = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
             if ckpt_path.exists():
                 try:
@@ -328,7 +337,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             if results[i] is None:
                 futures[executor.submit(loaded_state_function, i)] = i
 
-        # --- FAIL-FAST SUBMISSION WITH INCREMENTAL SAVING ---
         for future in as_completed(futures):
             idx = futures[future]
             res = future.result()
@@ -337,7 +345,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
             with open(checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{idx}.pkl", "wb") as f:
                 pickle.dump(res, f)
 
-    # 5. Extract Data Locally for this Task
     valid_results = [res for res in results[START_LOOP_IDX:safe_end_idx] if res is not None]
 
     if valid_results:
@@ -348,7 +355,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, is_resumed=
 
     marker_file.touch()
 
-    # Cleanup safely tied to specific repetition and indexes owned by this task
     for i in range(START_LOOP_IDX, safe_end_idx):
         f = checkpoint_dir / f"ckpt_varyV_rep{repetition}_idx{i}.pkl"
         f.unlink(missing_ok=True)
