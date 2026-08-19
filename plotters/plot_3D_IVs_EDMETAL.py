@@ -30,7 +30,7 @@ rcParams['ytick.labelsize'] = 18
 # 2. Data Loading & Processing
 # ==========================================
 # Load the dataset
-df = pd.read_csv('NEW_IV_data_reintegrated.csv')
+df = pd.read_csv('NEW_IV_data_reintegrated_metal_a.csv')
 
 # 0. MOST IMPORTANT: Enforce Voltage Cutoff V <= 1.4
 df = df[df.iloc[:, 0] <= 1.4]
@@ -43,14 +43,14 @@ dTs = []
 I_list = []
 
 for col in df.columns[1:]:
-    # FIX: Added '-?' to the regex to successfully capture negative numbers
+    # Capture negative numbers
     match = re.search(r'Grad_(-?\d+)_I', col)
     if match:
         n = int(match.group(1))
         dTs.append(n * 0.02)
         I_list.append(df[col].values)
 
-# FIX: Sort the extracted arrays by Delta T to prevent 3D mesh folding/crashing
+# Sort the extracted arrays by Delta T to prevent 3D mesh folding/crashing
 sorted_data = sorted(zip(dTs, I_list), key=lambda x: x[0])
 dTs = np.array([item[0] for item in sorted_data])
 I_matrix = np.array([item[1] for item in sorted_data]) * 1e3 # Scale current by 10^3
@@ -88,13 +88,12 @@ def format_3d_axes(ax):
 # ==========================================
 fig1 = plt.figure(figsize=(12, 10))
 
-# FIX: Squeezed the plot further to the right (left=0.25) to make room for the newly rotated Z-axis!
-fig1.subplots_adjust(left=0.1, right=0.65, top=0.90, bottom=0.10)
+# Relaxed the left margin since the text is now vertical and takes up less horizontal space
+fig1.subplots_adjust(left=0.15, right=0.98, top=0.90, bottom=0.10)
 
 ax1 = fig1.add_subplot(111, projection='3d')
 
-# FIX: Dynamically calculate a mesh stride so the web has ~30 segments total.
-# This prevents the black lines from merging into a solid gray blob.
+# Dynamically calculate a mesh stride so the web has ~30 segments total.
 r_stride = max(1, len(dTs) // 30)
 c_stride = max(1, len(V) // 30)
 
@@ -109,7 +108,10 @@ ax1.set_title('I-V Characteristics Under Thermal Gradient', y=1)
 
 ax1.set_xlabel(r'Voltage $\left[ \frac{e}{\langle C \rangle} \right]$', labelpad=25)
 ax1.set_ylabel(r'$\Delta T \left[ \frac{e^2}{k_B \langle C \rangle} \right]$', labelpad=25)
-ax1.set_zlabel(r'Current $\left[ 10^{-3} \frac{e}{\langle R \rangle \langle C \rangle} \right]$', labelpad=15)
+
+# FIX: Force the Z-label to sit strictly vertical by overriding the auto-rotator
+ax1.set_zlabel(r'Current $\left[ 10^{-3} \frac{e}{\langle R \rangle \langle C \rangle} \right]$',
+               labelpad=15, rotation=90, rotation_mode='anchor')
 
 format_3d_axes(ax1)
 
@@ -118,13 +120,13 @@ ax1.invert_xaxis()
 ax1.invert_yaxis()
 
 # Rotate view to favor V-axis
-ax1.view_init(elev=25, azim=-45)
+ax1.view_init(elev=20, azim=-35)
 
 # Force Matplotlib to calculate margins before cropping
 plt.tight_layout()
 
-# Export to PDF with a heavy protective pad to guarantee no text is clipped
-plt.savefig('3D_IV_Surface.pdf', format='pdf', bbox_inches='tight', pad_inches=0.5)
+# Export to PDF with a protective pad
+plt.savefig('3D_IV_Surface.pdf', format='pdf', bbox_inches='tight', pad_inches=0.6)
 plt.close(fig1)
 
 print("Plot successfully generated and saved as 3D_IV_Surface.pdf")
