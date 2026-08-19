@@ -224,11 +224,12 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
             df_f = plot_fwd["df"]
             dT_val_f = plot_fwd["dT"]
 
+            # Explicitly never apply a minus sign to the fwd sweep
+            s_vals_f = df_f["Thermopower_S(V)"]
+
             if "Combined" in file_suffix:
-                s_vals_f = -df_f["Thermopower_S(V)"]
-                s_label_f = r'$-S(V)$ ($\Delta T > 0$)'
+                s_label_f = r'$S(V)$ ($\Delta T > 0$)'
             else:
-                s_vals_f = df_f["Thermopower_S(V)"]
                 s_label_f = r'$S(V)$'
 
             V_f = df_f["V_baseline_(V)"]
@@ -264,12 +265,11 @@ def plot_thermopower_varyV(fwd_folder, rev_folder, base_output_path, config_key)
             df_r = plot_rev["df"]
             dT_val_r = plot_rev["dT"]
 
-            # Explicitly never apply a minus sign to the reverse sweep
-            s_vals_r = df_r["Thermopower_S(V)"]
-
             if "Combined" in file_suffix:
-                s_label_r = r'$S(V)$ ($\Delta T < 0$)'
+                s_vals_r = -df_f["Thermopower_S(V)"]
+                s_label_r = r'$-S(V)$ ($\Delta T < 0$)'
             else:
+                s_vals_r = df_r["Thermopower_S(V)"]
                 s_label_r = r'$S(V)$'
 
             V_r = df_r["V_baseline_(V)"]
