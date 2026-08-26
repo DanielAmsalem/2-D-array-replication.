@@ -307,7 +307,7 @@ def Get_Gamma(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_
 
 def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_, array_size, islands, row_num, C_inv,
                      pos_energy_bound, neg_energy_bound, T_gradient, R_t_ij, R_t_i, near_left, near_right, Vright, Ec,
-                     table_val, table_prob, nis_table_val, nis_table_prob, T_table, flip, periodic_y, gap_array):
+                     table_val, table_prob, nis_table_val, nis_table_prob, nis_table_T, T_table, flip, periodic_y, gap_array): # <--- UPDATED: Added nis_table_T
     """
     opposed to regular get gamma here reaction index is of the form
     [(i,j,n)] where n={1,2} for qp/cp transition
@@ -316,6 +316,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
     has_nis_tables = (nis_table_val is not None)
     bound_table_val = nis_table_val if has_nis_tables else table_val
     bound_table_prob = nis_table_prob if has_nis_tables else table_prob
+    bound_T_table = nis_table_T if has_nis_tables else T_table # <--- UPDATED: Created bound_T_table
     bound_is_NIS = True if has_nis_tables else False
 
     # dE values for i->j transition
@@ -365,7 +366,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         # rate for V_left->i
         if dE_left < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                    pos_energy_bound, bound_table_val, bound_table_prob, bound_T_table, flip, # <--- UPDATED: Pass bound_T_table
                                     gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
             reaction_index_ += [(isle, "from", 1)]
 
@@ -374,7 +375,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             dE_left = (2 * cycle_voltage_ - 2 * curr_V[isle] + e * C_inv[isle][isle]) * e / 2
             if dE_left < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_left, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                        pos_energy_bound, bound_table_val, bound_table_prob, bound_T_table, flip, # <--- UPDATED: Pass bound_T_table
                                         gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
                 reaction_index_ += [(isle, "to", 1)]
 
@@ -385,7 +386,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
         # rate for V_right->i
         if dE_right < pos_energy_bound:
             Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                    pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                    pos_energy_bound, bound_table_val, bound_table_prob, bound_T_table, flip, # <--- UPDATED: Pass bound_T_table
                                     gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
             reaction_index_ += [(isle, "from", 1)]
 
@@ -396,7 +397,7 @@ def Get_Gamma_gapped(Gamma_, e, reaction_index_, n_list, curr_V, cycle_voltage_,
             # rate for i->V_right
             if dE_right < pos_energy_bound:
                 Gamma_ += [Gamma_approx(dE_right, T_gradient[isle % row_num], R_t_i[isle], Ec, e, neg_energy_bound,
-                                        pos_energy_bound, bound_table_val, bound_table_prob, T_table, flip,
+                                        pos_energy_bound, bound_table_val, bound_table_prob, bound_T_table, flip, # <--- UPDATED: Pass bound_T_table
                                         gap_ratio=gap_array[isle % row_num], is_NIS=bound_is_NIS)]
                 reaction_index_ += [(isle, "to", 1)]
 
@@ -993,13 +994,18 @@ def Get_Steady_State_varyV(
 
         # System Constants
         flip: bool,
-        pos_energy_bound: float,
-        neg_energy_bound: float,
+        pos_energy_bound_baseline: float,  # <--- UPDATED
+        neg_energy_bound_baseline: float,  # <--- UPDATED
+        pos_energy_bound_dT: float,  # <--- UPDATED
+        neg_energy_bound_dT: float,  # <--- UPDATED
         repetition: int,
         periodic_y: bool,
         gap_ratio: float,
+
+        # Boundary N-I-S Tables
         nis_table_val=None,
-        nis_table_prob=None
+        nis_table_prob=None,
+        nis_table_T=None  # <--- UPDATED
 ):
     total_error_count = 0
 
@@ -1012,13 +1018,16 @@ def Get_Steady_State_varyV(
     n_global = np.zeros(init.array_size)
 
     # 4 times smaller than the step take in Vsweeps
-    dV_step = init.Volts/100
+    dV_step = init.Volts / 100
 
     # ---------------------------------------------------------
     # INTERNAL KMC ENGINE (The Micro-Loop)
     # ---------------------------------------------------------
     def run_kmc_to_steady_state(current_V, T_params, gap_params, expected_error,
-                                table_val, table_prob, table_T, n_state, Qg_state):
+                                table_val, table_prob, table_T,
+                                pos_energy_bound, neg_energy_bound,  # <--- NEW: Dynamic Bounds
+                                nis_val, nis_prob, nis_T,  # <--- NEW: Dynamic NIS routing
+                                n_state, Qg_state):
         k = 0
         q = 0
         zero_curr_steady_state_counter = 0
@@ -1063,8 +1072,8 @@ def Get_Steady_State_varyV(
                     islands=init.islands,
                     row_num=init.row_num,
                     C_inv=init.C_inv,
-                    pos_energy_bound=pos_energy_bound,
-                    neg_energy_bound=neg_energy_bound,
+                    pos_energy_bound=pos_energy_bound,  # Fed Dynamically
+                    neg_energy_bound=neg_energy_bound,  # Fed Dynamically
                     T_gradient=T_params,
                     R_t_ij=init.R_t_ij,
                     R_t_i=init.R_t_i,
@@ -1110,8 +1119,8 @@ def Get_Steady_State_varyV(
                     islands=init.islands,
                     row_num=init.row_num,
                     C_inv=init.C_inv,
-                    pos_energy_bound=pos_energy_bound,
-                    neg_energy_bound=neg_energy_bound,
+                    pos_energy_bound=pos_energy_bound,  # Fed Dynamically
+                    neg_energy_bound=neg_energy_bound,  # Fed Dynamically
                     T_gradient=T_params,
                     R_t_ij=init.R_t_ij,
                     R_t_i=init.R_t_i,
@@ -1121,8 +1130,9 @@ def Get_Steady_State_varyV(
                     Ec=init.Ec,
                     table_val=table_val,
                     table_prob=table_prob,
-                    nis_table_val=nis_table_val,
-                    nis_table_prob=nis_table_prob,
+                    nis_table_val=nis_val,  # Fed Dynamically
+                    nis_table_prob=nis_prob,  # Fed Dynamically
+                    nis_table_T=nis_T,  # Fed Dynamically
                     T_table=table_T,
                     flip=flip,
                     periodic_y=periodic_y,
@@ -1207,9 +1217,13 @@ def Get_Steady_State_varyV(
         # ==============================================================
         # STEP 0: Establish Baseline State (dT = 0)
         # ==============================================================
+        # We pass None for the NIS variables here so the baseline step
+        # falls back perfectly on the baseline bulk tables for the electrodes.
         I_target, I_var_target, n_global, Qg_global, err = run_kmc_to_steady_state(
             V_baseline, T_baseline, gap_array_baseline, expected_error_baseline,
             table_val_baseline, table_prob_baseline, table_T_baseline,
+            pos_energy_bound_baseline, neg_energy_bound_baseline,
+            None, None, None,  # <--- Safely ignores gradient NIS tables
             n_global, Qg_global
         )
         if err: total_error_count += 1
@@ -1226,6 +1240,8 @@ def Get_Steady_State_varyV(
         I_new, I_var_new, n_global, Qg_global, err = run_kmc_to_steady_state(
             V_adj, T_dT, gap_array_dT, expected_error_dT,
             table_val_dT, table_prob_dT, table_T_dT,
+            pos_energy_bound_dT, neg_energy_bound_dT,
+            nis_table_val, nis_table_prob, nis_table_T,  # <--- Accurately maps NIS boundaries
             n_global, Qg_global
         )
         if err: total_error_count += 1
@@ -1233,7 +1249,7 @@ def Get_Steady_State_varyV(
         # ==============================================================
         # STEPS 3 & 4: Safe Constant-Step Feedback Loop
         # ==============================================================
-        max_feedback_loops = 50 #up to 1V away
+        max_feedback_loops = 100  # up to 1V away
         feedback_count = 0
 
         # Account for stochastic noise in KMC (clamp between 1e-9 and 0.01)
@@ -1250,6 +1266,8 @@ def Get_Steady_State_varyV(
                 I_new, I_var_new, n_global, Qg_global, err = run_kmc_to_steady_state(
                     V_adj, T_dT, gap_array_dT, expected_error_dT,
                     table_val_dT, table_prob_dT, table_T_dT,
+                    pos_energy_bound_dT, neg_energy_bound_dT,
+                    nis_table_val, nis_table_prob, nis_table_T,  # <--- Continues mapping NIS boundaries
                     n_global, Qg_global
                 )
                 if err: total_error_count += 1
