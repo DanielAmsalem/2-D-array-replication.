@@ -310,7 +310,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
         table_T = np.unique(table_triplets["temp"]).tolist()
 
     # =========================================================================
-    # 2. N-I-S TABLE GENERATION
+    # 2. N-I-S TABLE GENERATION (Baseline rep=0)
     # =========================================================================
     if not validate_table_triplets_file(nis_null_path_name, init,
                                         [init.T0 * constT]) and first_run and gap_ratio > 1e-3:
@@ -324,14 +324,18 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
         output_table_triplets(nis_table_triplets_raw, nis_null_path_name)
         nis_table_val = nis_table_triplets_raw[:, 0]
         nis_table_prob = nis_table_triplets_raw[:, 1]
+        nis_table_T = np.unique(nis_table_triplets_raw[:, 2]).tolist()
     elif first_run and gap_ratio > 1e-3:
         print("Valid N-I-S Table found. Loading...", flush=True)
         nis_table_triplets = np.load(nis_null_path_name.as_posix())
         nis_table_val = nis_table_triplets["val"]
         nis_table_prob = nis_table_triplets["prob"]
+        nis_table_T = np.unique(nis_table_triplets["temp"]).tolist()
     elif first_run:
         nis_table_val = None
         nis_table_prob = None
+        nis_table_T = None
+
     # RUN PARAMETERS
     V_diff = 4
     steps = 100
@@ -351,9 +355,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
     print("############# RUN VIRTUAL EXPERIMENT ##################", flush=True)
 
     if first_run:
-        marker_file = import_export.results_dir_path / ".completed_rep0"
-        if marker_file.exists():
-            print("Repetition 0 already fully completed in previous run. Skipping execution block.", flush=True)
+        # Dynamic Checkpoint Counting for rep=0
+        existing_pkls_rep0 = list(checkpoint_dir.glob("ckpt_rep0_idx*.pkl"))
+        if len(existing_pkls_rep0) >= loop_count:
+            print(f"Repetition 0 already fully completed ({len(existing_pkls_rep0)}/{loop_count} loops). Skipping execution block.", flush=True)
         else:
             t0 = time.time()
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -368,6 +373,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
                     table_prob=table_prob,
                     nis_table_val=nis_table_val,
                     nis_table_prob=nis_table_prob,
+                    nis_table_T=nis_table_T,
                     flip=flip,
                     table_T=table_T,
                     T=T,
@@ -450,10 +456,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
                                        tot_error_count=err,
                                        gap_ratio=gap_ratio)
 
-            # SUCCESS: Mark as complete and clean up .pkl files
-            marker_file.touch()
-            for f in checkpoint_dir.glob("ckpt_rep0_idx*.pkl"):
-                f.unlink(missing_ok=True)
+            # NOTE: Cleanup deleted to allow extending the loops later
+            # marker_file.touch()
+            # for f in checkpoint_dir.glob("ckpt_rep0_idx*.pkl"):
+            #     f.unlink(missing_ok=True)
 
     else:
         print("skipped first run")
@@ -489,9 +495,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
             print(f"repetition {repetition} missing from bounds table, skipped")
             continue
 
-        marker_file = import_export.results_dir_path / f".completed_rep{repetition}"
-        if marker_file.exists():
-            print(f"Repetition {repetition} already completely finished. Skipping.", flush=True)
+        # Dynamic Checkpoint Counting for rep > 0
+        existing_pkls_rep = list(checkpoint_dir.glob(f"ckpt_rep{repetition}_idx*.pkl"))
+        if len(existing_pkls_rep) >= loop_count:
+            print(f"Repetition {repetition} already completely finished ({len(existing_pkls_rep)}/{loop_count} loops). Skipping.", flush=True)
             continue
 
         # NEW TEMPERATURE PROFILE LOGIC: Fixed Middle
@@ -537,9 +544,11 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
             nis_table_triplets = np.load(nis_path.as_posix())
             nis_table_val = nis_table_triplets["val"]
             nis_table_prob = nis_table_triplets["prob"]
+            nis_table_T = np.unique(nis_table_triplets["temp"]).tolist()
         else:
             nis_table_val = None
             nis_table_prob = None
+            nis_table_T = None
 
         ### run repetition for new dT
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -564,6 +573,7 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
                 table_prob=table_prob,
                 nis_table_val=nis_table_val,
                 nis_table_prob=nis_table_prob,
+                nis_table_T=nis_table_T,
                 table_T=table_T,
                 flip=flip,
                 T=T,
@@ -646,10 +656,10 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, first_rep, flip_sample
                                    tot_error_count=err,
                                    gap_ratio=gap_ratio)
 
-        # SUCCESS: Mark as complete and clean up .pkl files explicitly in the subfolder
-        marker_file.touch()
-        for f in checkpoint_dir.glob(f"ckpt_rep{repetition}_idx*.pkl"):
-            f.unlink(missing_ok=True)
+        # NOTE: Cleanup deleted to allow extending the loops later
+        # marker_file.touch()
+        # for f in checkpoint_dir.glob(f"ckpt_rep{repetition}_idx*.pkl"):
+        #     f.unlink(missing_ok=True)
 
     ### plot all new csvs
     print(f"plotting all new csv in {import_export.results_dir_path}")

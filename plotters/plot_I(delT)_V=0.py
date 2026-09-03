@@ -33,6 +33,8 @@ Current_str = r"$\left[ \frac{e}{\langle R \rangle \langle C \rangle} \right]$"
 C_g = 20
 E_c = 0.025  # derived from C_g
 
+I_0 = 1e-4
+
 # Map the theoretical states to their respective filenames and plot styles
 FILES_CONFIG = {
     r'$\Delta = 0$ (Metallic)': {
@@ -86,7 +88,7 @@ for label, props in FILES_CONFIG.items():
         if 'Grad_' in col and '_I' in col:
             n = int(col.split('_')[1])
             dt_val = round(n * 0.02, 3)
-            if abs(dt_val) < 4*0.025:
+            if abs(dt_val) < 3*0.025:
                 dT_vals.append(dt_val)
                 I_vals.append(row_data[col])
 
@@ -94,9 +96,9 @@ for label, props in FILES_CONFIG.items():
     sort_indices = np.argsort(dT_vals)
     dT_vals = np.array(dT_vals)[sort_indices]
     I_vals = np.array(I_vals)[sort_indices]
-
+    semi_log_I = np.log(1 + np.abs(I_vals)/I_0)
     # Plot this specific gap configuration
-    ax.plot(dT_vals/E_c, I_vals, marker=props['marker'], markersize=8, color='black',
+    ax.plot(dT_vals/E_c, semi_log_I, marker=props['marker'], markersize=8, color='black',
             markerfacecolor=props['color'], linestyle='-', linewidth=1.5, alpha=0.9,
             label=label)
 
@@ -104,7 +106,7 @@ for label, props in FILES_CONFIG.items():
 # 4. Finalizing KC Formatting
 # ==========================================
 ax.set_xlabel(r'$\Delta T/E_c$ ', labelpad=15)
-ax.set_ylabel(r'Thermocurrent $I(V=0)$ ' + Current_str, labelpad=15)
+ax.set_ylabel(r'Semi-log $\ln (1 + \frac{|I(V=0)|}{I_0})$ ', labelpad=15)
 
 # Clean, informative title defining the system electrostatics
 ax.set_title(rf'Thermoelectric Current at Zero Bias', pad=20)

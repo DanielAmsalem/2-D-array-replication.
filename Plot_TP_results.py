@@ -80,12 +80,14 @@ def parse_params(filepath):
         content = f.read()
 
     # Extract physical system parameters for grouping
+    match_D = re.search(r'(?:gap ratio|D)\s*:\s*([\d.]+)', content, re.IGNORECASE)
     match_Cg = re.search(r'Cg\s*:\s*([\d.]+)', content)
     match_stdR = re.search(r'stdR \(exponent\)\s*:\s*([\d.]+)', content)
     match_sig = re.search(r'sig \(normal\)\s*:\s*([\d.]+)', content)
     match_T0 = re.search(r'T0\s*:\s*([\d.]+)', content)
     match_flip = re.search(r'flip\s*:\s*(True|False)', content)
 
+    params['D'] = float(match_D.group(1)) if match_D else 0.0
     params['Cg'] = float(match_Cg.group(1)) if match_Cg else 0.0
     params['stdR'] = float(match_stdR.group(1)) if match_stdR else 0.0
     params['sig'] = float(match_sig.group(1)) if match_sig else 0.0
@@ -200,7 +202,7 @@ def run_scanner_mode(base_dir, ivs_txt_path):
     """
     print(f"[{ivs_txt_path.name} NOT FOUND] -> Initializing Scanner Mode...", flush=True)
 
-    # catalog structure: catalog[(stdR, sig, T0, midfix, Tmid)][Cg][flip][rep] = [folder1, folder2, ...]
+    # catalog structure: catalog[(D, stdR, sig, T0, midfix, Tmid)][Cg][flip][rep] = [folder1, folder2, ...]
     catalog = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
     corrupted_folders = []
 
@@ -232,10 +234,10 @@ def run_scanner_mode(base_dir, ivs_txt_path):
                     continue
 
             params = parse_params(param_file)
-            stdR, sig, T0, Cg, flip = params['stdR'], params['sig'], params['T0'], params['Cg'], params['flip']
+            D, stdR, sig, T0, Cg, flip = params['D'], params['stdR'], params['sig'], params['T0'], params['Cg'], params['flip']
 
             # Track folder strictly grouped by physics parameters and separated internally by flip
-            catalog[(stdR, sig, T0, midfix, Tmid)][Cg][flip][rep].append(f"results_{run_name}")
+            catalog[(D, stdR, sig, T0, midfix, Tmid)][Cg][flip][rep].append(f"results_{run_name}")
 
     # Generate the IVs.txt report
     with open(ivs_txt_path, 'w') as f:
@@ -246,8 +248,8 @@ def run_scanner_mode(base_dir, ivs_txt_path):
                 f.write(f"results_{cf}\n")
             f.write("=============================================\n\n")
 
-        for (stdR, sig, T0, midfix, Tmid), cg_data in catalog.items():
-            f.write(f"----- StdR={stdR} ; sig={sig} ; T0={T0} ; midfix={midfix} ; Tmid={Tmid} ---------\n")
+        for (D, stdR, sig, T0, midfix, Tmid), cg_data in catalog.items():
+            f.write(f"----- | D={D} | StdR={stdR} ; sig={sig} ; T0={T0} ; midfix={midfix} ; Tmid={Tmid} ---------\n")
 
             for Cg, flip_dict in cg_data.items():
                 multiples = []
@@ -286,7 +288,7 @@ def run_analysis_mode(base_dir):
     output_dir = base_dir / f"Thermopower_Analysis_Normal_Metal_savgol"
     output_dir.mkdir(exist_ok=True)
 
-    # Key: (Cg, stdR, sig, T0, midfix) -> Value: list of dictionaries
+    # Key: (D, Cg, stdR, sig, T0, midfix, Tmid) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
     print("Scanning for results directories...", flush=True)
@@ -322,7 +324,7 @@ def run_analysis_mode(base_dir):
                 continue
 
             params = parse_params(param_file)
-            sys_key = (params['Cg'], params['stdR'], params['sig'], params['T0'], midfix, Tmid)
+            sys_key = (params['D'], params['Cg'], params['stdR'], params['sig'], params['T0'], midfix, Tmid)
 
             # Extract both sweeps including the dynamic IErr array
             v_up, i_up, ierr_up, v_down, i_down, ierr_down = read_sweeps(csv_path)
@@ -349,9 +351,9 @@ def run_analysis_mode(base_dir):
         if len(data) < 2:
             continue
 
-        Cg, stdR, sig, T0, midfix, Tmid = sys_key
+        D, Cg, stdR, sig, T0, midfix, Tmid = sys_key
 
-        sys_folder_name = f"System_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}"
+        sys_folder_name = f"System_D{D}_Cg{Cg}_stdR{stdR}_sig{sig}_T0_{T0}"
         if midfix:
             Tmid_ratio = Tmid / T0
             Tmid_units = int(Tmid_ratio)
@@ -462,7 +464,7 @@ def run_analysis_mode(base_dir):
                     [dt_val, Vth_up[idx], Vth_down[idx], S_up[idx], S_down[idx], S_err_up[idx], S_err_down[idx]])
 
         # Create unified title without 'flip' label
-        title_str = f"Cg={Cg}, stdR={stdR}, $\\sigma$={sig}, T0={T0}"
+        title_str = f"D={D}, Cg={Cg}, stdR={stdR}, $\\sigma$={sig}, T0={T0}"
         if midfix:
             title_str += f", Tmid={Tmid}"
 

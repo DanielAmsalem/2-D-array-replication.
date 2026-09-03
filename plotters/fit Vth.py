@@ -37,12 +37,12 @@ err_down = df['Vth_err_down'] / np.sqrt(N)
 def model_func(dT, a, b, c , q):
     return np.where(
         dT > 0,
-        a * (np.exp(-np.abs(dT) / b) + c * dT),
-        a * (np.exp(-np.abs(dT) / b) + q * dT)
+        a * (np.exp(-np.abs(dT+0.001) / (2*b)) + c * dT),
+        a * (np.exp(-np.abs(dT+0.001) / (2*b)) + q * dT)
     )
 
 # 3. Setting Manual Parameters
-Ec =0.05
+Ec =0.025
 Vth_0 = 1.39
 Fwd = 4.1
 Bck = 0.4

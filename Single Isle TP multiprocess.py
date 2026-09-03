@@ -39,27 +39,34 @@ Ec = mp.mpf(str((e ** 2) / (2 * Cg)))
 
 
 # ============================================================================
-# ENERGY TRANSITION HELPERS
+# ENERGY TRANSITION HELPERS (RESTORED LEGACY LOGIC)
 # ============================================================================
 
+def U(n, Qg, Vl):
+    """Calculates the instantaneous electrostatic potential of the island."""
+    return (Qg + n * e + Cl * Vl) / (Cl + Cr)
+
+
 def Qn(Vl, n):
-    """Calculates the induced charge on the dot at state n."""
-    return -e * (n - N_states / 2) + Cl * Vl + Cr * Vr
+    """Calculates the steady-state induced gate charge Qg."""
+    return -Cg * (Cl * Vl + n * e) / Cs
 
 
-def W(n, qn, Vl, dn, side):
+def W(n, Qg, Vl, in_out, left_right):
     """
-    Calculates the electrostatic energy difference (dE) for a tunneling event.
+    Calculates the exact electrostatic energy difference (dE) for a tunneling event.
     """
-    if side == "left":
-        voltage = Vl
-    elif side == "right":
-        voltage = Vr
+    if abs(in_out) != 1:
+        raise ValueError("in_out must be 1")
+
+    if left_right == "left":
+        dE = in_out * e * (U(n + in_out, Qg, Vl) + U(n, Qg, Vl)) / 2 - in_out * e * Vl
+    elif left_right == "right":
+        # Included Vr here for physical completeness, even though Vr = 0
+        dE = in_out * e * (U(n + in_out, Qg, Vl) + U(n, Qg, Vl)) / 2 - in_out * e * Vr
     else:
-        raise ValueError("Invalid side specified. Use 'left' or 'right'.")
+        raise ValueError("left_right must be either 'left' or 'right'")
 
-    # The charging energy penalty formula
-    dE = -dn * e * voltage + (dn * e) ** 2 / (2 * Cs) + (dn * e) * qn / Cs
     return mp.mpf(str(dE))
 
 
@@ -155,11 +162,14 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
     G_R_minus = np.zeros(N + 1)
 
     for n in range(N + 1):
+        # Calculate the steady state gate charge for state n just once per loop
+        Qg_current = Qn(Vl, n)
+
         # 1e Hopping Rates Only
-        G_L_plus[n] = Gamma(W(n, Qn(Vl, n), Vl, 1, "left"), T_l, Rl)
-        G_L_minus[n] = Gamma(W(n, Qn(Vl, n), Vl, -1, "left"), Tdot, Rl)
-        G_R_plus[n] = Gamma(W(n, Qn(Vl, n), Vl, 1, "right"), T_r, Rr)
-        G_R_minus[n] = Gamma(W(n, Qn(Vl, n), Vl, -1, "right"), Tdot, Rr)
+        G_L_plus[n] = Gamma(W(n, Qg_current, Vl, 1, "left"), T_l, Rl)
+        G_L_minus[n] = Gamma(W(n, Qg_current, Vl, -1, "left"), Tdot, Rl)
+        G_R_plus[n] = Gamma(W(n, Qg_current, Vl, 1, "right"), T_r, Rr)
+        G_R_minus[n] = Gamma(W(n, Qg_current, Vl, -1, "right"), Tdot, Rr)
 
         gc.collect()
 
@@ -195,6 +205,13 @@ def worker_single_point(task_args):
     # Unpack the new flip parameter
     m, v_idx, V, N_states_task, T0, cp_dir, flip = task_args
 
+    # --- RESILIENCE CHECK ---
+    # Construct path and check if calculation is already done
+    cp_path = Path(cp_dir) / f"grad_{m}_vidx_{v_idx}_flip_{flip}.npy"
+    if cp_path.exists():
+        print(f"Worker SKIPPING grad {m}, Vl = {V:.3f} V, flip = {flip} (Already computed).", flush=True)
+        return True
+
     # Apply the temperature gradient logic based on flip state
     if flip:
         T_left = T0 + 20 * m * T0
@@ -208,8 +225,6 @@ def worker_single_point(task_args):
     print(f"Worker computing grad {m}, Vl = {V:.3f} V, flip = {flip}...", flush=True)
     I = calculate_current(V, N=N_states_task, T_l=T_left, T_r=T_right, Tdot=T_dot)
 
-    # Checkpoint saving mechanism - added flip marker to prevent overwriting
-    cp_path = Path(cp_dir) / f"grad_{m}_vidx_{v_idx}_flip_{flip}.npy"
     np.save(cp_path, I)
 
     print(f"Worker DONE computing grad {m}, Vl = {V:.3f} V | I = {I:.5e}", flush=True)

@@ -1,14 +1,14 @@
 import os
-import csv
 
-ratio = 1
-os.environ["OPENBLAS_NUM_THREADS"] = str(ratio)
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 total_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
-num_workers = max(int(total_cpus / ratio) - 5, 1)
+num_workers = max(total_cpus - 5, 1)
 print(f"Worker number set to {num_workers} for {total_cpus} CPUs", flush=True)
 
+import csv
 import concurrent.futures
 import mpmath
 import numpy as np
@@ -22,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # --- Parameters ---
-DPS = 50  # Global precision parameter
+DPS = 40  # Global precision parameter
 Cg = 10
 
 
@@ -254,7 +254,7 @@ if __name__ == '__main__':
     w_values_str = [str(w_start + mp.mpf(i) * (w_end - w_start) / mp.mpf(num_points - 1)) for i in range(num_points)]
     w_values_float = [float(w) for w in w_values_str]
 
-    gap_ratio_str = '2'
+    gap_ratio_str = '2.0'
     eps_str = '1e-10'
 
     mu_mp = mp.mpf('0.5') / mp.mpf(str(Cg))
@@ -262,11 +262,12 @@ if __name__ == '__main__':
     D_mp = mp.mpf(gap_ratio_str) * mu_mp
 
     # Temperature iteration sequence
-    n_values = [0, 1, 3, 5, 7, 9, 11, 13, 15, 19, 20, 24, 28, 32, 36, 40]
+    n_values = [0, 1, 3, 5, 7, 9, 11, 15, 19, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 176,
+                192]
 
     # Setup CSV tracking files
-    summary_filename = DIR / f"Wc_thresholds_DPS{DPS}_Cg{Cg}.csv"
-    detailed_filename = DIR / f"Detailed_Data_DPS{DPS}_Cg{Cg}.csv"
+    summary_filename = DIR / f"pos_Wc_thresholds_DPS{DPS}_Cg{Cg}_D2_0.csv"
+    detailed_filename = DIR / f"pos_Detailed_Data_DPS{DPS}_Cg{Cg}_D2_0.csv"
 
     print(f"\n==============================================")
     print(f"PHASE 1: Building Master Task List for ALL temperatures...")
@@ -386,7 +387,7 @@ if __name__ == '__main__':
 
             plt.tight_layout()
 
-            filename = DIR / f"pos_graph_n{n}_DPS{DPS}_eps{eps_str}_Cg{Cg}.png"
+            filename = DIR / f"pos_graph_n{n}_DPS{DPS}_eps{eps_str}_Cg{Cg}_D2_0.png"
             plt.savefig(fname=filename, dpi=600, bbox_inches="tight")
             plt.close(fig)
 

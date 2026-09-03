@@ -345,6 +345,11 @@ def run_analysis_mode(base_dir):
     # Key: (D, Cg, stdR, sig, T0, midfix, Tmid) -> Value: list of dictionaries
     system_groups = defaultdict(list)
 
+    # ==========================================================
+    # PHASE 1: Initialize Global Aggregator for Cg Scaling (Graph 5 & 6 Set)
+    # ==========================================================
+    cg_scaling_data = defaultdict(list)
+
     print("Scanning for results directories...", flush=True)
     for directory in data_dir.glob("results_*"):
         if not directory.is_dir():
@@ -649,7 +654,25 @@ def run_analysis_mode(base_dir):
                     rho_down.append(r_down)
                     rho_err_up.append(r_err_up)
                     rho_err_down.append(r_err_down)
-                    dT_density.append(d['Delta_T']/Ec)
+                    dT_density.append(d['Delta_T'] / Ec)
+
+                    # ==========================================================
+                    # PHASE 2: HARVEST DATA FOR Cg SCALING COMPENDIUM (Graph 5-10)
+                    # Gate 1: Metal only (Delta=0)
+                    # Gate 2: Repetition 0 only
+                    # Gate 3: Isothermal only (Delta_T = 0)
+                    # ==========================================================
+                    if D == 0.0 and d['Repetition'] == 0 and abs(d['Delta_T']) < 1e-6:
+                        thermal_key = f"Midfix (Tmid={Tmid})" if midfix else f"Standard (T0={T0})"
+                        cg_scaling_data[thermal_key].append({
+                            'Cg': Cg,
+                            'Steps_Up': n_up,
+                            'Steps_Down': n_down,
+                            'Rho_Up': r_up,
+                            'Rho_Down': r_down,
+                            'Rho_Err_Up': r_err_up,
+                            'Rho_Err_Down': r_err_down
+                        })
 
         # ==========================================================
         # GRAPH 3: Number of Steps vs. Temperature Gradient (Delta T)
@@ -718,6 +741,90 @@ def run_analysis_mode(base_dir):
         print(f"Generated Vector PDFs in: {sys_dir}", flush=True)
 
     print("\nBatch I-V Curve processing complete.")
+
+    # ==========================================================
+    # PHASE 3: GENERATE THE 6 GLOBAL Cg SCALING COMPENDIUM GRAPHS
+    # ==========================================================
+    if cg_scaling_data:
+        print("\nGenerating Global Cg Scaling Graphs...")
+        vth_base_dir = Path("/home/amsalda/Vth_vs_dT_graphs/")
+        vth_base_dir.mkdir(parents=True, exist_ok=True)
+
+        # We pre-calculate the totals and sort the data for sequential line drawing
+        processed_cg_data = {}
+        for t_key, items in cg_scaling_data.items():
+            # Sort exactly by Cg to make plotting continuous lines work properly
+            sorted_items = sorted(items, key=lambda x: x['Cg'])
+            for item in sorted_items:
+                # Calculating mathematical totals
+                item['Steps_Total'] = item['Steps_Up'] + item['Steps_Down']
+                item['Rho_Total'] = item['Rho_Up'] + item['Rho_Down']
+                item['Rho_Err_Total'] = np.sqrt(item['Rho_Err_Up'] ** 2 + item['Rho_Err_Down'] ** 2)
+            processed_cg_data[t_key] = sorted_items
+
+        # Graph configurations containing strictly formatted labels
+        plot_configs = [
+            {'name': 'Steps_Up', 'y_key': 'Steps_Up', 'err_key': None, 'title': 'Number of Steps (Up Sweep) vs. $C_g$',
+             'ylabel': 'Number of Steps', 'is_density': False},
+            {'name': 'Steps_Down', 'y_key': 'Steps_Down', 'err_key': None,
+             'title': 'Number of Steps (Down Sweep) vs. $C_g$', 'ylabel': 'Number of Steps', 'is_density': False},
+            {'name': 'Steps_Total', 'y_key': 'Steps_Total', 'err_key': None, 'title': 'Total Number of Steps vs. $C_g$',
+             'ylabel': 'Total Steps', 'is_density': False},
+            {'name': 'Density_Up', 'y_key': 'Rho_Up', 'err_key': 'Rho_Err_Up',
+             'title': r'Density of Steps (Up Sweep) vs. $C_g$',
+             'ylabel': r'Density of Steps $\left[ \frac{\langle C \rangle}{e} \right]$', 'is_density': True},
+            {'name': 'Density_Down', 'y_key': 'Rho_Down', 'err_key': 'Rho_Err_Down',
+             'title': r'Density of Steps (Down Sweep) vs. $C_g$',
+             'ylabel': r'Density of Steps $\left[ \frac{\langle C \rangle}{e} \right]$', 'is_density': True},
+            {'name': 'Density_Total', 'y_key': 'Rho_Total', 'err_key': 'Rho_Err_Total',
+             'title': r'Total Density of Steps vs. $C_g$',
+             'ylabel': r'Total Step Density $\left[ \frac{\langle C \rangle}{e} \right]$', 'is_density': True}
+        ]
+
+        # Distinct markers to visually separate the different Tmid/T0 thermal profiles
+        markers = ['o', 's', '^', 'D', 'v', 'p']
+
+        for config in plot_configs:
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Sort the thermal keys to ensure 'Standard' and specific 'Midfix' lines are consistently styled
+            sorted_keys = sorted(processed_cg_data.keys())
+            for idx, t_key in enumerate(sorted_keys):
+                items = processed_cg_data[t_key]
+                if not items:
+                    continue
+
+                cg_vals = [x['Cg'] for x in items]
+                y_vals = [x[config['y_key']] for x in items]
+                marker = markers[idx % len(markers)]
+
+                if config['is_density']:
+                    y_errs = [x[config['err_key']] for x in items]
+                    ax.errorbar(cg_vals, y_vals, yerr=y_errs, fmt=f'-{marker}',
+                                markersize=8, capsize=4, elinewidth=1.5, linewidth=1.5,
+                                alpha=0.9, markeredgecolor='k', label=t_key)
+                else:
+                    ax.plot(cg_vals, y_vals, f'-{marker}', markersize=8,
+                            linewidth=1.5, alpha=0.9, markeredgecolor='k', label=t_key)
+
+            ax.set_xlabel(r'Ground Capacitance $C_g \left[ C \right]$', labelpad=15)
+            ax.set_ylabel(config['ylabel'], labelpad=15)
+            # Inject strict Title requirement (Metal, Delta=0, Delta T=0)
+            ax.set_title(config['title'] + r' | Metal ($\Delta=0$), Isothermal ($\Delta T=0$)', pad=20)
+
+            # Restrict step-count graphs to integer limits
+            if not config['is_density']:
+                ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+            ax.grid(True, linestyle='--', linewidth=0.5, color='lightgray', zorder=1)
+            ax.legend(loc='best', fontsize=14, framealpha=0.9, edgecolor='gray')
+
+            plt.tight_layout()
+            out_filename = f"Scaling_{config['name']}_vs_Cg.pdf"
+            plt.savefig(vth_base_dir / out_filename, format='pdf', bbox_inches='tight')
+            plt.close(fig)
+
+        print(f"6 Cg Scaling graphs generated successfully in: {vth_base_dir.absolute()}")
 
 
 def main():

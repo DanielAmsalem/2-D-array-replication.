@@ -45,5 +45,5 @@ def check_table_triplets_file(
 
 if __name__ == "__main__":
     check_table_triplets_file(
-        path_to_check / "table_triplets_Tstd11_20.npz",
+        path_to_check / "64bit_GAP2_0_NIS_table_triplets_Tmid7_0_Tstd20_20_Cg_10.npz",
     )

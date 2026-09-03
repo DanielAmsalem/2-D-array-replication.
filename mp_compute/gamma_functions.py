@@ -455,7 +455,8 @@ def Get_Steady_State(
         gap_ratio: float,
         gap_array: npt.NDArray,
         nis_table_val=None,
-        nis_table_prob=None
+        nis_table_prob=None,
+        nis_table_T=None  # <--- ADDED: Accepts the NIS temperature list
 ):
     error_count = 0
     # general Charge distribution vectors
@@ -610,6 +611,7 @@ def Get_Steady_State(
                     table_prob=table_prob,
                     nis_table_val=nis_table_val,
                     nis_table_prob=nis_table_prob,
+                    nis_table_T=nis_table_T,  # <--- ADDED: Directly routing the stride temperatures!
                     T_table=table_T,
                     flip=flip,
                     periodic_y=periodic_y,
@@ -687,14 +689,13 @@ def Get_Steady_State(
                     steady_state_reps -= 1
                     if steady_state_reps <= 0:
                         steady_state_timer -= dt
-                        if cycle_voltage == V_cycle[capture_heatmap_at_idx]:
-                            Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index_list,
-                                                         init.near_right, init.near_left, init.row_num, n,
-                                                         periodic_y=periodic_y)
-                            Jx += Jx_
-                            Jy += Jy_
-
                         if steady_state_timer <= 0:
+                            if cycle_voltage == V_cycle[capture_heatmap_at_idx]:
+                                Jx_, Jy_ = F.Get_current_map(Gamma, reaction_index_list,
+                                                             init.near_right, init.near_left, init.row_num, n,
+                                                             periodic_y=periodic_y)
+                                Jx += Jx_
+                                Jy += Jy_
                             # for this V capture the current map
                             not_in_steady_state = False
 
@@ -712,7 +713,6 @@ def Get_Steady_State(
 
         I_vec[cycle] = I_avg
     return SteadyStateResult(loop_index, error_count, I_vec, Jx, Jy)
-
 
 def Get_Steady_State_fixed_bias(
         loop_index: int,

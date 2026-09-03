@@ -10,7 +10,8 @@ warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 if __name__ == "__main__":
     # Parameters
-    Delta_0 = 0.05*2
+    E_c=0.025
+    Delta_0 = E_c*2
     Tc = Delta_0 / 1.764
     print(f"Calculated Critical Temperature (Tc): {Tc:.5f}")
 
@@ -18,23 +19,25 @@ if __name__ == "__main__":
     T_array = np.linspace(0.001, 0.06, 100)
 
     print("Solving exact BCS self-consistency equation. This may take a few seconds...")
-    Delta_T = exact_bcs_gap(T_array, Delta_0)
+    Delta_T = exact_bcs_gap(T_array, Delta_0)/E_c
     print(Delta_T)
 
+    T_array = T_array/E_c
+
     plt.figure(figsize=(8, 5))
-    plt.plot(T_array, Delta_T, '-', color='b', linewidth=2.5, label=r'Exact $\Delta(T)$')
+    plt.plot(T_array, Delta_T, '-', color='b', linewidth=2.5, label=r'$\Delta(T)/E_c$')
 
     # critical temperature
-    plt.axvline(x=Tc, color='r', linestyle='--', label=f'$T_c \\approx$ {Tc:.4f}')
+    plt.axvline(x=Tc/E_c, color='r', linestyle='--', label=f'$T_c \\approx$ {Tc/E_c:.4f}$E_c$')
     plt.axhline(y=0, color='k', linewidth=0.8)
 
     # Formatting
-    plt.title(r'Exact BCS Superconducting Gap $\Delta(T)$ vs Temperature', fontsize=14)
-    plt.xlabel('Temperature $T$', fontsize=12)
-    plt.ylabel(r'Gap $\Delta(T)$', fontsize=12)
-    plt.xlim(0, 0.06)
-    plt.ylim(-0.005, 0.105)
-    plt.legend(fontsize=11)
+    plt.title(r'BCS Gap $\Delta(T=0)=2E_c$ Change with $T$', fontsize=25)
+    plt.xlabel('$T/E_c$', fontsize=22)
+    plt.ylabel(r'Gap $\frac{\Delta(T)}{E_c}$', fontsize=22)
+    plt.xlim(0, 0.063/E_c)
+    plt.ylim(-0.005, 0.11/E_c)
+    plt.legend(fontsize=20)
     plt.grid(True, linestyle=':', alpha=0.7)
     plt.tight_layout()
     plt.show()

@@ -69,7 +69,6 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
 
     # RUN TYPE
     flip = is_reverse
-    rep_json = True if TASK_ID == 0 else False  # Only task 0 writes the init json
     periodic_y = True
 
     # NEW FIXED EXPERIMENT PARAMETERS
@@ -111,49 +110,74 @@ def main(import_export: IMPORT_EXPORT, run_name, mean_Cg, is_resumed=False) -> N
     print(f"Intended Gradients: min(n)={min(n_list_master)}, max(n)={max(n_list_master)}", flush=True)
     print(f"############# INITIALIZING GRID ##################")
 
-    if is_resumed:
-        run_to_get_init_from = run_name
-        results_dir_of_past_run = import_export.results_dir_path
-    else:
-        run_to_get_init_from = "20260606_22h05m04s"
-        results_dir_of_past_run = Path(__file__).parent.parent / f"results_{run_to_get_init_from}"
+    # ---------------------------------------------------------
+    # STATE INITIALIZATION (Resuming or Creating New)
+    # ---------------------------------------------------------
+    current_run_json = import_export.results_dir_path / f"{run_name}.json"
 
-    infile = Path(results_dir_of_past_run / f"{run_to_get_init_from}.json")
-    if infile.exists():
-        json_txt = infile.read_text()
-        raw_fields = orjson.loads(json_txt)
+    if not is_resumed:
+        # I AM THE CREATOR (Won the mkdir race for a brand new run)
+        print(f"Task {TASK_ID} won the initialization race. Building state...", flush=True)
+
+        run_to_get_init_from = "20260606_22h05m04s"
+        results_dir_of_past_run = Path(__file__).resolve().parent.parent / f"results_{run_to_get_init_from}"
+        past_infile = results_dir_of_past_run / f"{run_to_get_init_from}.json"
+
+        if past_infile.exists():
+            json_txt = past_infile.read_text()
+            raw_fields = orjson.loads(json_txt)
+            init_str = ExperimentInitialState(**raw_fields)
+            init = F.fix_types(init_str, loop_count)
+
+            init = F.swap_in_init("flip", flip, init)
+            if gap_ratio > 1e-3 and init.resolution != 1e-4:
+                init = F.swap_in_init("resolution", 1e-4, init)
+
+            if init.T0 != T0_unitless:
+                init = F.swap_in_init("T0", T0_unitless, init)
+
+            if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
+                init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
+
+            if np.any(init.R_t_ij < 0.1):
+                min_Rt = np.min(init.R_t_ij)
+                shift_amount = 0.1 - min_Rt
+                R_t_ij_shifted = init.R_t_ij + shift_amount
+                init = F.swap_in_init("R_t_ij", R_t_ij_shifted, init)
+
+            print(f"Successfully loaded and modified base state from {past_infile.name}", flush=True)
+        else:
+            init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip,
+                                         periodic_y=periodic_y,
+                                         Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
+            print("!!!NEW INITIAL STATE CREATED FROM SCRATCH!!!", flush=True)
+
+        # ATOMIC WRITE FOR FOLLOWERS
+        # Write to a temp file first, then replace to prevent followers from reading half-written data
+        temp_json = import_export.results_dir_path / f"temp_init_{TASK_ID}.json"
+        temp_json.write_text(orjson.dumps(asdict(init), option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8"))
+        temp_json.replace(current_run_json)
+        print(f"Creator Task {TASK_ID} successfully dropped {current_run_json.name} for followers.", flush=True)
+
+    else:
+        # I AM A FOLLOWER (Lost the mkdir race, OR resuming a crashed run from yesterday)
+        print(f"Task {TASK_ID} is a follower. Waiting for Creator to drop {current_run_json.name}...", flush=True)
+
+        while not current_run_json.exists():
+            time.sleep(1)
+
+        # File exists, safely load it with a catch loop in case of instantaneous file system lock
+        while True:
+            try:
+                json_txt = current_run_json.read_text()
+                raw_fields = orjson.loads(json_txt)
+                break
+            except ValueError:
+                time.sleep(0.5)
+
         init_str = ExperimentInitialState(**raw_fields)
         init = F.fix_types(init_str, loop_count)
-
-        init = F.swap_in_init("flip", flip, init)
-        if gap_ratio > 1e-3 and init.resolution != 1e-4:
-            init = F.swap_in_init("resolution", 1e-4, init)
-
-        if init.T0 != T0_unitless:
-            init = F.swap_in_init("T0", T0_unitless, init)
-
-        if init.Cg[0] != mean_Cg or init.Rg[0] != mean_Rg:
-            init = update_init_Cg_Rg(init, mean_Cg, mean_Rg)
-
-        if np.any(init.R_t_ij < 0.1):
-            min_Rt = np.min(init.R_t_ij)
-            shift_amount = 0.1 - min_Rt
-            R_t_ij_shifted = init.R_t_ij + shift_amount
-            init = F.swap_in_init("R_t_ij", R_t_ij_shifted, init)
-
-        print(f"Success: Initialized state from {run_to_get_init_from}", flush=True)
-    else:
-        init = prepare_initial_state(loop_count=loop_count, unitless_T0=T0_unitless, flip=flip, periodic_y=periodic_y,
-                                     Cg_C_ratio=mean_Cg, Rg_R_ratio=mean_Rg, stdR_R_ratio=stdR, sigC_C_ratio=sig)
-        print("CREATED NEW INIT FILE", flush=True)
-
-    # Task 0 writes the JSON config for the entire array
-    if rep_json:
-        outfile = Path(import_export.results_dir_path / f"{run_name}.json")
-        raw_fields = asdict(init)
-        serialized_init_data = orjson.dumps(raw_fields, option=orjson.OPT_SERIALIZE_NUMPY).decode("utf-8")
-        outfile.write_text(serialized_init_data)
-        print("STORED INIT IN JSON", flush=True)
+        print(f"Task {TASK_ID} successfully loaded synced state from {current_run_json.name}", flush=True)
 
     print("############# PRE-LOADING METADATA (NO TABLES) ##################", flush=True)
     Delta_0 = gap_ratio * init.Ec

@@ -21,9 +21,10 @@ from scipy.linalg import eig
 import functools
 from scipy.integrate import quad
 from scipy.optimize import fsolve
+import re
 
 # --- Parameters ---
-DPS = 30  # Global precision parameter
+DPS = 20  # Global precision parameter
 mp.dps = DPS
 
 N_states = 120  # Global state truncation
@@ -32,7 +33,7 @@ N_states = 120  # Global state truncation
 e = 1
 Vr = 0
 Cl = 2
-Cr = 0.5
+Cr = 0.01
 Rl = 1
 Rr = 10
 Rg = 100 * Rr
@@ -40,8 +41,16 @@ Cg = 10 * Cl
 Cs = Cg + Cl + Cr
 Ec = mp.mpf(str((e ** 2) / (2 * Cg)))
 
+job_name = os.environ.get('SLURM_JOB_NAME', '')
+match = re.search(r'D(\d+)_(\d+)', job_name)
+if match:
+    D_ratio = float(f"{match.group(1)}.{match.group(2)}")
+    print(f"Parsed D_ratio = {D_ratio} from job name: '{job_name}'", flush=True)
+else:
+    D_ratio = 2.0
+    print(f"No D_ratio found in job name. Defaulting to D_ratio = {D_ratio}", flush=True)
+
 # Superconducting Gap Parameters
-D_ratio = 0.2
 Delta_0_float = D_ratio * float(Ec)
 
 
@@ -142,49 +151,6 @@ def integrand(T, dE, Ec_val):
 
     return conv
 
-
-def Gamma_cp(dE, T_i, T_j, gap_i, gap_j, Ec_val, Rt):
-    """Cooper pair transition rate handling asymmetric temperature/gap boundaries."""
-    # Convert inputs to mpmath floats for high precision
-    T_i_mp = mp.mpf(str(T_i))
-    T_j_mp = mp.mpf(str(T_j))
-    gap_i_mp = mp.mpf(str(gap_i))
-    gap_j_mp = mp.mpf(str(gap_j))
-    Ec_mp = mp.mpf(str(Ec_val))
-    Rt_mp = mp.mpf(str(Rt))
-    dE_mp = mp.mpf(str(dE))
-
-    # 1. Junction Effective Temperature
-    T_ij = (T_i_mp + T_j_mp) / mp.mpf('2.0')
-
-    # 2. Extract smaller and larger gaps
-    gap_S = min(gap_i_mp, gap_j_mp)
-    if gap_S < 1e-6:
-        return 0.0  # Cooper pairs cannot exist if either side is a normal metal
-    gap_L = max(gap_i_mp, gap_j_mp)
-
-    # 3. Ota et al. Effective Gap using Complete Elliptic Integral
-    m_ij = mp.mpf('1.0') - (gap_S / gap_L) ** 2
-    K_elliptic = mp.ellipk(m_ij)
-    Delta_eff = (mp.mpf('2.0') / mp.pi) * gap_S * K_elliptic
-
-    # 4. Calculate Ej
-    tanh_val = mp.tanh(Delta_eff / (mp.mpf('2.0') * T_ij))
-    Ej = tanh_val * Delta_eff / (mp.mpf('8.0') * Rt_mp)
-
-    # 5. P(E) Calculation second harmonic gaussian
-    kappa_2 = mp.mpf('4.0')
-    mu = kappa_2 * Ec_mp
-
-    gauss_arg = -((dE_mp + mu) ** 2) / (mp.mpf('4.0') * mu * T_ij)
-    if gauss_arg < -100:
-        gauss = mp.mpf('0.0')
-    else:
-        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * mp.mpf('4.0') * mu * T_ij)
-
-    return float(gauss * (Ej * mp.pi) ** 2)
-
-
 def dos(E, D):
     """BCS Density of states with strict cutoff."""
     if mpmath.fabs(E) <= D:
@@ -226,7 +192,7 @@ def qp_integrand(T, dE, Ec_val, D):
 
 
 # ============================================================================
-# MASTER SOLVERS (N-I-S & S-I-S)
+# MASTER SOLVERS (N-I-S)
 # ============================================================================
 
 def _calc_segments_NIS_master(args, dps):
@@ -429,147 +395,6 @@ def _calc_segments_NIS_master(args, dps):
         return float(rate)
 
 
-def _calc_segments_gapped_master(args, dps):
-    """
-    Advanced adaptive segmented integration mapping that routes around density-of-states
-    singularities to evaluate S-I-S quasiparticle rates down to 50 decimal digits of precision.
-    """
-    val = mp.mpf(args[0])
-    temp = mp.mpf(args[1])
-    Ec_val = mp.mpf(args[2])
-    D_val = mp.mpf(args[3])
-    eps = mp.mpf(args[4])
-    resistance = mp.mpf(args[5])
-
-    mp.dps = dps
-    threshold = mp.mpf('1e-20')
-
-    abs_val = mp.fabs(val)
-    sigma = mp.sqrt(2 * Ec_val * temp)
-    bracket_width = 5 * sigma
-
-    probability = mp.mpf('0')
-    theta_max = mp.mpf('12.0')
-    signs = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
-
-    if abs_val < D_val + eps:
-        def mapped_integrand(theta1, theta2, sign_E, sign_Etag):
-            E = sign_E * D_val * mp.cosh(theta1)
-            Etag = sign_Etag * D_val * mp.cosh(theta2) + val
-
-            gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-            if gauss_arg < -100:
-                return mp.mpf('0')
-            gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
-
-            f_E = f(E, temp)
-            f_Etag_w = f(Etag - val, temp)
-
-            measure = mp.fabs(E) * mp.fabs(Etag - val)
-            return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
-
-        for s1, s2 in signs:
-            func_quadrant = lambda t1, t2, s1=s1, s2=s2: mapped_integrand(t1, t2, s1, s2)
-            res = mp.quad(func_quadrant, [0, theta_max], [0, theta_max], method='gauss-legendre')
-            probability += res
-
-        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
-        return float(rate)
-
-    else:
-        func = qp_integrand(temp, val, Ec_val, D_val)
-
-        limits_E_far_neg = [-mp.inf, -abs_val, -D_val - eps]
-        limits_E_far_pos = [D_val + eps, abs_val, mp.inf]
-
-        mappings_E = []
-        for lims in [limits_E_far_neg, limits_E_far_pos]:
-            for i in range(len(lims) - 1):
-                m_func = get_mapping(lims[i], lims[i + 1], threshold)
-                if m_func is not None:
-                    mappings_E.append(m_func)
-
-        for m_E in mappings_E:
-            def outer_integrand(t_E, m_E=m_E):
-                if t_E <= 0 or t_E >= 1: return mp.mpf('0')
-
-                E, jac_E = m_E(t_E)
-                peak_center = E - Ec_val
-
-                dynamic_limits = [
-                    -mp.inf, mp.mpf(val - D_val), mp.mpf(val), mp.mpf(val + D_val),
-                    peak_center - bracket_width, peak_center + bracket_width, mp.inf
-                ]
-
-                sorted_Etag_limits = sorted(list(set(dynamic_limits)))
-                cleaned_limits = [sorted_Etag_limits[0]]
-                for cp in sorted_Etag_limits[1:]:
-                    if cp - cleaned_limits[-1] > threshold: cleaned_limits.append(cp)
-
-                inner_integral = mp.quad(lambda Etag: func(E, Etag), cleaned_limits, method='tanh-sinh')
-                return inner_integral * jac_E
-
-            segment_prob = mp.quad(outer_integrand, [0, 1], method='tanh-sinh')
-            probability += segment_prob
-
-        theta1_max = mp.acosh((D_val + eps) / D_val)
-
-        for s1 in [1, -1]:
-            def outer_integrand_near(theta1, s1=s1):
-                E = s1 * D_val * mp.cosh(theta1)
-                peak_center = E - Ec_val
-                prob_inner = mp.mpf('0')
-
-                for s2 in [1, -1]:
-                    def inner_near_Etag(theta2, s2=s2):
-                        Etag = val + s2 * D_val * mp.cosh(theta2)
-                        gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-                        if gauss_arg < -100: return mp.mpf('0')
-                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
-                        f_E = f(E, temp)
-                        f_Etag_w = f(Etag - val, temp)
-
-                        measure = mp.fabs(E) * mp.fabs(Etag - val)
-                        return measure * f_E * (mp.mpf('1') - f_Etag_w) * gauss
-
-                    prob_inner += mp.quad(inner_near_Etag, [0, theta1_max], method='gauss-legendre')
-
-                dynamic_limits_far = [
-                    -mp.inf, val - D_val - eps, val + D_val + eps,
-                             peak_center - bracket_width, peak_center + bracket_width, mp.inf
-                ]
-
-                sorted_Etag_far = sorted(list(set(dynamic_limits_far)))
-                cleaned_far = [sorted_Etag_far[0]]
-                for cp in sorted_Etag_far[1:]:
-                    if cp - cleaned_far[-1] > threshold: cleaned_far.append(cp)
-
-                for i in range(len(cleaned_far) - 1):
-                    a = cleaned_far[i]
-                    b = cleaned_far[i + 1]
-                    mid = (a + b) / mp.mpf('2.0')
-                    if val - D_val - eps < mid < val + D_val + eps: continue
-
-                    def inner_far_Etag(Etag):
-                        n_Etag = dos(Etag - val, D_val)
-                        if n_Etag == mp.mpf('0'): return mp.mpf('0')
-                        gauss_arg = -((E - Etag - Ec_val) ** 2) / (4 * Ec_val * temp)
-                        if gauss_arg < -100: return mp.mpf('0')
-                        gauss = mp.exp(gauss_arg) / mp.sqrt(mp.pi * 4 * Ec_val * temp)
-
-                        measure_E = mp.fabs(E)
-                        return measure_E * n_Etag * f(E, temp) * (mp.mpf('1') - f(Etag - val, temp)) * gauss
-
-                    prob_inner += mp.quad(inner_far_Etag, [a, b], method='tanh-sinh')
-
-                return prob_inner
-
-            res = mp.quad(outer_integrand_near, [0, theta1_max], method='gauss-legendre')
-            probability += res
-
-        rate = probability.real / (mp.mpf(str(e ** 2)) * resistance)
-        return float(rate)
-
 
 # ============================================================================
 # MEMOIZATION CACHES & WRAPPERS
@@ -581,26 +406,12 @@ def _cached_NIS_master_call(dE_str, T_str, Ec_str, D_gap_str, eps_str, resistanc
     return float(_calc_segments_NIS_master(args, DPS))
 
 
-@functools.lru_cache(maxsize=None)
-def _cached_gapped_master_call(dE_str, T_str, Ec_str, D_gap_str, eps_str, resistance_str):
-    args = [dE_str, T_str, Ec_str, D_gap_str, eps_str, resistance_str]
-    return float(_calc_segments_gapped_master(args, DPS))
-
-
 def Gamma_NIS(dE, T, resistance, D_local):
     """Wrapper mapping to N-I-S Quasiparticle integrator with explicit D_local passed."""
     if D_local <= 1e-8:
         D_local = 1e-12
     mp.dps = DPS
     return _cached_NIS_master_call(str(dE), str(T), str(Ec), str(D_local), '1e-10', str(resistance))
-
-
-def Gamma_SIS(dE, T, resistance, D_local):
-    """Wrapper mapping to S-I-S Quasiparticle integrator with explicit D_local passed."""
-    if D_local <= 1e-8:
-        D_local = 1e-12
-    mp.dps = DPS
-    return _cached_gapped_master_call(str(dE), str(T), str(Ec), str(D_local), '1e-10', str(resistance))
 
 
 # ============================================================================
@@ -632,14 +443,6 @@ def calculate_current(Vl, N, T_l, T_r, Tdot):
         G_L_minus[n] = Gamma_NIS(W(n, Qg_current, Vl, -1, "left"), Tdot, Rl, D_dot)
         G_R_plus[n] = Gamma_NIS(W(n, Qg_current, Vl, 1, "right"), T_r, Rr, D_dot)
         G_R_minus[n] = Gamma_NIS(W(n, Qg_current, Vl, -1, "right"), Tdot, Rr, D_dot)
-
-        # 2e Hopping Rates (Cooper pairs using Ota et al. Asymmetric formulation)
-        if n + 2 <= N:
-            G_L_plus2[n] = Gamma_cp(W(n, Qg_current, Vl, 2, "left"), T_l, Tdot, D_l, D_dot, Ec, Rl)
-            G_R_plus2[n] = Gamma_cp(W(n, Qg_current, Vl, 2, "right"), T_r, Tdot, D_r, D_dot, Ec, Rr)
-        if n - 2 >= 0:
-            G_L_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "left"), Tdot, T_l, D_dot, D_l, Ec, Rl)
-            G_R_minus2[n] = Gamma_cp(W(n, Qg_current, Vl, -2, "right"), Tdot, T_r, D_dot, D_r, Ec, Rr)
 
     # Executed safely once per Vl jump.
     gc.collect()
